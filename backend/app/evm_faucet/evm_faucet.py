@@ -10,8 +10,12 @@ from web3 import Web3
 from eth_account import Account
 from eth_account.messages import encode_defunct
 
+from ..database.db import get_db_connection
+
 
 class EVMFaucet:
+
+
     def __init__(self, network_configs, default_network=None):
         self.APP_DEBUG = os.getenv('APP_DEBUG', 'false').lower() == "true"
         self.FAUCET_DEFAULT_NETWORK = default_network or os.getenv('FAUCET_DEFAULT_NETWORK', 'sepolia')
@@ -52,8 +56,12 @@ class EVMFaucet:
 
         self.init_db()
 
+
+
     def is_supported_network(self, network):
         return network in self.NETWORK_CONFIGS
+
+
 
     def verify_signature(self, network, address, message, signature):
         w3 = self.w3_instances[network]
@@ -63,6 +71,8 @@ class EVMFaucet:
             return signer.lower() == (address or '').lower()
         except Exception:
             return False
+
+
 
     def request_eth(self, network, to_address, signature, nonce):
         if not self.is_supported_network(network):
@@ -124,6 +134,8 @@ class EVMFaucet:
             "amount": float(w3.from_wei(self.FAUCET_AMOUNT, 'ether'))
         }, 200
 
+
+
     def get_faucet_balance(self, network):
         if not self.is_supported_network(network):
             return {"error": f"Unsupported network: {network}"}, 400
@@ -137,17 +149,19 @@ class EVMFaucet:
             "chunk_size": float(w3.from_wei(self.FAUCET_AMOUNT, 'ether'))
         }, 200
 
+
+
     def get_networks(self):
         return {
             "networks": self.NETWORK_CONFIGS,
             "default_network": self.FAUCET_DEFAULT_NETWORK
         }
 
+
+
     def init_db(self):
-        try:
-            conn = sqlite3.connect('transactions.db')
-            c = conn.cursor()
-            c.execute('''CREATE TABLE IF NOT EXISTS transactions
+        with get_db_connection() as conn:
+            conn.execute('''CREATE TABLE IF NOT EXISTS transactions
                             (id INTEGER PRIMARY KEY AUTOINCREMENT,
                             network TEXT,
                             from_address TEXT,
@@ -158,10 +172,8 @@ class EVMFaucet:
                             timestamp INTEGER,
                             is_contract INTEGER,
                             UNIQUE(network, hash))''')
-            conn.commit()
-            conn.close()
-        except Exception:
-            logging.exception("Failed to init DB")
+
+
 
     def fetch_all_transactions_from_etherscan(self, address, network):
         if not self.is_supported_network(network):
@@ -202,53 +214,53 @@ class EVMFaucet:
 
         return all_transactions
 
+
+
     def store_transactions(self, transactions, network):
-        conn = sqlite3.connect('transactions.db')
-        c = conn.cursor()
+        with get_db_connection() as conn:
 
-        for tx in transactions:
-            is_contract = 0
-            recipient = tx.get('to', '')
-            if recipient == '':
-                is_contract = 1
-                recipient = tx.get('contractAddress', '')
+            for tx in transactions:
+                is_contract = 0
+                recipient = tx.get('to', '')
+                if recipient == '':
+                    is_contract = 1
+                    recipient = tx.get('contractAddress', '')
 
-            c.execute('''INSERT OR IGNORE INTO transactions 
-                            (network, from_address, to_address, value, hash, block_number, timestamp)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                        (network.lower(),
-                         tx['from'].lower(),
-                         recipient.lower(),
-                         float(tx['value']) / 10**18,
-                         tx['hash'],
-                         int(tx['blockNumber']),
-                         int(tx['timeStamp'])
-                         ))
+                conn.execute('''INSERT OR IGNORE INTO transactions 
+                                (network, from_address, to_address, value, hash, block_number, timestamp)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                            (network.lower(),
+                            tx['from'].lower(),
+                            recipient.lower(),
+                            float(tx['value']) / 10**18,
+                            tx['hash'],
+                            int(tx['blockNumber']),
+                            int(tx['timeStamp'])
+                            ))
 
-            c.execute('''   UPDATE transactions 
-                            SET from_address = ?, to_address = ?, value = ?, block_number = ?, timestamp = ?
-                            WHERE LOWER(network) = ? AND hash = ?''',
-                        (tx['from'].lower(),
-                         recipient.lower(),
-                         float(tx['value']) / 10**18,
-                         int(tx['blockNumber']),
-                         int(tx['timeStamp']),
-                         network.lower(),
-                         tx['hash']
-                         ))
+                conn.execute('''   UPDATE transactions 
+                                SET from_address = ?, to_address = ?, value = ?, block_number = ?, timestamp = ?
+                                WHERE LOWER(network) = ? AND hash = ?''',
+                            (tx['from'].lower(),
+                            recipient.lower(),
+                            float(tx['value']) / 10**18,
+                            int(tx['blockNumber']),
+                            int(tx['timeStamp']),
+                            network.lower(),
+                            tx['hash']
+                            ))
 
-            c.execute('''      
-                INSERT OR IGNORE INTO addresses (address, name, is_contract)
-                VALUES (?, ?, ?) ''',
-                (tx['from'].lower(), "", 0))
+                conn.execute('''      
+                    INSERT OR IGNORE INTO addresses (address, name, is_contract)
+                    VALUES (?, ?, ?) ''',
+                    (tx['from'].lower(), "", 0))
 
-            c.execute('''   
-                INSERT OR IGNORE INTO addresses (address, name, is_contract)
-                VALUES (?, ?, ?) ''',
-                (recipient.lower(), "", is_contract))
+                conn.execute('''   
+                    INSERT OR IGNORE INTO addresses (address, name, is_contract)
+                    VALUES (?, ?, ?) ''',
+                    (recipient.lower(), "", is_contract))
 
-        conn.commit()
-        conn.close()
+
 
     def fetch_and_store_transactions(self, network, address):
         transactions = self.fetch_all_transactions_from_etherscan(address, network)
@@ -259,6 +271,8 @@ class EVMFaucet:
             "total_transactions": len(transactions),
             "message": "Transactions fetched and stored successfully"
         }
+
+
 
     def get_stored_transactions(self, network, address, hours=24):
         if not address:
@@ -272,95 +286,93 @@ class EVMFaucet:
             logging.exception("Error fetching/storing transactions")
             return {"error": "Failed to refresh transactions"}, 500
 
-        conn = sqlite3.connect('transactions.db')
-        c = conn.cursor()
+        with get_db_connection() as conn:
+            threshold_time = int((datetime.utcnow() - timedelta(hours=hours)).timestamp())
 
-        threshold_time = int((datetime.utcnow() - timedelta(hours=hours)).timestamp())
-
-        c.execute('''
-            WITH GetLatestUpdate AS (
-                SELECT
-                    address,
-                    MAX(timestamp) as timestamp
-                FROM
-                (
+            conn.execute('''
+                WITH GetLatestUpdate AS (
                     SELECT
-                        from_address AS address,
+                        address,
                         MAX(timestamp) as timestamp
                     FROM
-                        transactions
-                    GROUP BY from_address
-                    
-                    UNION ALL
-                    SELECT
-                        to_address AS address,
-                        MAX(timestamp)
-                    FROM
-                        transactions
-                    GROUP BY to_address
-                )
-                GROUP BY address
-            ),
-                  
-            GetFlows AS (
-                SELECT
-                    json_object(
-                        'from_address',         transactions.from_address,
-                        'from_name',            addr_from.name,
-                        'from_timestamp',       latest_update_from.timestamp,
-                    
-                        'to_address',           transactions.to_address,
-                        'to_name',              addr_to.name,
-                        'to_timestamp',         latest_update_to.timestamp,
-                        'to_addr_contract',     addr_to.is_contract,
-
-                        'value',                SUM(transactions.value),
-                        'count',                COUNT(*)
-                    ) as JSON
-                FROM 
-                    transactions
-                
-                LEFT JOIN addresses AS addr_from
-                    ON addr_from.address = transactions.from_address
-                LEFT JOIN addresses AS addr_to
-                    ON addr_to.address = transactions.to_address
-                  
-                LEFT JOIN GetLatestUpdate AS latest_update_from
-                    ON latest_update_from.address = transactions.from_address
-                LEFT JOIN GetLatestUpdate AS latest_update_to
-                    ON latest_update_to.address = transactions.to_address
-    
-                WHERE 
-                    LOWER(network) = ? AND 
-                    (LOWER(from_address) = ? OR LOWER(to_address) = ?) AND
-                    transactions.timestamp >= ?
-                GROUP BY transactions.from_address, transactions.to_address
-            )
-
-            SELECT
-                json_group_array(
-                    JSON(
-                        JSON
+                    (
+                        SELECT
+                            from_address AS address,
+                            MAX(timestamp) as timestamp
+                        FROM
+                            transactions
+                        GROUP BY from_address
+                        
+                        UNION ALL
+                        SELECT
+                            to_address AS address,
+                            MAX(timestamp)
+                        FROM
+                            transactions
+                        GROUP BY to_address
                     )
+                    GROUP BY address
+                ),
+                    
+                GetFlows AS (
+                    SELECT
+                        json_object(
+                            'from_address',         transactions.from_address,
+                            'from_name',            addr_from.name,
+                            'from_timestamp',       latest_update_from.timestamp,
+                        
+                            'to_address',           transactions.to_address,
+                            'to_name',              addr_to.name,
+                            'to_timestamp',         latest_update_to.timestamp,
+                            'to_addr_contract',     addr_to.is_contract,
+
+                            'value',                SUM(transactions.value),
+                            'count',                COUNT(*)
+                        ) as JSON
+                    FROM 
+                        transactions
+                    
+                    LEFT JOIN addresses AS addr_from
+                        ON addr_from.address = transactions.from_address
+                    LEFT JOIN addresses AS addr_to
+                        ON addr_to.address = transactions.to_address
+                    
+                    LEFT JOIN GetLatestUpdate AS latest_update_from
+                        ON latest_update_from.address = transactions.from_address
+                    LEFT JOIN GetLatestUpdate AS latest_update_to
+                        ON latest_update_to.address = transactions.to_address
+        
+                    WHERE 
+                        LOWER(network) = ? AND 
+                        (LOWER(from_address) = ? OR LOWER(to_address) = ?) AND
+                        transactions.timestamp >= ?
+                    GROUP BY transactions.from_address, transactions.to_address
                 )
-            FROM
-                GetFlows
-        ''', [network.lower(), address.lower(), address.lower(), threshold_time])
 
-        result = c.fetchone()
-        transactions_json = result[0] if result else '[]'
-        conn.close()
+                SELECT
+                    json_group_array(
+                        JSON(
+                            JSON
+                        )
+                    )
+                FROM
+                    GetFlows
+            ''', [network.lower(), address.lower(), address.lower(), threshold_time])
 
-        return {"transactions": json.loads(transactions_json)}, 200
+            result = conn.fetchone()
+            transactions_json = result[0] if result else '[]'
+
+
+            return {"transactions": json.loads(transactions_json)}, 200
+
+
 
     def set_address_name(self, address, name):
         if not address:
             return {"error": "Address is required"}, 400
 
-        conn = sqlite3.connect('transactions.db')
-        c = conn.cursor()
-        c.execute(''' UPDATE addresses SET name = ? WHERE address = ? ''', [name, address])
-        conn.commit()
-        c.close()
+        with get_db_connection() as conn:
+            conn.execute(''' UPDATE addresses SET name = ? WHERE address = ? ''', [name, address])
+
 
         return {"status": "OK"}, 200

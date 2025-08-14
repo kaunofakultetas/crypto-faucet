@@ -139,11 +139,16 @@ def get_example_blockchain():
 if __name__ == '__main__':
     APP_DEBUG = os.getenv('APP_DEBUG', 'false').lower() == 'true'
 
+    # Initialize database
+    from app.database.db_init import init_db
+    init_db()
 
+    # Register blueprints
     from app.evm_faucet.evm_routes import bp_evm_faucet
     app.register_blueprint(bp_evm_faucet, url_prefix='')
 
     from app.utxo_faucet.utxo_routes import bp_utxo_faucet
     app.register_blueprint(bp_utxo_faucet, url_prefix='')
 
+    # Run backend
     app.run(host='0.0.0.0', port=8000, debug=APP_DEBUG)
