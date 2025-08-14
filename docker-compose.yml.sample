@@ -59,10 +59,10 @@ services:
     user: 1000:1000
     build:
       context: ./vite
+      dockerfile: Dockerfile                   # Prod
       # dockerfile: Dockerfile.dev               # Dev
-      dockerfile: Dockerfile.prod              # Prod
-    volumes:                                   # Dev
-      - ./vite/app:/app                        # Dev
+    # volumes:                                   # Dev
+    #   - ./vite/app:/app                        # Dev
     restart: unless-stopped
 
 
