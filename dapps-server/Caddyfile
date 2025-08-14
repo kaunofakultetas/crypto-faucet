@@ -1,0 +1,6 @@
+:80 {
+    handle_path /dapps/hosting/* {
+        root * /srv
+        file_server browse
+    }
+}

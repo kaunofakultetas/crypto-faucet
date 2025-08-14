@@ -1,0 +1,48 @@
+:80 {
+
+    ############ APP PASSWORD 1 ############
+    @hasCookie1 header_regexp cookieCheck Cookie "(;|^|\ )app-password={$APP_PASSWORD_1}(;|$|\ )"
+    handle @hasCookie1 {
+
+        # DAPPS HOSTING
+        redir /dapps/hosting /dapps/hosting/
+        handle /dapps/hosting/* {
+            reverse_proxy faucet-dapps-caddy:80
+        }
+
+        # DAPPS FILEBROWSER
+        handle /dapps/* {
+            reverse_proxy faucet-dapps-filebrowser:80
+        }
+
+        # DBGATE
+        redir /dbgate /dbgate/
+        handle /dbgate/* {
+            reverse_proxy faucet-dbgate:3000
+        }
+
+        # BACKEND API
+        handle /api/* {
+            reverse_proxy faucet-backend:8000
+        }
+
+        # VITE
+        handle /* {
+            reverse_proxy faucet-vite:80
+        }
+    }
+    ########################################
+
+
+
+
+    ######## UNAUTHENTICATED ROUTES ########
+    handle /* {
+        header {
+            Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
+            Pragma "no-cache"
+        }
+        reverse_proxy faucet-login:80
+    }
+    ########################################
+}

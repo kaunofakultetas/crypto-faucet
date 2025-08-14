@@ -1,0 +1,149 @@
+import os
+import json
+import sqlite3
+from flask import Flask, Response
+
+
+app = Flask(__name__)
+
+
+
+EVM_NETWORK_CONFIGS = {
+    'sepolia': {
+        'id': 1,
+        'chain_id': 11155111,
+        'infura_network': 'sepolia',
+        'short_name': "SepETH",
+        'full_name': 'Sepolia',
+        'native_currency': {
+            'name': 'Ethereum',
+            'symbol': 'SepETH',
+            'decimals': 18
+        },
+        'rpc_urls': ['https://rpc.sepolia.org'],
+        'block_explorer_urls': ['https://sepolia.etherscan.io'],
+        'etherscan_api_url': 'https://api-sepolia.etherscan.io/api'
+    },
+    'zkSyncSepolia': {
+        'id': 3,
+        'chain_id': 300,
+        'infura_network': 'zksync-sepolia',
+        'short_name': "ETH",
+        'full_name': 'zkSync Sepolia Testnet',
+        'native_currency': {
+            'name': 'Ethereum',
+            'symbol': 'ETH',
+            'decimals': 18
+        },
+        'rpc_urls': ['https://sepolia.era.zksync.dev'],
+        'block_explorer_urls': ['https://block-explorer-api.sepolia.zksync.dev'],
+        'etherscan_api_url': 'https://block-explorer-api.sepolia.zksync.dev/api'
+    },
+    'polygonZkEvm': {
+        'id': 4,
+        'chain_id': 2442,
+        'infura_network': 'https://rpc.cardona.zkevm-rpc.com',
+        'short_name': "ETH",
+        'full_name': 'Polygon zkEVM Cardona Testnet',
+        'native_currency': {
+            'name': 'Ethereum',
+            'symbol': 'ETH',
+            'decimals': 18
+        },
+        'rpc_urls': ['https://rpc.cardona.zkevm-rpc.com'],
+        'block_explorer_urls': ['https://explorer-ui.cardona.zkevm-rpc.com'],
+        'etherscan_api_url': 'https://api-cardona-zkevm.polygonscan.com/api'
+    },
+    'lineaSepolia': {
+        'id': 5,
+        'chain_id': 59141,
+        'infura_network': 'linea-sepolia',
+        'short_name': "ETH",
+        'full_name': 'Linea Sepolia',
+        'native_currency': {
+            'name': 'LineaETH',
+            'symbol': 'LineaETH',
+            'decimals': 18
+        },
+        'rpc_urls': ['https://linea-sepolia-rpc.publicnode.com'],
+        'block_explorer_urls': ['https://explorer.linea.build'],
+        'etherscan_api_url': 'https://api-explorer.sepolia.linea.build/api'
+    },
+    "hoodi": {
+        'id': 6,
+        'chain_id': 560048,
+        'infura_network': 'hoodi',
+        'short_name': "ETH",
+        'full_name': 'Ethereum Hoodi',
+        'native_currency': {
+            'name': 'Ethereum',
+            'symbol': 'ETH',
+            'decimals': 18
+        },
+        'rpc_urls': ['https://rpc.hoodi.ethpandaops.io'],
+        'block_explorer_urls': ['https://light-hoodi.beaconcha.in'],
+        'etherscan_api_url': 'https://api-hoodi.etherscan.io/api'
+    }
+}
+
+
+UTXO_NETWORK_CONFIGS = {
+    'btc3': {
+        'id': 1,
+        'short_name': "tBTC3",
+        'full_name': 'Bitcoin Testnet3',
+        'chunk_size': 0.005,
+        'electrum_server': 'electrum.blockstream.info:60002'
+    },
+    'btc4': {
+        'id': 2,
+        'short_name': "tBTC4",
+        'full_name': 'Bitcoin Testnet4',
+        'chunk_size': 0.05,
+        'electrum_server': 'testnet4-electrumx.wakiyamap.dev:51002'
+    }
+}
+
+
+
+
+
+@app.route('/api/get-example-blockchain', methods=['GET'])
+def get_example_blockchain():
+    conn = sqlite3.connect('transactions.db')
+    c = conn.cursor()
+    c.execute('''
+        SELECT
+            json_group_array(
+                json_object(
+                    'data', Transactions, 
+                    'previousHash', PrevBlock, 
+                    'nonce', Nonce, 
+                    'hash', BlockHash
+                )
+            ) AS json_block
+        FROM BlockchainSimulator_Blocks
+    ''')
+    result = c.fetchone()[0]
+    result = json.dumps(json.loads(result), indent=4)
+    c.close()
+    return Response(result, mimetype='application/json')
+
+
+
+
+
+
+
+
+if __name__ == '__main__':
+    APP_DEBUG = os.getenv('APP_DEBUG', 'false').lower() == 'true'
+
+
+    from app.evm_faucet.evm_routes import bp_evm_faucet
+    app.register_blueprint(bp_evm_faucet, url_prefix='')
+
+    from app.utxo_faucet.utxo_routes import bp_utxo_faucet
+    app.register_blueprint(bp_utxo_faucet, url_prefix='')
+
+    app.run(host='0.0.0.0', port=8000, debug=APP_DEBUG)

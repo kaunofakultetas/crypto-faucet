@@ -1,0 +1,17 @@
+@import "tailwindcss";
+
+/* CSS variables for Tailwind to consume */
+:root {
+  --color-primary: #78003F;
+  --color-primary-hover: #E64164;
+  --color-surface: #ffffff;
+  --color-text-body: #374151; /* gray-700 */
+  --radius-md: 8px;
+}
+
+/* Utility to reuse rounded card surface */
+.card-surface {
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+}

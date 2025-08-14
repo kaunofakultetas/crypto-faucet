@@ -1,0 +1,9 @@
+FROM node:24.2.0
+
+WORKDIR /app
+
+ENV PORT 80
+EXPOSE 80
+
+# CMD ["sleep", "infinity"]
+CMD ["npm", "run", "dev"]

@@ -1,0 +1,118 @@
+services:
+
+  faucet-endpoint:
+    container_name: faucet-endpoint
+    image: caddy:2.9.1-alpine
+    volumes:
+      - ./endpoint/Caddyfile:/etc/caddy/Caddyfile:ro
+    environment:
+      ############################ SISTEMOS PASSWORD #######################
+      APP_PASSWORD_1: FAUCET_GUI_PASSWORD
+      ######################################################################
+    restart: unless-stopped
+
+
+
+  faucet-login:
+    container_name: faucet-login
+    image: vuknf/simple-login-page:20250524
+    environment:
+      VITE_SYSTEM_NAME: "KNF Testnet<br/>Kriptovaliutų Faucet'as"
+    restart: unless-stopped
+
+
+
+  faucet-backend:
+    container_name: faucet-backend
+    image: faucet-backend
+    user: 1000:1000
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      # - APP_DEBUG=True # Dev
+      - FAUCET_DEFAULT_NETWORK=sepolia
+      - DEFAULT_WALLET_ETH_AMOUNT=0.2
+
+      # Register and get from https://infura.io
+      - INFURA_PROJECT_ID=...
+
+      # Register and get from https://etherscan.io
+      - ETHERSCAN_API_KEY=...
+      
+      # Private key for faucet (CHANGE THIS TO RANDOM SHA256 HASH)
+      - FAUCET_PRIVATE_KEY=52bd6e1cf039fde0c2bb3feafa7118be495952a1445a3eb3e050d1ca61a2e671
+
+    tmpfs:
+      - /.bitcoinlib:uid=1000,gid=1000
+    volumes:
+      - ./backend:/app
+    restart: unless-stopped
+
+
+
+  faucet-vite:
+    container_name: faucet-vite
+    image: faucet-vite
+    user: 1000:1000
+    build:
+      context: ./vite
+      # dockerfile: Dockerfile.dev               # Dev
+      dockerfile: Dockerfile.prod              # Prod
+    volumes:                                   # Dev
+      - ./vite/app:/app                        # Dev
+    restart: unless-stopped
+
+
+  # # OPTIONAL: Database GUI
+  # faucet-dbgate:
+  #   container_name: faucet-dbgate
+  #   image: dbgate/dbgate:6.6.0
+  #   environment:
+  #     WEB_ROOT: /dbgate
+
+  #     LOGINS: admin
+  #     LOGIN_PASSWORD_admin: FAUCET_ADMIN_PASSWORD
+
+  #     CONNECTIONS: con4
+  #     LABEL_con4: KNF Faucet DB
+  #     FILE_con4: /root/db.sqlite3
+  #     ENGINE_con4: sqlite@dbgate-plugin-sqlite
+  #   read_only: false
+  #   volumes:
+  #     - ./backend/transactions.db:/root/db.sqlite3
+  #   restart: unless-stopped
+
+
+
+  faucet-dapps-filebrowser:
+    container_name: faucet-dapps-filebrowser
+    image: faucet-dapps-filebrowser
+    build:
+      context: ./dapps-filebrowser
+      dockerfile: Dockerfile
+      args:
+        - FILEBROWSER_TITLE=VU KNF DAPP Hosting
+        - FILEBROWSER_BASE_URL=/dapps
+    read_only: false
+    volumes:
+      - ./dapps-server/data:/data
+    environment:
+      - PUID=1000
+      - PGID=1000
+    restart: unless-stopped
+
+
+
+  faucet-dapps-caddy:
+    container_name: faucet-dapps-caddy
+    image: caddy:2-alpine
+    user: 1000:1000
+    volumes:
+      - ./dapps-server/data:/srv:ro
+      - ./dapps-server/Caddyfile:/etc/caddy/Caddyfile:ro
+    environment:
+      - CADDY_LISTEN=0.0.0.0
+    restart: unless-stopped
+
+
