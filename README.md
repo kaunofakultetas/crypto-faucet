@@ -60,6 +60,7 @@ environment:
 
 ### 4. Access the Application
 - **Main Interface**: `http://<server-ip>` (or your configured domain)
+- **Default GUI Password**: ***FAUCET_GUI_PASSWORD***
 
 ## 🔧 Configuration
 
