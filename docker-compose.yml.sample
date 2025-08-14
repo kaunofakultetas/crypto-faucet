@@ -5,6 +5,8 @@ services:
     image: caddy:2.9.1-alpine
     volumes:
       - ./endpoint/Caddyfile:/etc/caddy/Caddyfile:ro
+    ports:
+      - 80:80
     environment:
       ############################ SISTEMOS PASSWORD #######################
       APP_PASSWORD_1: FAUCET_GUI_PASSWORD
