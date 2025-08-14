@@ -490,7 +490,7 @@ const CryptoFlowGraph = ({ faucetAddress, network }) => {
             const updatedSuffix = preserveUpdatedSuffix(label);
             
             // Update the backend
-            fetch(`/api/evm/${network}/set-address-name?address=${selectedAddress}&name=${encodeURIComponent(newName)}`);
+            fetch(`/api/evm/set-address-name?address=${selectedAddress}&name=${encodeURIComponent(newName)}`);
             
             // Simple approach: just update the label like the old implementation
             nodes.update({ 

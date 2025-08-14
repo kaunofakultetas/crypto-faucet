@@ -74,8 +74,6 @@ def init_default_data():
         {"Height":"9","BlockHash":"0000000000eae5d5c2d12b30cb84d7bbcde31de5a16a82ed41b350a1434b0130","PrevBlock":"000000000033a7f6f11b4c5b2aef87417056a1cd1dc7f4bfd56882b5bfd05af0","Nonce":"1291810786235","Transactions":"1) Nauja kriptovaliuta ---> Mantas (50BTC)\n2) Rokas ---> Saulius (2BTC)\n3) Simona ---> Agnė (5BTC)\n4) Mantas ---> Gabija (3BTC)\n5) Simona ---> Agnė (4BTC)"}
     ]
 
-
-
     with get_db_connection() as conn:
         for block in sample_blocks:
             conn.execute(''' 

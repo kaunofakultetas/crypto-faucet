@@ -54,8 +54,6 @@ class EVMFaucet:
         self.COOLDOWN_PERIOD = 60
         self.last_request = {}
 
-        self.init_db()
-
 
 
     def is_supported_network(self, network):
@@ -159,22 +157,6 @@ class EVMFaucet:
 
 
 
-    def init_db(self):
-        with get_db_connection() as conn:
-            conn.execute('''CREATE TABLE IF NOT EXISTS transactions
-                            (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                            network TEXT,
-                            from_address TEXT,
-                            to_address TEXT,
-                            value REAL,
-                            hash TEXT,
-                            block_number INTEGER,
-                            timestamp INTEGER,
-                            is_contract INTEGER,
-                            UNIQUE(network, hash))''')
-
-
-
     def fetch_all_transactions_from_etherscan(self, address, network):
         if not self.is_supported_network(network):
             raise ValueError(f"Unsupported network: {network}")
@@ -226,29 +208,19 @@ class EVMFaucet:
                     is_contract = 1
                     recipient = tx.get('contractAddress', '')
 
-                conn.execute('''INSERT OR IGNORE INTO transactions 
-                                (network, from_address, to_address, value, hash, block_number, timestamp)
-                                VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                            (network.lower(),
-                            tx['from'].lower(),
-                            recipient.lower(),
-                            float(tx['value']) / 10**18,
-                            tx['hash'],
-                            int(tx['blockNumber']),
-                            int(tx['timeStamp'])
-                            ))
+                conn.execute('''
+                    INSERT OR IGNORE INTO transactions (network, from_address, to_address, value, hash, block_number, timestamp)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)''',
+                (network.lower(), tx['from'].lower(), recipient.lower(), float(tx['value']) / 10**18, tx['hash'],
+                    int(tx['blockNumber']), int(tx['timeStamp'])
+                ))
 
-                conn.execute('''   UPDATE transactions 
-                                SET from_address = ?, to_address = ?, value = ?, block_number = ?, timestamp = ?
-                                WHERE LOWER(network) = ? AND hash = ?''',
-                            (tx['from'].lower(),
-                            recipient.lower(),
-                            float(tx['value']) / 10**18,
-                            int(tx['blockNumber']),
-                            int(tx['timeStamp']),
-                            network.lower(),
-                            tx['hash']
-                            ))
+                conn.execute(''' 
+                    UPDATE transactions SET from_address = ?, to_address = ?, value = ?, block_number = ?, timestamp = ?
+                        WHERE LOWER(network) = ? AND hash = ?''',
+                (tx['from'].lower(), recipient.lower(), float(tx['value']) / 10**18, int(tx['blockNumber']),
+                    int(tx['timeStamp']), network.lower(), tx['hash']
+                ))
 
                 conn.execute('''      
                     INSERT OR IGNORE INTO addresses (address, name, is_contract)
@@ -289,7 +261,7 @@ class EVMFaucet:
         with get_db_connection() as conn:
             threshold_time = int((datetime.utcnow() - timedelta(hours=hours)).timestamp())
 
-            conn.execute('''
+            sqlQueryResult = conn.execute('''
                 WITH GetLatestUpdate AS (
                     SELECT
                         address,
@@ -359,9 +331,8 @@ class EVMFaucet:
                     GetFlows
             ''', [network.lower(), address.lower(), address.lower(), threshold_time])
 
-            result = conn.fetchone()
+            result = sqlQueryResult.fetchone()
             transactions_json = result[0] if result else '[]'
-
 
             return {"transactions": json.loads(transactions_json)}, 200
 
