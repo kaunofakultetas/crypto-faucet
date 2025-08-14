@@ -2,7 +2,7 @@
 
 A comprehensive multi-blockchain faucet system developed for Vilnius University. This platform provides free testnet tokens for various blockchain networks, educational tools, and DApp hosting capabilities.
 
-![KNF Logo](vite/app/public/img/logo_knf.png)
+<img width="1234" height="960" alt="Screenshot 2025-08-14 at 11 07 20" src="https://github.com/user-attachments/assets/43f2eafa-8437-4757-b764-6b7f4a877c2a" />
 
 ## 🚀 Features
 
