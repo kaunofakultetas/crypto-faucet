@@ -59,7 +59,7 @@ def init_db_tables():
 
 
 
-def init_default_settings():
+def init_default_data():
 
     sample_blocks = [
         {"Height":"0","BlockHash":"0000000000c8d30df00df761f0d73e814b19a0dc7bece5dc620eab5551f0f5db","PrevBlock":"0","Nonce":"227969571629","Transactions":"1) Nauja kriptovaliuta ---> Satoshi (50BTC)"},

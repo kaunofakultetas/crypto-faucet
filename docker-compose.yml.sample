@@ -27,7 +27,6 @@ services:
   faucet-backend:
     container_name: faucet-backend
     image: faucet-backend
-    user: 1000:1000
     build:
       context: ./backend
       dockerfile: Dockerfile
