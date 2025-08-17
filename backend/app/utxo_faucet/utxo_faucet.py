@@ -12,7 +12,8 @@ import bech32
 
 class UTXOFaucet:
     """
-    UTXO-based cryptocurrency faucet supporting multiple Bitcoin-like networks.
+    UTXO-based cryptocurrency faucet supporting Bitcoin and Litecoin networks.
+    Supports testnet, regtest and mainnet for both coins.
     Based on: https://github.com/tomasvanagas/btc-minimal-wallet
     """
     
@@ -36,6 +37,7 @@ class UTXOFaucet:
     def _reset_context(self):
         """Reset wallet context for a new network request."""
         self.network = None
+        self.coin_type = None
         self.key = None
         self.address = None
         self.scripthash = None
@@ -75,13 +77,21 @@ class UTXOFaucet:
 
 
     def _get_hrp(self) -> str:
-        """Get Human Readable Part for bech32 encoding based on network."""
-        if self.network == 'testnet':
-            return 'tb'
-        elif self.network == 'regtest':
-            return 'bcrt'
-        else:
-            return 'bc'  # mainnet
+        """Get Human Readable Part for bech32 encoding based on network and coin type."""
+        if self.coin_type == 'litecoin':
+            if self.network == 'testnet':
+                return 'tltc'
+            elif self.network == 'regtest':
+                return 'rltc'
+            else:
+                return 'ltc'  # mainnet
+        else:  # bitcoin
+            if self.network == 'testnet':
+                return 'tb'
+            elif self.network == 'regtest':
+                return 'bcrt'
+            else:
+                return 'bc'  # mainnet
     
 
 
@@ -96,7 +106,8 @@ class UTXOFaucet:
     def _bech32_address_to_scripthash(self, address: str) -> str:
         """Convert bech32 address to scripthash for Electrum queries."""
         hrp, data = bech32.bech32_decode(address)
-        if hrp not in ('tb', 'bc', 'bcrt'):
+        valid_hrps = ('tb', 'bc', 'bcrt', 'tltc', 'ltc', 'rltc')
+        if hrp not in valid_hrps:
             raise ValueError('Invalid Bech32 address')
         
         decoded = bech32.convertbits(data[1:], 5, 8, False)
@@ -107,16 +118,14 @@ class UTXOFaucet:
     
 
 
-    def _determine_network_type(self, network_key: str) -> str:
-        """Determine Bitcoin network type from config key."""
+    def _get_coin_type_from_key(self, network_key: str) -> str:
+        """Determine coin type from network key."""
         key_lower = network_key.lower()
         
-        if 'regtest' in key_lower:
-            return 'regtest'
-        elif any(x in key_lower for x in ['test', '3', '4']):
-            return 'testnet'
+        if 'ltc' in key_lower:
+            return 'litecoin'
         else:
-            return 'mainnet'
+            return 'bitcoin'
     
 
 
@@ -127,8 +136,9 @@ class UTXOFaucet:
         if not config:
             raise ValueError(f'Unknown UTXO network: {network_key}')
         
-        # Determine network type
-        self.network = self._determine_network_type(network_key)
+        # Use explicit network type from config
+        self.network = config.get('network', 'testnet')
+        self.coin_type = self._get_coin_type_from_key(network_key)
         
         # Setup Electrum server connection
         electrum_server = config.get('electrum_server', '')
@@ -157,14 +167,7 @@ class UTXOFaucet:
         self.scripthash = self._bech32_address_to_scripthash(self.address)
 
         # Determine chunk size for this network (fallback to env default)
-        try:
-            raw_chunk = config.get('chunk_size', None)
-            if raw_chunk is None:
-                self.chunk_size_btc = float(self.default_amount_btc)
-            else:
-                self.chunk_size_btc = float(raw_chunk)
-        except Exception:
-            self.chunk_size_btc = float(self.default_amount_btc)
+        self.chunk_size_btc = float(config.get('chunk_size', self.default_amount_btc))
     
 
 
@@ -269,7 +272,7 @@ class UTXOFaucet:
 
 
     def _create_and_broadcast_transaction(self, to_address: str, amount_sat: int) -> str:
-        """Create, sign and broadcast a Bitcoin transaction."""
+        """Create, sign and broadcast a cryptocurrency transaction."""
         utxos = self._get_utxos()
         if not utxos:
             raise ValueError("No UTXOs available")
@@ -306,18 +309,14 @@ class UTXOFaucet:
 
 
     def _validate_address(self, address: str) -> bool:
-        """Validate Bitcoin address for current network."""
+        """Validate address for current network and coin type."""
         if not address:
             return False
         
         address_lower = address.lower()
+        expected_hrp = self._get_hrp()
         
-        if self.network == 'testnet':
-            return address_lower.startswith('tb1')
-        elif self.network == 'regtest':
-            return address_lower.startswith('bcrt1')
-        else:  # mainnet
-            return address_lower.startswith('bc1')
+        return address_lower.startswith(expected_hrp + '1')
     
 
 
@@ -332,7 +331,7 @@ class UTXOFaucet:
                 'short_name': config.get('short_name', 'BTC'),
                 'full_name': config.get('full_name', key),
                 'chain_id': 0,  # Not applicable for UTXO chains
-                'chain': self._determine_network_type(key),
+                'chain': config.get('network', 'testnet'),
                 'chunk_size': float(config.get('chunk_size')) if config.get('chunk_size') is not None else float(self.default_amount_btc),
             }
         
@@ -367,8 +366,8 @@ class UTXOFaucet:
     
 
 
-    def request_btc(self, network_key: str, to_address: str) -> tuple:
-        """Send BTC to specified address."""
+    def request_crypto(self, network_key: str, to_address: str) -> tuple:
+        """Send cryptocurrency to specified address."""
         try:
             self._reset_context()
             self._setup_wallet_for_network(network_key)
@@ -380,7 +379,7 @@ class UTXOFaucet:
             to_address = to_address.strip()
             
             if not self._validate_address(to_address):
-                return {"error": "Neteisingas BTC adresas"}, 400
+                return {"error": "Neteisingas adresas"}, 400
             
             if to_address.lower() == self.address.lower():
                 return {"error": "Negalima siųsti į čiaupo adresą"}, 400
@@ -415,14 +414,15 @@ class UTXOFaucet:
             self.last_request[to_address.lower()] = now
             
             return {
-                "message": "BTC sent successfully",
+                "message": "Cryptocurrency sent successfully",
                 "transaction_id": tx_id,
                 "amount": float(self.chunk_size_btc),
                 "from_address": self.address,
-                "network": self.network
+                "network": self.network,
+                "coin_type": self.coin_type
             }, 200
             
         except Exception as e:
-            return {"error": "Nepavyko išsiųsti BTC", "details": str(e)}, 500
+            return {"error": "Nepavyko išsiųsti kriptovaliutą", "details": str(e)}, 500
         finally:
             self._disconnect_electrum()

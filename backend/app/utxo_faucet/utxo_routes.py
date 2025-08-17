@@ -7,18 +7,28 @@ bp_utxo_faucet = Blueprint('utxo_faucet', __name__)
 
 
 
-# Single configured UTXO faucet instance (BTC testnet/mainnet/regtest via env)
+# Single configured UTXO faucet instance supporting Bitcoin and Litecoin networks
 utxo_faucet = UTXOFaucet(UTXO_NETWORK_CONFIGS)
 
 
-def _display_names_for_chain(chain: str):
+def _display_names_for_chain(chain: str, coin_type: str = 'bitcoin'):
+    """Get display names for chain based on network and coin type."""
     c = (chain or '').lower()
-    if c == 'mainnet':
-        return 'Bitcoin', 'BTC'
-    if c == 'regtest':
-        return 'Bitcoin Regtest', 'BTC'
-    # default to testnet
-    return 'Bitcoin Testnet', 'BTC'
+    
+    if coin_type.lower() == 'litecoin':
+        if c == 'mainnet':
+            return 'Litecoin', 'LTC'
+        elif c == 'regtest':
+            return 'Litecoin Regtest', 'LTC'
+        else:  # testnet
+            return 'Litecoin Testnet', 'LTC'
+    else:  # bitcoin
+        if c == 'mainnet':
+            return 'Bitcoin', 'BTC'
+        elif c == 'regtest':
+            return 'Bitcoin Regtest', 'BTC'
+        else:  # testnet
+            return 'Bitcoin Testnet', 'BTC'
 
 
 @bp_utxo_faucet.route('/api/utxo/networks', methods=['GET'])
@@ -35,7 +45,7 @@ def faucet_balance(network):
 @bp_utxo_faucet.route('/api/utxo/<network>/request-btc', methods=['GET'])
 def request_btc(network):
     to_address = request.args.get('address')
-    data, status = utxo_faucet.request_btc(network, to_address)
+    data, status = utxo_faucet.request_crypto(network, to_address)
     return jsonify(data), status
 
 
