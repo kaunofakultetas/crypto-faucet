@@ -17,6 +17,7 @@ A comprehensive multi-blockchain faucet system developed for Vilnius University.
 - **UTXO-Based Networks**:
   - Bitcoin Testnet3
   - Bitcoin Testnet4
+  - Litecoin Testnet
 
 ### Educational Tools
 - **Blockchain Simulator**: Interactive SHA-256 blockchain demonstration
@@ -94,11 +95,11 @@ Networks are configured in `backend/main.py`:
 4. Click "Request Tokens"
 5. Receive testnet ETH in your wallet
 
-#### UTXO Networks (Bitcoin-like)
-1. Navigate to `/faucet/utxo/{network}` (e.g., `/faucet/utxo/btc3`)
-2. Enter your Bitcoin testnet address
+#### UTXO Networks (Bitcoin and Litecoin)
+1. Navigate to `/faucet/utxo/{network}` (e.g., `/faucet/utxo/btc3`, `/faucet/utxo/ltc`)
+2. Enter your cryptocurrency testnet address (Bitcoin or Litecoin)
 3. Click "Request Tokens"
-4. Receive testnet Bitcoin at your address
+4. Receive testnet cryptocurrency at your address
 
 ### Educational Tools
 
@@ -122,7 +123,7 @@ Networks are configured in `backend/main.py`:
 ├── backend/                 # Python Flask API
 │   ├── app/
 │   │   ├── evm_faucet/     # Ethereum-like blockchain logic
-│   │   └── utxo_faucet/    # Bitcoin-like blockchain logic
+│   │   └── utxo_faucet/    # UTXO-based blockchain logic (Bitcoin, Litecoin)
 │   ├── main.py             # Application entry point
 │   └── requirements.txt    # Python dependencies
 ├── vite/                   # React frontend
