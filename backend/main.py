@@ -106,12 +106,12 @@ UTXO_NETWORK_CONFIGS = {
         'electrum_server': 'testnet4-electrumx.wakiyamap.dev:51002',
         'block_explorer': 'https://mempool.space/testnet4'
     },
-    'ltc': {
+    'ltc4': {
         'id': 3,
-        'short_name': "tLTC",
-        'full_name': 'Litecoin Testnet',
+        'short_name': "tLTC4",
+        'full_name': 'Litecoin Testnet4',
         'network': 'testnet',
-        'chunk_size': 0.005,
+        'chunk_size': 0.1,
         'electrum_server': 'electrum-ltc.bysh.me:51002',
         'block_explorer': 'https://litecoinspace.org/testnet'
     }

@@ -79,16 +79,16 @@ class UTXOFaucet:
     def _get_hrp(self) -> str:
         """Get Human Readable Part for bech32 encoding based on network and coin type."""
         if self.coin_type == 'litecoin':
-            if self.network == 'testnet':
+            if self.network in ('testnet', 'litecoin_testnet'):
                 return 'tltc'
-            elif self.network == 'regtest':
+            elif self.network in ('regtest', 'litecoin_regtest'):
                 return 'rltc'
             else:
                 return 'ltc'  # mainnet
         else:  # bitcoin
-            if self.network == 'testnet':
+            if self.network in ('testnet', 'bitcoin_testnet'):
                 return 'tb'
-            elif self.network == 'regtest':
+            elif self.network in ('regtest', 'bitcoin_regtest'):
                 return 'bcrt'
             else:
                 return 'bc'  # mainnet
@@ -129,6 +129,26 @@ class UTXOFaucet:
     
 
 
+    def _get_bitcoinlib_network_name(self, generic_network: str, coin_type: str) -> str:
+        """Get the specific network name that bitcoinlib expects."""
+        generic_lower = generic_network.lower()
+        coin_lower = coin_type.lower()
+        
+        if coin_lower == 'litecoin':
+            if generic_lower == 'mainnet':
+                return 'litecoin'
+            elif generic_lower == 'regtest':
+                return 'litecoin_regtest'
+            else:  # testnet
+                return 'litecoin_testnet'
+        else:  # bitcoin
+            if generic_lower == 'mainnet':
+                return 'bitcoin'
+            elif generic_lower == 'regtest':
+                return 'regtest'
+            else:  # testnet
+                return 'testnet'
+
     def _setup_wallet_for_network(self, network_key: str):
         """Initialize wallet context for the specified network."""
         # Get network configuration
@@ -137,8 +157,11 @@ class UTXOFaucet:
             raise ValueError(f'Unknown UTXO network: {network_key}')
         
         # Use explicit network type from config
-        self.network = config.get('network', 'testnet')
+        generic_network = config.get('network', 'testnet')
         self.coin_type = self._get_coin_type_from_key(network_key)
+        
+        # Get the specific network name that bitcoinlib expects
+        self.network = self._get_bitcoinlib_network_name(generic_network, self.coin_type)
         
         # Setup Electrum server connection
         electrum_server = config.get('electrum_server', '')
@@ -205,8 +228,23 @@ class UTXOFaucet:
         }
         
         self.ssock.sendall((json.dumps(request) + "\n").encode("utf-8"))
-        response_data = self.ssock.recv(4096)
-        response = json.loads(response_data.decode('utf-8'))
+        
+        # Read response until we get a complete line (JSON-RPC messages end with \n)
+        response_data = b""
+        while True:
+            chunk = self.ssock.recv(1024)
+            if not chunk:
+                raise ConnectionError("Connection closed by server")
+            response_data += chunk
+            if b'\n' in response_data:
+                # Get the first complete message
+                response_line = response_data.split(b'\n', 1)[0]
+                break
+        
+        try:
+            response = json.loads(response_line.decode('utf-8'))
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON response from Electrum server: {e}")
         
         if "error" in response and response["error"]:
             raise RuntimeError(f"Electrum error: {response['error']}")

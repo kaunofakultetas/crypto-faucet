@@ -120,22 +120,12 @@ const FaucetInterface = () => {
     }
   }, [loadFaucetInfo])
 
-  const validateAddress = (addr) => {
-    const a = (addr || '').toLowerCase().trim()
-    // Accept common prefixes; backend will enforce exact network
-    return a.startsWith('tb1') || a.startsWith('bcrt1') || a.startsWith('bc1')
-  }
-
 
 
   const handleRequest = async () => {
     setSuccess(null)
     setError(null)
     const addr = recipient.trim()
-    if (!validateAddress(addr)) {
-      setError(`Neteisingas ${currencyShort} adresas (tik b[c|crt|t]1… Bech32)`) 
-      return
-    }
     try {
       setSubmitting(true)
       const { data } = await axios.get(`/api/utxo/${network}/request-btc`, { params: { address: addr } })

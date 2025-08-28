@@ -17,7 +17,7 @@ A comprehensive multi-blockchain faucet system developed for Vilnius University.
 - **UTXO-Based Networks**:
   - Bitcoin Testnet3
   - Bitcoin Testnet4
-  - Litecoin Testnet
+  - Litecoin Testnet4
 
 ### Educational Tools
 - **Blockchain Simulator**: Interactive SHA-256 blockchain demonstration
