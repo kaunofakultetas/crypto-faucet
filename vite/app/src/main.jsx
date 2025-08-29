@@ -24,6 +24,7 @@ import GraphPage from './pages/Graph/Page';
 
 import BlockchainSimulatorPage from './pages/BlockchainSimulator/Page';
 import DappsServerPage from './pages/DappsServer/Page';
+import ReorgAttackPage from './pages/ReorgAttack/Page';
 
 
 
@@ -85,6 +86,9 @@ createRoot(document.getElementById('root')).render(
 
               {/* Dapps Server Routes */}
               <Route path="dapps-server" element={<DappsServerPage />} />
+
+              {/* 51% Attack Routes */}
+              <Route path="reorgattack" element={<ReorgAttackPage />} />
 
             </Routes>
           </Box>

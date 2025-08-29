@@ -219,19 +219,14 @@ const Navbar = () => {
             },
           }}
         >
-          <MenuItem
-            component={Link}
-            to="/dapps-server"
-            onClick={handleMenuClose}
-          >
+          <MenuItem to="/dapps-server" component={Link} onClick={handleMenuClose}>
             DAPPS Serveris
           </MenuItem>
-          <MenuItem
-            component={Link}
-            to="/sha256"
-            onClick={handleMenuClose}
-          >
+          <MenuItem to="/sha256" component={Link} onClick={handleMenuClose}>
             Blockchain Simuliatorius
+          </MenuItem>
+          <MenuItem to="/reorgattack" component={Link} onClick={handleMenuClose}>
+            51% Atakos Simuliacija
           </MenuItem>
         </Menu>
       </div>

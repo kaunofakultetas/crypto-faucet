@@ -163,5 +163,8 @@ if __name__ == '__main__':
     from app.utxo_faucet.utxo_routes import bp_utxo_faucet
     app.register_blueprint(bp_utxo_faucet, url_prefix='')
 
+    from app.reorg_attack.routes import bp_reorg_attack
+    app.register_blueprint(bp_reorg_attack, url_prefix='')
+
     # Run backend
     app.run(host='0.0.0.0', port=8000, debug=APP_DEBUG)
