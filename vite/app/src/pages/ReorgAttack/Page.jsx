@@ -6,44 +6,44 @@ import { BiWorld } from "react-icons/bi";
 
 export default function ReorgAttackPage() {
   // Layout constants for consistent spacing and alignment
-  const ROW_HEIGHT = 120; // px height per block row
+  const ROW_HEIGHT = 100; // px height per block row
   const ROW_GAP = 50; // px gap between rows
   const LABEL_WIDTH = 72; // px reserved for left height labels
-  const BLOCK_MIN_WIDTH = 200; // px card min width
-  const CHAIN_COL_WIDTH = 240; // px width per chain lane
+  const BLOCK_MIN_WIDTH = 300; // px card min width
+  const CHAIN_COL_WIDTH = 340; // px width per chain lane
   const CENTER_COL_WIDTH = CHAIN_COL_WIDTH; // center lane width for pre-fork overlay
   const COL_GAP = 10; // gap between chain lanes
   const LANE_HEADER_HEIGHT = 0; // no top labels/headers
 
   // Data structure (integrated)
   const chainBlocks = [
-    { height: 1, hash: '000a1b2c', prevHash: null, coinbase: 'Binance', timestamp: '2024-01-01 10:00:00' },
-    { height: 2, hash: '000b2c3d', prevHash: '000a1b2c', coinbase: 'Slush Pool', timestamp: '2024-01-01 10:10:00' },
-    { height: 3, hash: '000c3d4e', prevHash: '000b2c3d', coinbase: 'F2Pool', timestamp: '2024-01-01 10:20:00' },
-    { height: 4, hash: '000d4e5f', prevHash: '000c3d4e', coinbase: 'AntPool', timestamp: '2024-01-01 10:30:00' },
-    { height: 5, hash: '000e5f6g', prevHash: '000d4e5f', coinbase: 'BTC.com', timestamp: '2024-01-01 10:40:00' },
-    { height: 6, hash: '000f6g7h', prevHash: '000e5f6g', coinbase: 'ViaBTC', timestamp: '2024-01-01 10:50:00' },
-    { height: 7, hash: '000g7h8i', prevHash: '000f6g7h', coinbase: 'Poolin', timestamp: '2024-01-01 11:00:00' },
+    { height: 1, hash: '000a1b2c', prevHash: null, coinbase: 'Binance', time: '2024-01-01 10:00:00' },
+    { height: 2, hash: '000b2c3d', prevHash: '000a1b2c', coinbase: 'Slush Pool', time: '2024-01-01 10:10:00' },
+    { height: 3, hash: '000c3d4e', prevHash: '000b2c3d', coinbase: 'F2Pool', time: '2024-01-01 10:20:00' },
+    { height: 4, hash: '000d4e5f', prevHash: '000c3d4e', coinbase: 'AntPool', time: '2024-01-01 10:30:00' },
+    { height: 5, hash: '000e5f6g', prevHash: '000d4e5f', coinbase: 'BTC.com', time: '2024-01-01 10:40:00' },
+    { height: 6, hash: '000f6g7h', prevHash: '000e5f6g', coinbase: 'ViaBTC', time: '2024-01-01 10:50:00' },
+    { height: 7, hash: '000g7h8i', prevHash: '000f6g7h', coinbase: 'Poolin', time: '2024-01-01 11:00:00' },
 
-    { height: 5, hash: '111e5f6g', prevHash: '000d4e5f', coinbase: 'VU KNF Attacker', timestamp: '2024-01-01 10:41:00' },
-    { height: 6, hash: '111f6g7h', prevHash: '111e5f6g', coinbase: 'VU KNF Attacker', timestamp: '2024-01-01 10:51:00' },
-    { height: 7, hash: '111g7h8i', prevHash: '111f6g7h', coinbase: 'VU KNF Attacker', timestamp: '2024-01-01 11:01:00' },
-    { height: 8, hash: '111h8i9j', prevHash: '111g7h8i', coinbase: 'VU KNF Attacker', timestamp: '2024-01-01 11:11:00' },
-    { height: 9, hash: '111i9j0k', prevHash: '111h8i9j', coinbase: 'VU KNF Attacker', timestamp: '2024-01-01 11:21:00' },
-    { height: 10, hash: '111j0k1l', prevHash: '111i9j0k', coinbase: 'VU KNF Attacker', timestamp: '2024-01-01 11:31:00' },
-    { height: 11, hash: '111k1l2m', prevHash: '111j0k1l', coinbase: 'VU KNF Attacker', timestamp: '2024-01-01 11:41:00' },
-    { height: 12, hash: '111l2m3n', prevHash: '111k1l2m', coinbase: 'VU KNF Attacker', timestamp: '2024-01-01 11:51:00' },
-    { height: 13, hash: '111m3n4o', prevHash: '111l2m3n', coinbase: 'VU KNF Attacker', timestamp: '2024-01-01 12:01:00' },
-    { height: 14, hash: '111n4o5p', prevHash: '111m3n4o', coinbase: 'VU KNF Attacker', timestamp: '2024-01-01 12:11:00' },
-    { height: 15, hash: '111o5p6q', prevHash: '111n4o5p', coinbase: 'VU KNF Attacker', timestamp: '2024-01-01 12:21:00' },
-    { height: 16, hash: '111p6q7r', prevHash: '111o5p6q', coinbase: 'VU KNF Attacker', timestamp: '2024-01-01 12:31:00' },
-    { height: 17, hash: '111q7r8s', prevHash: '111p6q7r', coinbase: 'VU KNF Attacker', timestamp: '2024-01-01 12:41:00' },
+    { height: 5, hash: '211e5f6g', prevHash: '000d4e5f', coinbase: 'VU KNF Attacker', time: '2024-01-01 10:41:00' },
+    { height: 6, hash: '211f6g7h', prevHash: '211e5f6g', coinbase: 'VU KNF Attacker', time: '2024-01-01 10:51:00' },
+    { height: 7, hash: '211g7h8i', prevHash: '211f6g7h', coinbase: 'VU KNF Attacker', time: '2024-01-01 11:01:00' },
+    { height: 8, hash: '211h8i9j', prevHash: '211g7h8i', coinbase: 'VU KNF Attacker', time: '2024-01-01 11:11:00' },
+    { height: 9, hash: '211i9j0k', prevHash: '211h8i9j', coinbase: 'VU KNF Attacker', time: '2024-01-01 11:21:00' },
+    // { height: 10, hash: '211j0k1l', prevHash: '211i9j0k', coinbase: 'VU KNF Attacker', time: '2024-01-01 11:31:00' },
+    // { height: 11, hash: '211k1l2m', prevHash: '211j0k1l', coinbase: 'VU KNF Attacker', time: '2024-01-01 11:41:00' },
+    // { height: 12, hash: '211l2m3n', prevHash: '211k1l2m', coinbase: 'VU KNF Attacker', time: '2024-01-01 11:51:00' },
+    // { height: 13, hash: '211m3n4o', prevHash: '211l2m3n', coinbase: 'VU KNF Attacker', time: '2024-01-01 12:01:00' },
+    // { height: 14, hash: '211n4o5p', prevHash: '211m3n4o', coinbase: 'VU KNF Attacker', time: '2024-01-01 12:11:00' },
+    // { height: 15, hash: '211o5p6q', prevHash: '211n4o5p', coinbase: 'VU KNF Attacker', time: '2024-01-01 12:21:00' },
+    // { height: 16, hash: '211p6q7r', prevHash: '211o5p6q', coinbase: 'VU KNF Attacker', time: '2024-01-01 12:31:00' },
+    // { height: 17, hash: '211q7r8s', prevHash: '211p6q7r', coinbase: 'VU KNF Attacker', time: '2024-01-01 12:41:00' },
 
   ];
 
   const chainTips = {
-    public: '111q7r8s',
-    attacker: '111q7r8s',
+    public: '211i9j0k',
+    attacker: '211i9j0k',
   };
 
   // Build lookup and FIXED chain detection
@@ -139,15 +139,15 @@ export default function ReorgAttackPage() {
         '&:hover': { transform: 'translateY(-2px)', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }
       }}
     >
-      <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
+      <CardContent sx={{ p: 1, '&:last-child': { pb: 1 } }}>
         <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {block.coinbase}
+          {block.hash}
         </Typography>
         <Typography variant="caption" sx={{ mb: 0.5, display: 'block' }}>
-          <strong>Hash:</strong> {block.hash}
+          <strong>Coinbase:</strong> {block.coinbase}
         </Typography>
         <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-          <strong>Time:</strong> {block.timestamp.split(' ')[1]}
+          <strong>Time:</strong> {block.time}
         </Typography>
       </CardContent>
     </Card>
@@ -161,8 +161,8 @@ export default function ReorgAttackPage() {
         top: `${top}px`, 
         left: position, 
         transform: 'translate(-50%, -50%)', 
-        width: 28, 
-        height: 28, 
+        width: 40, 
+        height: 40, 
         borderRadius: '9999px', 
         backgroundColor: isPublic ? '#2e7d32' : '#c62828', 
         color: '#fff', 
@@ -173,7 +173,7 @@ export default function ReorgAttackPage() {
         zIndex: 4, 
         pointerEvents: 'none' 
       }}>
-        {isPublic ? <BiWorld size={16} /> : <SiHackaday size={16} />}
+        {isPublic ? <BiWorld size={28} /> : <SiHackaday size={24} />}
       </Box>
     );
   };
@@ -373,13 +373,7 @@ export default function ReorgAttackPage() {
             }).flat();
           })()}
           
-          {/* Fork connectors */}
-          {forkHeight !== null && (
-            <>
-              <Box sx={{ position: 'absolute', top: `${heightsDesc.indexOf(forkHeight) * (ROW_HEIGHT + ROW_GAP) + ROW_HEIGHT / 2 - 1}px`, left: 'calc(50% - 1px)', width: '48px', height: '2px', backgroundColor: '#ffb74d', transform: 'translateX(-100%)' }} />
-              <Box sx={{ position: 'absolute', top: `${heightsDesc.indexOf(forkHeight) * (ROW_HEIGHT + ROW_GAP) + ROW_HEIGHT / 2 - 1}px`, left: 'calc(50% - 1px)', width: '48px', height: '2px', backgroundColor: '#ffb74d' }} />
-            </>
-          )}
+
           
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: `${ROW_GAP}px` }}>
             {heightsDesc.map((height) => {
