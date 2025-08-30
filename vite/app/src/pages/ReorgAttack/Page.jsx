@@ -3,6 +3,7 @@ import { Box, Typography, Card, CardContent } from '@mui/material';
 
 import { SiHackaday } from "react-icons/si";
 import { BiWorld } from "react-icons/bi";
+import { FaMoneyBillTransfer } from "react-icons/fa6";
 
 export default function ReorgAttackPage() {
   // Layout constants for consistent spacing and alignment
@@ -10,6 +11,7 @@ export default function ReorgAttackPage() {
   const ROW_GAP = 50; // px gap between rows
   const LABEL_WIDTH = 72; // px reserved for left height labels
   const BLOCK_MIN_WIDTH = 300; // px card min width
+  const BLOCK_HEIGHT = 110; // px consistent height for all blocks
   const CHAIN_COL_WIDTH = 340; // px width per chain lane
   const CENTER_COL_WIDTH = CHAIN_COL_WIDTH; // center lane width for pre-fork overlay
   const COL_GAP = 10; // gap between chain lanes
@@ -45,6 +47,24 @@ export default function ReorgAttackPage() {
     public: '211i9j0k',
     attacker: '211i9j0k',
   };
+
+  const transactions = [
+    {
+      txid: '1234567890abcdef',
+      color: 'red',
+      blocks: [
+        "211e5f6g"
+      ]
+    },
+    {
+      txid: '9876543210abcdef',
+      color: 'green',
+      blocks: [
+        "211e5f6g"
+      ]
+    },
+  ]
+
 
   // Build lookup and FIXED chain detection
   const byHash = React.useMemo(() => new Map(chainBlocks.map(b => [b.hash, b])), [chainBlocks]);
@@ -124,11 +144,42 @@ export default function ReorgAttackPage() {
     forkHeight !== null && chain.some(block => block.height >= forkHeight)
   );
 
-  const BlockComponent = ({ block }) => (
+  // Helper function to get transactions for a specific block
+  const getTransactionsForBlock = (blockHash) => {
+    return transactions.filter(tx => tx.blocks.includes(blockHash));
+  };
+
+  // Transaction bubble component
+  const TransactionBubble = ({ transaction }) => (
+    <Box
+      sx={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: '24px',
+        height: '24px',
+        borderRadius: '50%',
+        backgroundColor: transaction.color,
+        margin: '2px',
+        border: '1px solid rgba(0,0,0,0.1)',
+        color: 'white',
+        boxShadow: '0 1px 3px rgba(0,0,0,0.2)'
+      }}
+      title={`Transaction: ${transaction.txid.substring(0, 8)}...`}
+    >
+      <FaMoneyBillTransfer size={16} />
+    </Box>
+  );
+
+  const BlockComponent = ({ block }) => {
+    const blockTransactions = getTransactionsForBlock(block.hash);
+    
+    return (
     <Card
       data-block-hash={block.hash}
       sx={{
         minWidth: `${BLOCK_MIN_WIDTH}px`,
+        height: `${BLOCK_HEIGHT}px`,
         backgroundColor: '#fff',
         border: '1px solid #e0e0e0',
         borderLeftWidth: '4px',
@@ -136,22 +187,41 @@ export default function ReorgAttackPage() {
         borderLeftColor: '#e0e0e0',
         boxShadow: '0 1px 2px rgba(0,0,0,0.05)',
         transition: 'transform 120ms ease, box-shadow 120ms ease',
-        '&:hover': { transform: 'translateY(-2px)', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }
+        '&:hover': { transform: 'translateY(-2px)', boxShadow: '0 4px 12px rgba(0,0,0,0.08)' },
+        display: 'flex',
+        flexDirection: 'column'
       }}
     >
-      <CardContent sx={{ p: 1, '&:last-child': { pb: 1 } }}>
-        <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {block.hash}
-        </Typography>
-        <Typography variant="caption" sx={{ mb: 0.5, display: 'block' }}>
-          <strong>Coinbase:</strong> {block.coinbase}
-        </Typography>
-        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-          <strong>Time:</strong> {block.time}
-        </Typography>
+      <CardContent sx={{ 
+        p: 1, 
+        '&:last-child': { pb: 1 },
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'space-between'
+      }}>
+        <Box sx={{ flex: 1 }}>
+          <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {block.hash}
+          </Typography>
+          <Typography variant="caption" sx={{ mb: 0.2, display: 'block' }}>
+            <strong>Coinbase:</strong> {block.coinbase}
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+            <strong>Time:</strong> {block.time}
+          </Typography>
+        </Box>
+        {blockTransactions.length > 0 && (
+          <Box sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 0.5, mt: 0.5 }}>
+            {blockTransactions.map((tx, index) => (
+              <TransactionBubble key={`${tx.txid}-${index}`} transaction={tx} />
+            ))}
+          </Box>
+        )}
       </CardContent>
     </Card>
-  );
+    );
+  };
 
   const TipIcon = ({ type, position, top }) => {
     const isPublic = type === 'public';
