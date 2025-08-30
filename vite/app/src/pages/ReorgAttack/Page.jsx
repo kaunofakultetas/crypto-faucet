@@ -1,9 +1,28 @@
 import React from 'react';
-import { Box, Typography, Card, CardContent } from '@mui/material';
+import { 
+  Box, 
+  Typography, 
+  Card, 
+  CardContent, 
+  Paper, 
+  Button, 
+  TextField, 
+  FormControl, 
+  InputLabel, 
+  Select, 
+  MenuItem, 
+  Chip, 
+  IconButton,
+  Divider,
+  Alert,
+  Switch,
+  FormControlLabel
+} from '@mui/material';
 
 import { SiHackaday } from "react-icons/si";
 import { BiWorld } from "react-icons/bi";
 import { FaMoneyBillTransfer } from "react-icons/fa6";
+import { MdAdd, MdRemove, MdSend, MdWifi, MdWifiOff, MdSettings, MdClose } from "react-icons/md";
 
 export default function ReorgAttackPage() {
   // Layout constants for consistent spacing and alignment
@@ -16,6 +35,35 @@ export default function ReorgAttackPage() {
   const CENTER_COL_WIDTH = CHAIN_COL_WIDTH; // center lane width for pre-fork overlay
   const COL_GAP = 10; // gap between chain lanes
   const LANE_HEADER_HEIGHT = 0; // no top labels/headers
+
+  // Predefined colors for transaction tracking
+  const TRANSACTION_COLORS = ['red', 'green', 'blue', 'orange', 'purple', 'pink', 'cyan', 'yellow'];
+
+  // State management
+  const [isPanelOpen, setIsPanelOpen] = React.useState(false);
+  const [isConnectedToPublic, setIsConnectedToPublic] = React.useState(true);
+  const [rawTransaction, setRawTransaction] = React.useState('');
+  const [transactions, setTransactions] = React.useState([
+    {
+      txid: '1234567890abcdef',
+      color: 'red',
+      blocks: [
+        "211e5f6g"
+      ]
+    },
+    {
+      txid: '9876543210abcdef',
+      color: 'green',
+      blocks: [
+        "211e5f6g"
+      ]
+    },
+  ]);
+  const [newTxid, setNewTxid] = React.useState('');
+  const [selectedColor, setSelectedColor] = React.useState('red');
+
+  // Panel width for layout calculations
+  const PANEL_WIDTH = 350;
 
   // Data structure (integrated)
   const chainBlocks = [
@@ -48,23 +96,37 @@ export default function ReorgAttackPage() {
     attacker: '211i9j0k',
   };
 
-  const transactions = [
-    {
-      txid: '1234567890abcdef',
-      color: 'red',
-      blocks: [
-        "211e5f6g"
-      ]
-    },
-    {
-      txid: '9876543210abcdef',
-      color: 'green',
-      blocks: [
-        "211e5f6g"
-      ]
-    },
-  ]
+  // Control panel functions
+  const handleSendRawTransaction = () => {
+    if (rawTransaction.trim()) {
+      // Simulate sending transaction to private network
+      console.log('Sending raw transaction to private network:', rawTransaction);
+      setRawTransaction('');
+      // You can add actual backend API call here
+    }
+  };
 
+  const handleAddTransaction = () => {
+    if (newTxid.trim()) {
+      const newTransaction = {
+        txid: newTxid.trim(),
+        color: selectedColor,
+        blocks: [] // Initially not in any blocks
+      };
+      setTransactions(prev => [...prev, newTransaction]);
+      setNewTxid('');
+    }
+  };
+
+  const handleRemoveTransaction = (txidToRemove) => {
+    setTransactions(prev => prev.filter(tx => tx.txid !== txidToRemove));
+  };
+
+  const handleUpdateTransactionColor = (txid, newColor) => {
+    setTransactions(prev => 
+      prev.map(tx => tx.txid === txid ? { ...tx, color: newColor } : tx)
+    );
+  };
 
   // Build lookup and FIXED chain detection
   const byHash = React.useMemo(() => new Map(chainBlocks.map(b => [b.hash, b])), [chainBlocks]);
@@ -287,7 +349,7 @@ export default function ReorgAttackPage() {
     return { x, y, lane: 'postfork', postForkIndex };
   };
 
-  const LineComponent = ({ fromHash, toHash }) => {
+  const LineComponent = ({ fromHash, toHash, isPanelOpen }) => {
     // Use React ref to get actual DOM positions
     const [positions, setPositions] = React.useState(null);
     
@@ -310,12 +372,19 @@ export default function ReorgAttackPage() {
         }
       };
       
-      // Update positions after render
-      setTimeout(updatePositions, 100);
+      // Update positions after render and after panel transitions
+      const timeouts = [
+        setTimeout(updatePositions, 100),
+        setTimeout(updatePositions, 400) // After transition completes (0.3s + buffer)
+      ];
+      
       window.addEventListener('resize', updatePositions);
       
-      return () => window.removeEventListener('resize', updatePositions);
-    }, [fromHash, toHash]);
+      return () => {
+        timeouts.forEach(timeout => clearTimeout(timeout));
+        window.removeEventListener('resize', updatePositions);
+      };
+    }, [fromHash, toHash, isPanelOpen]); // Added isPanelOpen dependency
     
     if (!positions) return null;
     
@@ -349,8 +418,237 @@ export default function ReorgAttackPage() {
     );
   };
 
+  // Control Panel Component
+  const ControlPanel = () => (
+    <Paper 
+      elevation={3}
+      sx={{ 
+        position: 'fixed', 
+        top: 0, 
+        right: isPanelOpen ? 0 : '-100%', 
+        width: PANEL_WIDTH, 
+        height: '100vh',
+        p: 2, 
+        zIndex: 1000,
+        overflow: 'auto',
+        transition: 'right 0.3s ease-in-out',
+        backgroundColor: 'white'
+      }}
+    >
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+        <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
+          Control Panel
+        </Typography>
+        <IconButton 
+          onClick={() => setIsPanelOpen(false)}
+          size="small"
+          sx={{ color: 'text.secondary' }}
+        >
+          <MdClose />
+        </IconButton>
+      </Box>
+      
+      {/* Connection Status */}
+      <Box sx={{ mb: 3 }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={isConnectedToPublic}
+              onChange={(e) => setIsConnectedToPublic(e.target.checked)}
+              color="primary"
+            />
+          }
+          label={
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              {isConnectedToPublic ? <MdWifi /> : <MdWifiOff />}
+              {isConnectedToPublic ? 'Connected to Public Network' : 'Disconnected from Public Network'}
+            </Box>
+          }
+        />
+        <Alert 
+          severity={isConnectedToPublic ? 'success' : 'warning'} 
+          sx={{ mt: 1, fontSize: '0.8rem' }}
+        >
+          {isConnectedToPublic 
+            ? 'Receiving blocks from public network' 
+            : 'Operating in private mode only'
+          }
+        </Alert>
+      </Box>
+
+      <Divider sx={{ mb: 3 }} />
+
+      {/* Send Raw Transaction */}
+      <Box sx={{ mb: 3 }}>
+        <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 'bold' }}>
+          Send Raw Transaction to Private Network
+        </Typography>
+        <TextField
+          fullWidth
+          multiline
+          rows={3}
+          placeholder="Enter raw transaction hex..."
+          value={rawTransaction}
+          onChange={(e) => setRawTransaction(e.target.value)}
+          variant="outlined"
+          size="small"
+          sx={{ mb: 1 }}
+        />
+        <Button
+          fullWidth
+          variant="contained"
+          onClick={handleSendRawTransaction}
+          disabled={!rawTransaction.trim()}
+          startIcon={<MdSend />}
+          sx={{ backgroundColor: '#1976d2' }}
+        >
+          Send Transaction
+        </Button>
+      </Box>
+
+      <Divider sx={{ mb: 3 }} />
+
+      {/* Transaction Tracking */}
+      <Box>
+        <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 'bold' }}>
+          Transaction Tracking
+        </Typography>
+        
+        {/* Add New Transaction */}
+        <Box sx={{ mb: 2 }}>
+          <TextField
+            fullWidth
+            placeholder="Enter transaction ID..."
+            value={newTxid}
+            onChange={(e) => setNewTxid(e.target.value)}
+            variant="outlined"
+            size="small"
+            sx={{ mb: 1 }}
+          />
+          <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
+            <FormControl size="small" sx={{ flex: 1 }}>
+              <InputLabel>Color</InputLabel>
+              <Select
+                value={selectedColor}
+                onChange={(e) => setSelectedColor(e.target.value)}
+                label="Color"
+              >
+                {TRANSACTION_COLORS.map(color => (
+                  <MenuItem key={color} value={color}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Box 
+                        sx={{ 
+                          width: 16, 
+                          height: 16, 
+                          borderRadius: '50%', 
+                          backgroundColor: color,
+                          border: '1px solid rgba(0,0,0,0.2)'
+                        }} 
+                      />
+                      {color.charAt(0).toUpperCase() + color.slice(1)}
+                    </Box>
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <Button
+              variant="contained"
+              onClick={handleAddTransaction}
+              disabled={!newTxid.trim()}
+              startIcon={<MdAdd />}
+              size="small"
+            >
+              Add
+            </Button>
+          </Box>
+        </Box>
+
+        {/* Tracked Transactions List */}
+        <Box>
+          <Typography variant="body2" sx={{ mb: 1, color: 'text.secondary' }}>
+            Tracked Transactions ({transactions.length})
+          </Typography>
+          {transactions.length === 0 ? (
+            <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+              No transactions being tracked
+            </Typography>
+          ) : (
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              {transactions.map((tx, index) => (
+                <Chip
+                  key={tx.txid}
+                  label={
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Box 
+                        sx={{ 
+                          width: 12, 
+                          height: 12, 
+                          borderRadius: '50%', 
+                          backgroundColor: tx.color,
+                          border: '1px solid rgba(0,0,0,0.2)'
+                        }} 
+                      />
+                      {tx.txid.substring(0, 12)}...
+                    </Box>
+                  }
+                  onDelete={() => handleRemoveTransaction(tx.txid)}
+                  deleteIcon={<MdRemove />}
+                  variant="outlined"
+                  size="small"
+                  sx={{ justifyContent: 'space-between' }}
+                />
+              ))}
+            </Box>
+          )}
+        </Box>
+      </Box>
+    </Paper>
+  );
+
+  // Simple Toggle Button
+  const ToggleButton = () => (
+    <IconButton
+      onClick={() => setIsPanelOpen(!isPanelOpen)}
+      sx={{
+        position: 'fixed',
+        bottom: 20,
+        right: 20,
+        backgroundColor: 'primary.main',
+        color: 'white',
+        zIndex: 1001,
+        width: 56,
+        height: 56,
+        '&:hover': {
+          backgroundColor: 'primary.dark',
+        },
+        boxShadow: '0 4px 20px rgba(0,0,0,0.3)'
+      }}
+    >
+      <MdSettings size={28} />
+    </IconButton>
+  );
+
+
+
   return (
-    <Box sx={{ p: 2, position: 'relative' }}>
+    <Box sx={{ 
+      p: 2, 
+      position: 'relative',
+      paddingRight: isPanelOpen ? `${PANEL_WIDTH + 20}px` : 2,
+      transition: 'padding-right 0.3s ease-in-out'
+    }}
+    onTransitionEnd={() => {
+      // Force line recalculation after layout transition completes
+      setTimeout(() => {
+        window.dispatchEvent(new Event('resize'));
+      }, 50);
+    }}>
+      {/* Control Panel */}
+      <ControlPanel />
+      
+      {/* Toggle Button */}
+      <ToggleButton />
+      
       {/* Title */}
       <Box sx={{ position: 'relative', mb: 10 }}>
         <Typography variant="h5" sx={{ textAlign: 'center', fontWeight: 'bold' }}>
@@ -368,6 +666,7 @@ export default function ReorgAttackPage() {
               key={`line-${block.hash}`}
               fromHash={block.hash}     // Start from current block
               toHash={block.prevHash}   // Point to previous block
+              isPanelOpen={isPanelOpen} // Pass panel state for recalculation
             />
           ))}
         {/* Block height numbers at far left */}
