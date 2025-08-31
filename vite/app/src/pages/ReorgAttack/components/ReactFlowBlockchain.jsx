@@ -19,7 +19,7 @@ const BlockNode = ({ data }) => {
   return (
     <Box
       sx={{
-        border: isAttacker ? '3px solid #f44336' : '3px solid #2196f3',
+        border: isAttacker ? '5px solid #f44336' : '5px solid #2196f3',
         borderRadius: 2,
         bgcolor: 'background.paper',
         p: 1.5,
@@ -100,11 +100,9 @@ const ReactFlowBlockchain = ({ chainBlocks = [], chainTips = {}, transactions = 
   // Process blockchain data
   const { nodes, edges, maxHeight, minHeight } = useMemo(() => {
     if (!chainBlocks || chainBlocks.length === 0) {
-      console.log('No blockchain data available');
       return { nodes: [], edges: [], maxHeight: 0, minHeight: 0 };
     }
 
-    console.log('Processing ALL blocks from API:', chainBlocks.length, 'blocks');
 
     // Get height range
     const heights = chainBlocks.map(b => b.height);
@@ -144,16 +142,16 @@ const ReactFlowBlockchain = ({ chainBlocks = [], chainTips = {}, transactions = 
     const winningChainHash = currentTipHeights.length === 2 ? 
       (allBlocks.find(b => b.height === maxTipHeight && (b.hash === chainTips.public || b.hash === chainTips.private))?.hash) : null;
 
-    console.log('Chain competition analysis:', {
-      totalBlocks: allBlocks.length,
-      heightRange: `${minHeight} - ${maxHeight}`,
-      currentTipHeights,
-      heightDifference,
-      maxTipHeight,
-      winningChainHash
-    });
+
+
+    const sortedHeights = Object.keys(blocksByHeight).map(h => parseInt(h)).sort((a, b) => a - b);
+    for (const height of sortedHeights) {
+        const blocksAtHeight = blocksByHeight[height];
+    }
+
+
  
-       
+    const heightPositions = {}; // height -> { blockHash: xPosition }
     const nodes = [];
     const edges = [];
     
@@ -164,7 +162,11 @@ const ReactFlowBlockchain = ({ chainBlocks = [], chainTips = {}, transactions = 
       .forEach((heightStr, levelIndex) => {
         const height = parseInt(heightStr);
         const blocksAtHeight = blocksByHeight[height];
-        
+
+        // Initialize position storage for this height
+        heightPositions[height] = heightPositions[height] || {};
+
+
         // CONSISTENT ORDERING: Sort blocks at same height for consistent positioning
         const sortedBlocks = blocksAtHeight.sort((a, b) => {
           // Primary sort: Attacker blocks (VU KNF) go to the RIGHT, honest blocks to the LEFT
@@ -185,28 +187,14 @@ const ReactFlowBlockchain = ({ chainBlocks = [], chainTips = {}, transactions = 
           let x = 0;
           
           if (isFork) {
-            if (heightDifference >= 10) {
-              // Rule: 10+ blocks difference - Center the winning chain
-              const blockIsFromWinningChain = block.hash === winningChainHash || 
-                                           (winningChainHash && 
-                                            allBlocks.find(b => b.hash === winningChainHash && b.height === maxTipHeight)?.coinbase === block.coinbase);
-              
-              if (blockIsFromWinningChain) {
-                // Center the winning chain
-                x = 0;
-              } else {
-                // Keep losing chain on the side
-                const spacing = 450;
-                const totalWidth = (sortedBlocks.length - 1) * spacing;
-                x = (index * spacing) - (totalWidth / 2);
-              }
-            } else {
-              // Rule: 1-9 blocks difference - Keep forks on separate sides
+            // Rule: 1-9 blocks difference - Keep forks on separate sides
               const spacing = 450;
               const totalWidth = (sortedBlocks.length - 1) * spacing;
               x = (index * spacing) - (totalWidth / 2);
-            }
           }
+
+          // Store this block's position for its children
+          heightPositions[height][block.hash] = x;
           
           // Recent blocks at top (y=0), older blocks below
           const y = levelIndex * 200;
@@ -261,10 +249,7 @@ const ReactFlowBlockchain = ({ chainBlocks = [], chainTips = {}, transactions = 
       }
     });
 
-    console.log('Generated:', nodes.length, 'nodes,', edges.length, 'edges');
-    console.log('Positioning strategy: Height difference =', heightDifference, 
-                heightDifference >= 10 ? '(Centering winner)' : '(Keeping forks separate)');
-    
+
     return { nodes, edges, maxHeight, minHeight };
   }, [chainBlocks, chainTips, transactions]);
 
@@ -274,7 +259,6 @@ const ReactFlowBlockchain = ({ chainBlocks = [], chainTips = {}, transactions = 
 
   // Update when data changes
   React.useEffect(() => {
-    console.log('Updating React Flow with:', nodes.length, 'nodes', edges.length, 'edges');
     setNodes(nodes);
     setEdges(edges);
   }, [nodes, edges, setNodes, setEdges]);
