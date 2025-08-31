@@ -1,7 +1,9 @@
 _OLD
 docker-compose.yml
 dapps-server/data
-litecoind/
+litecoind-private/
+litecoind-public/
+anypool-stratum/
 
 
 
