@@ -104,32 +104,54 @@ const ReactFlowBlockchain = ({ chainBlocks = [], chainTips = {}, transactions = 
       return { nodes: [], edges: [], maxHeight: 0, minHeight: 0 };
     }
 
+    console.log('Processing ALL blocks from API:', chainBlocks.length, 'blocks');
+
     // Get height range
     const heights = chainBlocks.map(b => b.height);
     const minHeight = Math.min(...heights);
     const maxHeight = Math.max(...heights);
     
     
-    // Show only the most recent N blocks for better performance and focus
-    const RECENT_BLOCKS_COUNT = 50;
-    const recentBlocks = chainBlocks
-      .sort((a, b) => b.height - a.height) // Sort by height descending
-      .slice(0, RECENT_BLOCKS_COUNT); // Take most recent blocks
+    // Use ALL blocks instead of limiting to recent ones
+    const allBlocks = chainBlocks.sort((a, b) => b.height - a.height); // Sort by height descending
     
     
     // Group blocks by height for fork detection
     const blocksByHeight = {};
-    recentBlocks.forEach(block => {
+    allBlocks.forEach(block => {
       if (!blocksByHeight[block.height]) blocksByHeight[block.height] = [];
       blocksByHeight[block.height].push(block);
     });
     
     
-    // Find fork points
-    const forkHeights = Object.keys(blocksByHeight)
-      .filter(height => blocksByHeight[height].length > 1)
-      .map(h => parseInt(h));
-    
+    // Find current tip heights to determine chain competition
+    const currentTipHeights = [];
+    if (chainTips.public) {
+      const publicTipBlock = allBlocks.find(b => b.hash === chainTips.public);
+      if (publicTipBlock) currentTipHeights.push(publicTipBlock.height);
+    }
+    if (chainTips.private) {
+      const privateTipBlock = allBlocks.find(b => b.hash === chainTips.private);
+      if (privateTipBlock) currentTipHeights.push(privateTipBlock.height);
+    }
+
+    // Calculate height difference between competing chains
+    const heightDifference = currentTipHeights.length === 2 ? 
+      Math.abs(currentTipHeights[0] - currentTipHeights[1]) : 0;
+
+    // Find which chain has the higher tip (winning chain)
+    const maxTipHeight = Math.max(...currentTipHeights);
+    const winningChainHash = currentTipHeights.length === 2 ? 
+      (allBlocks.find(b => b.height === maxTipHeight && (b.hash === chainTips.public || b.hash === chainTips.private))?.hash) : null;
+
+    console.log('Chain competition analysis:', {
+      totalBlocks: allBlocks.length,
+      heightRange: `${minHeight} - ${maxHeight}`,
+      currentTipHeights,
+      heightDifference,
+      maxTipHeight,
+      winningChainHash
+    });
  
        
     const nodes = [];
@@ -158,15 +180,32 @@ const ReactFlowBlockchain = ({ chainBlocks = [], chainTips = {}, transactions = 
         });
         
         sortedBlocks.forEach((block, index) => {
-          // Position calculation with consistent spacing
+          // CORRECTED DYNAMIC POSITIONING LOGIC
           const isFork = sortedBlocks.length > 1;
           let x = 0;
           
           if (isFork) {
-            // Consistent positioning: honest blocks on left, attacker blocks on right
-            const spacing = 350;
-            const totalWidth = (sortedBlocks.length - 1) * spacing;
-            x = (index * spacing) - (totalWidth / 2);
+            if (heightDifference >= 10) {
+              // Rule: 10+ blocks difference - Center the winning chain
+              const blockIsFromWinningChain = block.hash === winningChainHash || 
+                                           (winningChainHash && 
+                                            allBlocks.find(b => b.hash === winningChainHash && b.height === maxTipHeight)?.coinbase === block.coinbase);
+              
+              if (blockIsFromWinningChain) {
+                // Center the winning chain
+                x = 0;
+              } else {
+                // Keep losing chain on the side
+                const spacing = 450;
+                const totalWidth = (sortedBlocks.length - 1) * spacing;
+                x = (index * spacing) - (totalWidth / 2);
+              }
+            } else {
+              // Rule: 1-9 blocks difference - Keep forks on separate sides
+              const spacing = 450;
+              const totalWidth = (sortedBlocks.length - 1) * spacing;
+              x = (index * spacing) - (totalWidth / 2);
+            }
           }
           
           // Recent blocks at top (y=0), older blocks below
@@ -199,9 +238,9 @@ const ReactFlowBlockchain = ({ chainBlocks = [], chainTips = {}, transactions = 
 
     
     // Create edges AFTER all nodes are created
-    recentBlocks.forEach(block => {
+    allBlocks.forEach(block => {
       if (block.prevHash) {
-        const prevBlock = recentBlocks.find(b => b.hash === block.prevHash);
+        const prevBlock = allBlocks.find(b => b.hash === block.prevHash);
         if (prevBlock) {
           // Edge goes FROM current block TO previous block (newer to older)
           // This creates connections from bottom of newer block to top of older block
@@ -223,6 +262,8 @@ const ReactFlowBlockchain = ({ chainBlocks = [], chainTips = {}, transactions = 
     });
 
     console.log('Generated:', nodes.length, 'nodes,', edges.length, 'edges');
+    console.log('Positioning strategy: Height difference =', heightDifference, 
+                heightDifference >= 10 ? '(Centering winner)' : '(Keeping forks separate)');
     
     return { nodes, edges, maxHeight, minHeight };
   }, [chainBlocks, chainTips, transactions]);
@@ -282,7 +323,7 @@ const ReactFlowBlockchain = ({ chainBlocks = [], chainTips = {}, transactions = 
                 });
               }, 100);
             }}
-            minZoom={0.2}
+            minZoom={0.02}
             maxZoom={2}
             nodesDraggable={false} // Disable dragging for all nodes globally
             nodesConnectable={false} // Disable connecting nodes

@@ -115,7 +115,7 @@ export default function ReorgAttackPage() {
     const interval = setInterval(() => {
       fetchBlockchainData();
       fetchNetworkStatus();
-    }, 30000); // 30 second refresh
+    }, 10000); // 10 second refresh
 
     return () => clearInterval(interval);
   }, []);
