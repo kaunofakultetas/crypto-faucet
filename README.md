@@ -119,7 +119,7 @@ Networks are configured in `backend/main.py`:
 - Host decentralized applications
 - Manage hosted content
 
-#### 51% Attack Tool
+#### 51% Attack Tool (See [_docs/51percent/README.md](_docs/51percent/README.md))
 - Access at `/reorgattack`
 - Visual interface for 51% attack on LTC Testnet4 network
 - Explore and control blockchain structure
