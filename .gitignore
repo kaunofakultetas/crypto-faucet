@@ -1,9 +1,23 @@
-_OLD
+# Faculty's docker-compose
 docker-compose.yml
-dapps-server/data
+
+
+# Litecoind data folders
 litecoind-private/
 litecoind-public/
+litecoind-dummy/
+
+
+# Stratum server data folder
 anypool-stratum/
+
+
+# Served dapps
+dapps-server/data
+
+
+
+_OLD
 
 
 

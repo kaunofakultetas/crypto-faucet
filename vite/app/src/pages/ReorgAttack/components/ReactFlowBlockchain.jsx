@@ -8,8 +8,11 @@ import ReactFlow, {
   Position,
 } from 'reactflow';
 import 'reactflow/dist/style.css';
-import { Box, Typography, Chip } from '@mui/material';
+import { Box, Typography } from '@mui/material';
 
+
+import { SiHackaday } from "react-icons/si";
+import { BiWorld } from "react-icons/bi";
 
 
 // Custom Block Node Component
@@ -19,48 +22,44 @@ const BlockNode = ({ data }) => {
   return (
     <Box
       sx={{
-        border: isAttacker ? '5px solid #f44336' : '5px solid #2196f3',
+        border: '2px solid rgba(0, 0, 0, 0.1)',
         borderRadius: 2,
-        bgcolor: 'background.paper',
+        bgcolor: isAttacker ? 'rgba(244, 67, 54, 0.3)' : 'rgba(33, 150, 243, 0.3)',
         p: 1.5,
-        minWidth: 300,
+        minWidth: 400,
         position: 'relative',
         boxShadow: 3,
-        cursor: 'default', // Change cursor to indicate non-draggable
+        cursor: 'default',
       }}
     >
       {/* Tip indicators */}
       {isPublicTip && (
-        <Chip 
-          label="Public Tip" 
-          size="small" 
-          color="primary" 
-          sx={{ position: 'absolute', top: -12, left: 8, fontSize: '10px' }}
-        />
+        <Box sx={{ position: 'absolute', top: -55, left: 10 }} className="bg-green-700 rounded-full p-2 flex items-center gap-2 text-white">
+          <BiWorld size={40} className="text-white" />
+          <Typography variant="h5" color="white">Public Tip</Typography>
+        </Box>
       )}
       {isPrivateTip && (
-        <Chip 
-          label="Private Tip" 
-          size="small" 
-          color="secondary" 
-          sx={{ position: 'absolute', top: -12, right: 8, fontSize: '10px' }}
-        />
+        <Box sx={{ position: 'absolute', top: -55, right: 10 }} className="bg-red-700 rounded-full p-2 flex items-center gap-2 text-white">
+          <Typography variant="h5" color="white">Private Tip</Typography>
+          <SiHackaday size={40} className="text-white" />
+        </Box>
       )}
       
       <Typography variant="h6" sx={{ fontWeight: 'bold', mb: 1 }}>
         Block {block.height}
       </Typography>
       
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 0.5 }}>
-        {block.hash.slice(0, 20)} {block.hash.length > 20 ? ' ...' : ''}
+      <Typography variant="body2" sx={{ mb: 1 }}>
+        <b>SHA256 Hash:</b> {block.hash.slice(0, 10)} ... {block.hash.slice(54, 64)}
       </Typography>
       
-      <Typography variant="body2" sx={{ mb: 1, fontSize: '0.8rem' }}>
-        {block.coinbase.slice(0, 20)} {block.coinbase.length > 20 ? ' ...' : ''}
+      <Typography variant="body2" sx={{ mb: 1 }}>
+        <b>Coinbase:</b> {block.coinbase.slice(0, 30)} {block.coinbase.length > 30 ? ' ...' : ''}
       </Typography>
       
-      <Typography variant="caption" color="text.secondary">
-        {block.time}
+      <Typography variant="body2" sx={{ mb: 1 }}>
+        <b>Time:</b> {block.date} {block.time}
       </Typography>
       
       {/* Transaction indicators */}

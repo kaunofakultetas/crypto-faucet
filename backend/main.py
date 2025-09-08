@@ -1,3 +1,12 @@
+############################################################
+# Author:           Tomas Vanagas
+# Updated:          2025-09-04
+# Version:          1.0
+# Description:      Main file for the faucet backend
+############################################################
+
+
+
 import os
 import json
 import sqlite3
@@ -11,6 +20,7 @@ app = Flask(__name__)
 EVM_NETWORK_CONFIGS = {
     'sepolia': {
         'id': 1,
+        'chunk_size': 0.2,
         'chain_id': 11155111,
         'infura_network': 'sepolia',
         'short_name': "SepETH",
@@ -26,6 +36,7 @@ EVM_NETWORK_CONFIGS = {
     },
     'zkSyncSepolia': {
         'id': 3,
+        'chunk_size': 0.05,
         'chain_id': 300,
         'infura_network': 'zksync-sepolia',
         'short_name': "ETH",
@@ -41,6 +52,7 @@ EVM_NETWORK_CONFIGS = {
     },
     'polygonZkEvm': {
         'id': 4,
+        'chunk_size': 0.05,
         'chain_id': 2442,
         'infura_network': 'https://rpc.cardona.zkevm-rpc.com',
         'short_name': "ETH",
@@ -56,6 +68,7 @@ EVM_NETWORK_CONFIGS = {
     },
     'lineaSepolia': {
         'id': 5,
+        'chunk_size': 0.05,
         'chain_id': 59141,
         'infura_network': 'linea-sepolia',
         'short_name': "ETH",
@@ -71,6 +84,7 @@ EVM_NETWORK_CONFIGS = {
     },
     "hoodi": {
         'id': 6,
+        'chunk_size': 0.05,
         'chain_id': 560048,
         'infura_network': 'hoodi',
         'short_name': "ETH",
@@ -83,35 +97,54 @@ EVM_NETWORK_CONFIGS = {
         'rpc_urls': ['https://rpc.hoodi.ethpandaops.io'],
         'block_explorer_urls': ['https://light-hoodi.beaconcha.in'],
         'etherscan_api_url': 'https://api-hoodi.etherscan.io/api'
+    },
+    "arbitrumSepolia": {
+        'id': 7,
+        'chunk_size': 0.05,
+        'chain_id': 421614,
+        'infura_network': 'arbitrum-sepolia',
+        'short_name': "ETH",
+        'full_name': 'Arbitrum Sepolia',
+        'native_currency': {
+            'name': 'Ethereum',
+            'symbol': 'ETH',
+            'decimals': 18
+        },
+        'rpc_urls': ['https://sepolia.arbitrum.io/rpc'],
     }
 }
+
+
+
+
+
 
 
 UTXO_NETWORK_CONFIGS = {
     'btc3': {
         'id': 1,
+        'chunk_size': 0.005,
         'short_name': "tBTC3",
         'full_name': 'Bitcoin Testnet3',
         'network': 'testnet',
-        'chunk_size': 0.005,
         'electrum_server': 'electrum.blockstream.info:60002',
         'block_explorer': 'https://mempool.space/testnet'
     },
     'btc4': {
         'id': 2,
+        'chunk_size': 0.01,
         'short_name': "tBTC4",
         'full_name': 'Bitcoin Testnet4',
         'network': 'testnet',
-        'chunk_size': 0.05,
         'electrum_server': 'testnet4-electrumx.wakiyamap.dev:51002',
         'block_explorer': 'https://mempool.space/testnet4'
     },
     'ltc4': {
         'id': 3,
+        'chunk_size': 0.01,
         'short_name': "tLTC4",
         'full_name': 'Litecoin Testnet4',
         'network': 'testnet',
-        'chunk_size': 0.1,
         'electrum_server': 'electrum-ltc.bysh.me:51002',
         'block_explorer': 'https://litecoinspace.org/testnet'
     }

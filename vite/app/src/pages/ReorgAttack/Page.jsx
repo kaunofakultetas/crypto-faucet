@@ -6,17 +6,11 @@ import ControlPanel from './components/ControlPanel';
 import ToggleButton from './components/ToggleButton';
 import ReactFlowBlockchain from './components/ReactFlowBlockchain';
 
+
+
+
+
 export default function ReorgAttackPage() {
-  // Layout constants for consistent spacing and alignment
-  const ROW_HEIGHT = 100; // px height per block row
-  const ROW_GAP = 50; // px gap between rows
-  const LABEL_WIDTH = 72; // px reserved for left height labels
-  const BLOCK_MIN_WIDTH = 300; // px card min width
-  const BLOCK_HEIGHT = 110; // px consistent height for all blocks
-  const CHAIN_COL_WIDTH = 340; // px width per chain lane
-  const CENTER_COL_WIDTH = CHAIN_COL_WIDTH; // center lane width for pre-fork overlay
-  const COL_GAP = 10; // gap between chain lanes
-  const LANE_HEADER_HEIGHT = 0; // no top labels/headers
 
   // Predefined colors for transaction tracking
   const TRANSACTION_COLORS = ['red', 'green', 'blue', 'orange', 'purple', 'pink', 'cyan', 'yellow'];
@@ -323,7 +317,7 @@ export default function ReorgAttackPage() {
       {/* Title */}
       <Box sx={{ position: 'relative', mb: 1 }}>
         <Typography variant="h5" sx={{ textAlign: 'center', fontWeight: 'bold' }}>
-          51% Attack Blockchain Visualization
+          51% Blockchain Attack Tool
         </Typography>
         {/* Status indicator */}
         {networkStatus && (

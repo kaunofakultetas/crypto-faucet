@@ -1,3 +1,12 @@
+############################################################
+# Author:           Tomas Vanagas
+# Updated:          2025-09-04
+# Version:          1.0
+# Description:      UTXO faucet for blockchain 
+############################################################
+
+
+
 import os
 import time
 import ssl

@@ -1,5 +1,12 @@
+############################################################
+# Author:           Tomas Vanagas
+# Updated:          2025-09-04
+# Version:          1.0
+# Description:      UTXO faucet flask routes 
+############################################################
+
+
 from flask import Blueprint, request, jsonify
-import os
 from .utxo_faucet import UTXOFaucet
 from main import UTXO_NETWORK_CONFIGS
 

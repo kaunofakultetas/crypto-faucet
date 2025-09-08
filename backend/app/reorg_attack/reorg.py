@@ -1,18 +1,15 @@
-"""
-Reorg Attack Management System
-Handles database operations, background sync, and activity tracking
-"""
+############################################################
+# Author:           Tomas Vanagas
+# Updated:          2025-09-04
+# Version:          1.0
+# Description:      Reorg attack manager for blockchain 
+############################################################
+
 
 from datetime import datetime
 import json
-import sys
-import os
-from typing import List, Dict, Optional
+from typing import Dict
 from app.database.db import get_db_connection
-
-
-
-from main import UTXO_NETWORK_CONFIGS
 from .fullnode_rpc import FullNodeRPC, FullNodeConnections
 
 
@@ -78,66 +75,6 @@ class ReorgDatabase:
 
 
 
-
-    @staticmethod
-    def insert_block(height: int, hash_value: str, prev_hash: str, coinbase_message: str, date: str, time: str):
-        """
-        Insert a new block into the Blockchain_Blocks table
-        """
-        with get_db_connection() as conn:
-            conn.execute('''
-                INSERT OR REPLACE INTO Blockchain_Blocks 
-                (Height, Hash, PrevHash, CoinbaseMessage, Date, Time)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (height, hash_value, prev_hash, coinbase_message, date, time))
-            conn.commit()
-            return True
-
-
-
-    @staticmethod
-    def insert_blocks_batch(blocks: List[Dict]) -> int:
-        """
-        Insert multiple blocks in a single transaction for better performance
-        """
-        with get_db_connection() as conn:            
-            inserted_count = 0
-            for block in blocks:
-                print(block)
-                conn.execute('''
-                    INSERT OR REPLACE INTO Blockchain_Blocks 
-                    (Height, Hash, PrevHash, CoinbaseMessage, Date, Time)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                ''', (
-                    block['height'], block['hash'], block['prev_hash'],
-                    block['coinbase_message'], block['date'], block['time']
-                ))
-                inserted_count += 1
-            
-            conn.commit()
-            return inserted_count
-
-
-
-
-    @staticmethod
-    def get_blocks_by_coinbase_pattern(pattern: str):
-        """
-        Get blocks by coinbase message pattern (useful for distinguishing networks)
-        """
-        with get_db_connection() as conn:
-            conn.execute('''
-                SELECT * FROM Blockchain_Blocks 
-                WHERE CoinbaseMessage LIKE ?
-                ORDER BY Height ASC
-            ''', (f'%{pattern}%',))
-            
-            results = conn.fetchall()
-            return results
-            
-
-
-
     @staticmethod
     def get_existing_block_hashes(date=None) -> set:
         """
@@ -157,39 +94,6 @@ class ReorgDatabase:
             results = sqlFetchData.fetchone()[0]
             return json.loads(results)
             
-
-
-
-    @staticmethod
-    def get_latest_block_info():
-        """
-        Get the latest block info
-        """
-        with get_db_connection() as conn:
-            sqlFetchData = conn.execute('''
-                SELECT Hash, Height FROM Blockchain_Blocks 
-                ORDER BY Height DESC 
-                LIMIT 1
-            ''')
-            
-            result = sqlFetchData.fetchone()
-            
-            if result:
-                return {'hash': result[0], 'height': result[1]}
-            return None
-            
-
-
-
-    @staticmethod
-    def get_todays_date():
-        """
-        Get today's date in YYYY-MM-DD format
-        """
-        return datetime.now().strftime('%Y-%m-%d')
-
-
-
 
 
 
@@ -223,8 +127,6 @@ class ReorgDatabase:
             
             return transactions
             
-
-
 
 
 
@@ -290,7 +192,7 @@ class ReorgAttackManager:
 
     def __init__(self, config: Dict):
         self.config = config
-        self.max_blocks_per_sync = 100
+        self.depth_per_sync = 100
         
         # Initialize database
         ReorgDatabase.create_tables()
@@ -302,33 +204,6 @@ class ReorgAttackManager:
 
 
 
-    def _sync_blocks(self, rpc: FullNodeRPC) -> int:
-        """
-        Sync blocks via Full NodeRPC
-        """
-        # Get new blocks from full node
-        new_blocks = rpc.sync_recent_blocks(self.max_blocks_per_sync)
-        if not new_blocks:
-            return 0
-        
-        # Get existing heights for efficient duplicate checking
-        existing_hashes = ReorgDatabase.get_existing_block_hashes()
-        
-        for block_data in new_blocks:
-            if block_data['hash'] in existing_hashes:
-                continue
-            ReorgDatabase.insert_block(
-                block_data['height'], 
-                block_data['hash'], 
-                block_data['prev_hash'], 
-                block_data['coinbase_message'], 
-                block_data['date'], 
-                block_data['time']
-            )
-        return True
-                
-
-
 
     def get_blockchain_data(self, date) -> Dict:
         """
@@ -338,8 +213,8 @@ class ReorgAttackManager:
         target_date = date or dateNow
 
         # Step 1: Sync recent data before returning
-        self._sync_blocks(self.private_rpc)
-        self._sync_blocks(self.public_rpc)
+        self.private_rpc.sync_recent_blocks(self.depth_per_sync)
+        self.public_rpc.sync_recent_blocks(self.depth_per_sync)
         
 
         # Step 2: Get blocks from database
@@ -364,10 +239,10 @@ class ReorgAttackManager:
             all_blocks = json.loads(sqlFetchData.fetchone()[0])
 
 
-
         # Step 4: Get tracked transactions
         tracked_transactions = ReorgDatabase.get_all_tracked_transactions()
-        
+
+
         # Step 5: Get tips
         public_tip = self.public_rpc.get_tip_info()
         private_tip = self.private_rpc.get_tip_info()
@@ -383,9 +258,9 @@ class ReorgAttackManager:
                     'private': private_tip.get('hash') if private_tip else None
                 },
                 'transactions': tracked_transactions
-            },
+            }
         }
-            
+
 
 
     def get_network_status(self) -> Dict:

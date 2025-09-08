@@ -1,22 +1,29 @@
-"""
-Full Node RPC client for private blockchain communication
-"""
+############################################################
+# Author:           Tomas Vanagas
+# Updated:          2025-09-04
+# Version:          1.0
+# Description:      Full Node RPC client for blockchain 
+#                   operations
+############################################################
+
 
 import requests
 from requests.auth import HTTPBasicAuth
-from typing import List, Dict, Optional
-import datetime
-import binascii
-import struct
-import socket
+from typing import List, Dict
+from datetime import datetime
+from app.database.db import get_db_connection
 
 
 class FullNodeRPC:
-    """Full Node RPC client for private blockchain operations"""
+    """
+    Full Node RPC client for private blockchain operations
+    """
 
 
     def __init__(self, rpc_config: Dict):
-        """Initialize with RPC configuration"""
+        """
+        Initialize with RPC configuration
+        """
         self.rpchost = rpc_config['rpchost']
         self.rpcport = rpc_config['rpcport']
         self.rpcuser = rpc_config['rpcuser']
@@ -26,7 +33,9 @@ class FullNodeRPC:
 
 
     def rpc_call(self, method: str, params: List = None) -> Dict:
-        """Enhanced RPC call with better error handling"""
+        """
+        Enhanced RPC call with better error handling
+        """
         if params is None:
             params = []
             
@@ -38,12 +47,7 @@ class FullNodeRPC:
         }
         
         try:
-            response = requests.post(
-                f"http://{self.rpchost}:{self.rpcport}", 
-                json=payload, 
-                auth=self.auth,
-                timeout=30
-            )
+            response = requests.post(f"http://{self.rpchost}:{self.rpcport}", json=payload, auth=self.auth, timeout=3)
             
             # Get the JSON response even if status is not 200
             try:
@@ -69,49 +73,65 @@ class FullNodeRPC:
 
 
     def get_blockchain_info(self) -> Dict:
-        """Get blockchain information"""
+        """
+        Get blockchain information
+        """
         return self.rpc_call("getblockchaininfo")
 
 
 
     def get_network_info(self) -> Dict:
-        """Get network information"""
+        """
+        Get network information
+        """
         return self.rpc_call("getnetworkinfo")
 
 
 
     def get_block_count(self) -> int:
-        """Get current block count"""
+        """
+        Get current block count
+        """
         return self.rpc_call("getblockcount")
 
 
 
     def get_block_hash(self, height: int) -> str:
-        """Get block hash at specific height"""
+        """
+        Get block hash at specific height
+        """
         return self.rpc_call("getblockhash", [height])
 
 
 
     def get_block(self, block_hash: str, verbosity: int = 1) -> Dict:
-        """Get block information"""
+        """
+        Get block information
+        """
         return self.rpc_call("getblock", [block_hash, verbosity])
 
 
 
     def get_raw_transaction(self, txid: str, verbose: bool = True) -> Dict:
-        """Get raw transaction"""
+        """
+        Get raw transaction
+        """
         return self.rpc_call("getrawtransaction", [txid, verbose])
 
 
 
     def send_raw_transaction(self, raw_tx: str) -> str:
-        """Send raw transaction"""
+        """
+        Send raw transaction
+        """
         return self.rpc_call("sendrawtransaction", [raw_tx])
 
 
 
     def extract_coinbase_message(self, coinbase_tx: Dict) -> str:
-        """Extract the ACTUAL coinbase message by properly parsing the script"""
+        """
+        Extract the ACTUAL coinbase message by properly parsing the script
+        """
         try:
             # Get the first input (coinbase input)
             if not coinbase_tx.get('vin') or len(coinbase_tx['vin']) == 0:
@@ -177,7 +197,9 @@ class FullNodeRPC:
 
 
     def get_tip_info(self) -> Dict:
-        """Get blockchain tip information"""
+        """
+        Get blockchain tip information
+        """
         blockchain_info = self.get_blockchain_info()
         return {
             'hash': blockchain_info.get('bestblockhash', ''),
@@ -187,58 +209,71 @@ class FullNodeRPC:
 
 
 
-
-    def sync_recent_blocks(self, max_blocks: int = 100) -> List[Dict]:
+    def sync_recent_blocks(self, depth: int = 100) -> bool:
         """
-        Sync recent blocks from the private network with REAL coinbase messages
+        Sync recent blocks from the full node
         """
-        synced_blocks = []
-        block_count = self.get_block_count()
-        start_height = max(1, block_count - max_blocks + 1)
-        
+        print(f"[*] Syncing recent blocks from full node...")
+        try:
 
-        for height in range(start_height, block_count + 1):
-            block_hash = self.get_block_hash(height)
-            block_info = self.get_block(block_hash)
-            
-            # Extract REAL coinbase message from the coinbase transaction
-            coinbase_message = ""
-            
-            try:
-                if 'tx' in block_info and len(block_info['tx']) > 0:
-                    # Get the coinbase transaction (first transaction in block)
-                    coinbase_txid = block_info['tx'][0]
-                    coinbase_tx = self.get_raw_transaction(coinbase_txid, verbose=True)
-                    coinbase_message = self.extract_coinbase_message(coinbase_tx)
-            except Exception:
-                coinbase_message = f"Block #{height}"
-            
-            # Convert timestamp to date/time
-            dt = datetime.datetime.fromtimestamp(block_info.get('time', 0))
-            date = dt.strftime('%Y-%m-%d')
-            time = dt.strftime('%H:%M:%S')
-            
-            block_data = {
-                'height': height,
-                'hash': block_hash,
-                'prev_hash': block_info.get('previousblockhash', 'genesis'),
-                'coinbase_message': coinbase_message,
-                'date': date,
-                'time': time
-            }
-            
-            synced_blocks.append(block_data)
+            block_count = self.get_block_count()
+            start_height = max(1, block_count - depth + 1)
+
+            with get_db_connection() as conn:
+                for height in reversed(range(start_height, block_count + 1)):
+
+                    # Step 1: Get block hash and contents
+                    block_hash = self.get_block_hash(height)
+                    block_info = self.get_block(block_hash)
+
+
+                    # Step 2: Check if block already exists
+                    sqlFetchData = conn.execute(' SELECT Hash FROM Blockchain_Blocks WHERE Hash = ? ', (block_hash,))
+                    if sqlFetchData.fetchone():
+                        break
+
+                    
+                    # Step 3: Extract REAL coinbase message from the coinbase transaction
+                    coinbase_message = ""
+                    try:
+                        if 'tx' in block_info and len(block_info['tx']) > 0:
+                            # Get the coinbase transaction (first transaction in block)
+                            coinbase_txid = block_info['tx'][0]
+                            coinbase_tx = self.get_raw_transaction(coinbase_txid, verbose=True)
+                            coinbase_message = self.extract_coinbase_message(coinbase_tx)
+                    except Exception:
+                        coinbase_message = f"Block #{height}"
+                    
+
+                    # Step 4: Convert block timestamp to date and time
+                    dt = datetime.fromtimestamp(block_info.get('time', 0))
+                    block_date = dt.strftime('%Y-%m-%d')
+                    block_time = dt.strftime('%H:%M:%S')
+                    
+
+                    # Step 5: Insert block data into the database
+                    conn.execute(' INSERT OR REPLACE INTO Blockchain_Blocks (Height, Hash, PrevHash, CoinbaseMessage, Date, Time) VALUES (?, ?, ?, ?, ?, ?)', 
+                        (height, block_hash, block_info.get('previousblockhash', 'genesis'), coinbase_message, block_date, block_time))
                 
 
-            
-        return synced_blocks
+                # Commit after finishing the loop
+                conn.commit()
+            return True
+        
 
+        except Exception as e:
+            print(f"Error syncing blocks: {e}")
+        return False
+
+                    
 
 
 
 
 class FullNodeConnections:
-    """Manages network connections for the full node"""
+    """
+    Manages network connections for the full node
+    """
 
 
     def __init__(self, rpc_client: FullNodeRPC):
@@ -247,26 +282,18 @@ class FullNodeConnections:
 
 
     def get_peer_info(self) -> List[Dict]:
-        """Get peer info from the full node"""
+        """
+        Get peer info from the full node
+        """
         return self.rpc.rpc_call("getpeerinfo")
 
 
 
     def connect(self) -> Dict:
-        """Enable network activity"""
-        # self.rpc.rpc_call("setnetworkactive", [True])
-
-        for node in ["faucet-litecoind-public"]:
-            resolved_ip = socket.gethostbyname(node)
-            # try:
-            #     self.rpc.rpc_call("setban", [resolved_ip, "remove"])
-            # except Exception as e:
-            #     pass
-
-            # try:
-            self.rpc.rpc_call("addnode", [f"{node}:19335", "onetry"])
-            # except Exception as e:
-            #     pass
+        """
+        Enable network activity
+        """
+        self.rpc.rpc_call("addnode", ["faucet-litecoind-public:19335", "onetry"])
 
         return {
             'success': True,
@@ -276,21 +303,15 @@ class FullNodeConnections:
        
 
 
-
     def disconnect(self) -> Dict:
-        """Disable network activity and disconnect all peers"""
+        """
+        Disable network activity and disconnect all peers
+        """
         # First disconnect all current peers
         try:
-            # resolved_ip = socket.gethostbyname("faucet-litecoind-public")
             self.rpc.rpc_call("disconnectnode", ["faucet-litecoind-public:19335"])
         except Exception as e:
             pass
-
-        # try:
-        #     resolved_ip = socket.gethostbyname("faucet-litecoind-public")
-        #     self.rpc.rpc_call("setban", [resolved_ip, "add", "86400"])
-        # except Exception as e:
-        #     pass
         
         return {
             'success': True,
@@ -300,13 +321,13 @@ class FullNodeConnections:
 
 
     def get_connection_status(self) -> Dict:
-        """Get current connection status"""
+        """
+        Get current connection status
+        """
         peer_info = self.get_peer_info()
-        # network_info = self.rpc.get_network_info()
         blockchain_info = self.rpc.get_blockchain_info()
         
         is_connected = len(peer_info) > 0
-        # network_active = network_info.get('networkactive', False)
         
         return {
             'success': True,

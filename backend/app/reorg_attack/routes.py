@@ -1,12 +1,16 @@
-"""
-Reorg Attack API Routes
-Main endpoint handlers for the blockchain visualization tool
-"""
+############################################################
+# Author:           Tomas Vanagas
+# Updated:          2025-09-04
+# Version:          1.0
+# Description:      Reorg attack flask routes 
+############################################################
+
 
 from flask import Blueprint, jsonify, request
-import time
 from datetime import datetime
-from .reorg import ReorgAttackManager
+from .reorg import ReorgAttackManager, ReorgDatabase
+from app.database.db import get_db_connection
+
 
 
 bp_reorg_attack = Blueprint('reorg_attack', __name__)
@@ -24,11 +28,11 @@ REORG_ATTACK_CONFIG = {
         'rpcport': 19332,
         'rpcuser': 'admin',
         'rpcpassword': 'admin',
-    },
-    'sync': {
-        'max_blocks_to_fetch': 100
     }
 }
+
+
+
 
 # Initialize the reorg attack manager (moved to end of file)
 reorg_manager = None
@@ -38,16 +42,6 @@ reorg_manager = None
 ########################### Network Connection Endpoints ########################
 ####################################################################################
 
-# @bp_reorg_attack.route('/api/reorgattack/test', methods=['GET'])
-# def test_route():
-#     """Simple test route to verify blueprint is working"""
-#     return jsonify({
-#         'success': True,
-#         'message': 'Reorg attack API is working! Blueprint registration successful.',
-#         'timestamp': time.time(),
-#         'manager_initialized': reorg_manager is not None,
-#         'manager_status': 'initialized' if reorg_manager else 'failed_to_initialize'
-#     }), 200
 
 @bp_reorg_attack.route('/api/reorgattack/connect', methods=['GET'])
 def reorg_attack_connect():
@@ -79,6 +73,11 @@ def reorg_attack_get_peer_info():
         }), 500
 
 
+
+
+
+
+
 ####################################################################################
 ################################# Transactions ###################################
 ####################################################################################
@@ -87,7 +86,6 @@ def reorg_attack_get_peer_info():
 def reorg_fetch_tx_info(txid):
     """Fetch transaction info from both sides"""
 
-    
     to_send = {
         "publicside": {
             "blockhash": "",
@@ -110,17 +108,9 @@ def reorg_fetch_tx_info(txid):
     except Exception:
         pass
 
-    # Get transaction info from public side
-    try:
-        if reorg_manager.electrum_rpc:
-            public_tx_info = reorg_manager.electrum_rpc.get_transaction(txid)
-            to_send["publicside"]["blockhash"] = public_tx_info.get("blockhash", "")
-            to_send["publicside"]["inputs"] = public_tx_info.get("vin", [])
-            to_send["publicside"]["outputs"] = public_tx_info.get("vout", [])
-    except Exception:
-        pass
 
     return jsonify(to_send), 200
+
 
 
 @bp_reorg_attack.route('/api/reorgattack/transactions/send', methods=['POST'])
@@ -148,6 +138,10 @@ def reorg_send_raw_transaction():
         }), 500
 
 
+
+
+
+
 ####################################################################################
 ########################### Blockchain Data Endpoints ###########################
 ####################################################################################
@@ -171,21 +165,13 @@ def get_blockchain_data():
 @bp_reorg_attack.route('/api/reorgattack/blocks/<string:network>', methods=['GET'])
 def get_network_blocks(network):
     """Get blocks for a specific network (today's blocks by default)"""
-
-    
     try:
-        from .reorg import ReorgDatabase
-        
         # Get optional parameters
         target_date = request.args.get('date')
-        show_all = request.args.get('all', 'false').lower() == 'true'
-        
-        if show_all:
-            blocks = ReorgDatabase.get_blocks_by_network(network)
-        else:
-            if not target_date:
-                target_date = ReorgDatabase.get_todays_date()
-            blocks = ReorgDatabase.get_blocks_by_network_and_date(network, target_date)
+
+        if not target_date:
+            target_date = datetime.now().strftime("%Y-%m-%d")
+        blocks = ReorgDatabase.get_blocks_by_network_and_date(network, target_date)
         
         formatted_blocks = []
         for block in blocks:
@@ -204,8 +190,7 @@ def get_network_blocks(network):
             'blocks': formatted_blocks,
             'metadata': {
                 'network': network,
-                'date_filter': target_date if not show_all else None,
-                'showing_all_data': show_all,
+                'date_filter': target_date,
                 'total_blocks': len(formatted_blocks)
             }
         }), 200
@@ -223,62 +208,55 @@ def get_network_blocks(network):
 @bp_reorg_attack.route('/api/reorgattack/dates/available', methods=['GET'])
 def get_available_dates():
     """Get list of available dates with blockchain data"""
-
-    
     try:
-        from .reorg import ReorgDatabase
-        from app.database.db import get_db_connection
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        
-        # Get distinct dates with block counts
-        cursor.execute('''
-            SELECT 
-                Date,
-                Network,
-                COUNT(*) as block_count
-            FROM Blockchain_Blocks 
-            GROUP BY Date, Network
-            ORDER BY Date DESC, Network
-        ''')
-        
-        results = cursor.fetchall()
-        conn.close()
-        
-        # Organize by date
-        dates_data = {}
-        for row in results:
-            date = row[0]
-            network = row[1]
-            count = row[2]
+        with get_db_connection() as conn:
+            # Get distinct dates with block counts
+            sqlFetchData = conn.execute('''
+                SELECT 
+                    Date,
+                    Network,
+                    COUNT(*) as block_count
+                FROM Blockchain_Blocks 
+                GROUP BY Date, Network
+                ORDER BY Date DESC, Network
+            ''')
             
-            if date not in dates_data:
-                dates_data[date] = {
-                    'date': date,
-                    'public_blocks': 0,
-                    'private_blocks': 0,
-                    'total_blocks': 0
-                }
+            results = sqlFetchData.fetchall()
+            conn.close()
             
-            if network == 'public':
-                dates_data[date]['public_blocks'] = count
-            elif network == 'private':
-                dates_data[date]['private_blocks'] = count
+            # Organize by date
+            dates_data = {}
+            for row in results:
+                date = row[0]
+                network = row[1]
+                count = row[2]
+                
+                if date not in dates_data:
+                    dates_data[date] = {
+                        'date': date,
+                        'public_blocks': 0,
+                        'private_blocks': 0,
+                        'total_blocks': 0
+                    }
+                
+                if network == 'public':
+                    dates_data[date]['public_blocks'] = count
+                elif network == 'private':
+                    dates_data[date]['private_blocks'] = count
+                
+                dates_data[date]['total_blocks'] = dates_data[date]['public_blocks'] + dates_data[date]['private_blocks']
             
-            dates_data[date]['total_blocks'] = dates_data[date]['public_blocks'] + dates_data[date]['private_blocks']
-        
-        # Convert to sorted list
-        available_dates = list(dates_data.values())
-        today = ReorgDatabase.get_todays_date()
-        
-        return jsonify({
-            'success': True,
-            'available_dates': available_dates,
-            'total_dates': len(available_dates),
-            'today': today,
-            'has_todays_data': today in dates_data
-        }), 200
+            # Convert to sorted list
+            available_dates = list(dates_data.values())
+            today = datetime.now().strftime("%Y-%m-%d")
+            
+            return jsonify({
+                'success': True,
+                'available_dates': available_dates,
+                'total_dates': len(available_dates),
+                'today': today,
+                'has_todays_data': today in dates_data
+            }), 200
         
     except Exception as e:
         return jsonify({
@@ -300,10 +278,7 @@ def get_available_dates():
 @bp_reorg_attack.route('/api/reorgattack/transactions', methods=['GET'])
 def get_all_transactions():
     """Get all tracked transactions"""
-
-    
     try:
-        from .reorg import ReorgDatabase
         transactions = ReorgDatabase.get_all_tracked_transactions()
         return jsonify({
             'success': True,
@@ -378,59 +353,6 @@ def get_network_status():
 
 
 
-@bp_reorg_attack.route('/api/reorgattack/electrum/test', methods=['GET'])
-def test_electrum_connection():
-    """Test Electrum connection and return detailed status"""
-
-    
-    try:
-        if not reorg_manager.electrum_rpc:
-            return jsonify({
-                'success': False,
-                'connected': False,
-                'message': 'Electrum RPC not initialized',
-                'config': {
-                    'network': REORG_ATTACK_CONFIG['publicside']['faucetnetwork'],
-                    'server': 'not configured'
-                }
-            }), 500
-        
-        # Test basic connection
-        server_version = reorg_manager.electrum_rpc.get_server_version()
-        
-        # Test blockchain access
-        current_height = reorg_manager.electrum_rpc.get_current_height()
-        
-        return jsonify({
-            'success': True,
-            'connected': True,
-            'message': 'Electrum connection working',
-            'server_info': {
-                'version': server_version,
-                'current_height': current_height,
-                'socket_connected': reorg_manager.electrum_rpc.is_connected()
-            },
-            'config': {
-                'network': REORG_ATTACK_CONFIG['publicside']['faucetnetwork'],
-                'server': f"{reorg_manager.electrum_rpc.electrum_host}:{reorg_manager.electrum_rpc.electrum_port}"
-            }
-        }), 200
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'connected': False,
-            'message': f'Electrum connection test failed: {str(e)}',
-            'config': {
-                'network': REORG_ATTACK_CONFIG['publicside']['faucetnetwork'],
-                'server': f"{reorg_manager.electrum_rpc.electrum_host}:{reorg_manager.electrum_rpc.electrum_port}" if reorg_manager.electrum_rpc else 'not initialized'
-            }
-        }), 500
-
-
-
-
-
 
 
 
@@ -442,12 +364,7 @@ def test_electrum_connection():
 @bp_reorg_attack.route('/api/reorgattack/database/stats', methods=['GET'])
 def get_database_stats():
     """Get statistics about stored blockchain data"""
-
-    
     try:
-        from .reorg import ReorgDatabase
-        from app.database.db import get_db_connection
-        
         # Get stats for both networks
         public_stats = {
             'total_blocks': 0,
@@ -463,65 +380,64 @@ def get_database_stats():
         }
         
         # Get total tracked transactions
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        with get_db_connection() as conn:
         
-        # Get public network stats
-        cursor.execute('''
-            SELECT 
-                COUNT(*) as total_blocks,
-                MIN(Height) as min_height,
-                MAX(Height) as max_height
-            FROM Blockchain_Blocks 
-            WHERE Network = 'public'
-        ''')
-        result = cursor.fetchone()
-        if result and result[0] > 0:
-            public_stats = {
-                'total_blocks': result[0],
-                'min_height': result[1],
-                'max_height': result[2],
-                'height_range': result[2] - result[1] + 1 if result[1] and result[2] else 0
-            }
-        
-        # Get private network stats
-        cursor.execute('''
-            SELECT 
-                COUNT(*) as total_blocks,
-                MIN(Height) as min_height,
-                MAX(Height) as max_height
-            FROM Blockchain_Blocks 
-            WHERE Network = 'private'
-        ''')
-        result = cursor.fetchone()
-        if result and result[0] > 0:
-            private_stats = {
-                'total_blocks': result[0],
-                'min_height': result[1],
-                'max_height': result[2],
-                'height_range': result[2] - result[1] + 1 if result[1] and result[2] else 0
-            }
-        
-        cursor.execute('SELECT COUNT(*) FROM Blockchain_Transactions')
-        total_transactions = cursor.fetchone()[0]
-        
-        cursor.execute('SELECT COUNT(*) FROM Blockchain_TxInBlocks')
-        total_tx_block_links = cursor.fetchone()[0]
-        
-        conn.close()
-        
-        return jsonify({
-            'success': True,
-            'stats': {
-                'public_network': public_stats,
-                'private_network': private_stats,
-                'total_transactions_tracked': total_transactions,
-                'total_tx_block_links': total_tx_block_links,
-                'database_message': 'All historical experiment data is preserved',
-                'sync_mode': 'on-demand',
-                'sync_status': 'Data is synced when requested by user'
-            }
-        }), 200
+            # Get public network stats
+            sqlFetchData = conn.execute('''
+                SELECT 
+                    COUNT(*) as total_blocks,
+                    MIN(Height) as min_height,
+                    MAX(Height) as max_height
+                FROM Blockchain_Blocks 
+                WHERE Network = 'public'
+            ''')
+            result = sqlFetchData.fetchone()
+            if result and result[0] > 0:
+                public_stats = {
+                    'total_blocks': result[0],
+                    'min_height': result[1],
+                    'max_height': result[2],
+                    'height_range': result[2] - result[1] + 1 if result[1] and result[2] else 0
+                }
+            
+            # Get private network stats
+            sqlFetchData = conn.execute('''
+                SELECT 
+                    COUNT(*) as total_blocks,
+                    MIN(Height) as min_height,
+                    MAX(Height) as max_height
+                FROM Blockchain_Blocks 
+                WHERE Network = 'private'
+            ''')
+            result = sqlFetchData.fetchone()
+            if result and result[0] > 0:
+                private_stats = {
+                    'total_blocks': result[0],
+                    'min_height': result[1],
+                    'max_height': result[2],
+                    'height_range': result[2] - result[1] + 1 if result[1] and result[2] else 0
+                }
+            
+            sqlFetchData = conn.execute('SELECT COUNT(*) FROM Blockchain_Transactions')
+            total_transactions = sqlFetchData.fetchone()[0]
+            
+            sqlFetchData = conn.execute('SELECT COUNT(*) FROM Blockchain_TxInBlocks')
+            total_tx_block_links = sqlFetchData.fetchone()[0]
+            
+            conn.close()
+            
+            return jsonify({
+                'success': True,
+                'stats': {
+                    'public_network': public_stats,
+                    'private_network': private_stats,
+                    'total_transactions_tracked': total_transactions,
+                    'total_tx_block_links': total_tx_block_links,
+                    'database_message': 'All historical experiment data is preserved',
+                    'sync_mode': 'on-demand',
+                    'sync_status': 'Data is synced when requested by user'
+                }
+            }), 200
         
     except Exception as e:
         return jsonify({
@@ -544,8 +460,6 @@ def get_database_stats():
 @bp_reorg_attack.route('/api/reorgattack/system/sync/status', methods=['GET'])
 def get_sync_status():
     """Get background sync status"""
-
-    
     try:
         return jsonify({
             'success': True,
@@ -567,7 +481,6 @@ def get_sync_status():
 @bp_reorg_attack.route('/api/reorgattack/system/sync/force', methods=['POST'])
 def force_sync():
     """Force a sync of recent data (on-demand)"""
-    
     try:
         # Force sync recent data
         reorg_manager.sync_recent_data()

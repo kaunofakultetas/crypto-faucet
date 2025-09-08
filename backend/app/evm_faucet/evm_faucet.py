@@ -1,3 +1,13 @@
+############################################################
+# Author:           Tomas Vanagas
+# Updated:          2025-09-04
+# Version:          1.0
+# Description:      EVM faucet for blockchain 
+############################################################
+
+
+
+
 import os
 import time
 import json
@@ -45,11 +55,6 @@ class EVMFaucet:
         except Exception:
             self.FAUCET_ADDRESS = None
 
-        default_amount_env = os.getenv('DEFAULT_WALLET_ETH_AMOUNT', '0')
-        try:
-            self.FAUCET_AMOUNT = Web3.to_wei(float(default_amount_env), 'ether')
-        except Exception:
-            self.FAUCET_AMOUNT = 0
 
         self.COOLDOWN_PERIOD = 60
         self.last_request = {}
@@ -78,6 +83,9 @@ class EVMFaucet:
 
         w3 = self.w3_instances[network]
 
+        amount_to_send = self.NETWORK_CONFIGS[network]['chunk_size']
+        amount_to_send_wei = Web3.to_wei(float(amount_to_send), 'ether')
+
         if not all([to_address, signature, nonce]):
             return {"error": "Trūksta reikalingų parametrų"}, 400
 
@@ -98,7 +106,7 @@ class EVMFaucet:
         except Exception:
             return {"error": "Nepavyko gauti naudotojo balanso"}, 500
 
-        if user_balance >= self.FAUCET_AMOUNT:
+        if user_balance >= amount_to_send_wei:
             return {"error": f"Jūsų piniginėje jau yra pakankamai {self.NETWORK_CONFIGS[network]['short_name']}."}, 400
 
         addr_key = to_address.lower()
@@ -108,14 +116,14 @@ class EVMFaucet:
                 return {"error": f"Kriptovaliuta jums jau išsiųsta. Daugiau galėsite pasiimti už {self.COOLDOWN_PERIOD - time_since} sek."}, 429
 
         faucet_balance = w3.eth.get_balance(self.FAUCET_ADDRESS)
-        if faucet_balance < self.FAUCET_AMOUNT:
+        if faucet_balance < amount_to_send_wei:
             return {"error": "Čiaupas nebeturi kriptovaliutos. Praneškite dėstytojui."}, 503
 
         nonce_tx = w3.eth.get_transaction_count(self.FAUCET_ADDRESS)
         tx = {
             'nonce': nonce_tx,
             'to': to_address,
-            'value': int(self.FAUCET_AMOUNT),
+            'value': int(amount_to_send_wei),
             'gas': 210000,
             'gasPrice': w3.eth.gas_price,
             'chainId': self.NETWORK_CONFIGS[network]['chain_id']
@@ -129,7 +137,7 @@ class EVMFaucet:
         return {
             "message": "ETH sent successfully",
             "transaction_hash": tx_hash.hex(),
-            "amount": float(w3.from_wei(self.FAUCET_AMOUNT, 'ether'))
+            "amount": float(w3.from_wei(amount_to_send_wei, 'ether'))
         }, 200
 
 
@@ -144,7 +152,7 @@ class EVMFaucet:
         return {
             "balance": float(w3.from_wei(balance, 'ether')),
             "address": (self.FAUCET_ADDRESS or "").lower(),
-            "chunk_size": float(w3.from_wei(self.FAUCET_AMOUNT, 'ether'))
+            "chunk_size": float(self.NETWORK_CONFIGS[network]['chunk_size'])
         }, 200
 
 
