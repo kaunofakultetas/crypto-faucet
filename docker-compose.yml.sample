@@ -117,3 +117,100 @@ services:
     restart: unless-stopped
 
 
+
+  faucet-litecoind-public:
+    container_name: faucet-litecoind-public
+    image: btcpayserver/litecoin:0.21.2.1-2
+    volumes:
+      - ./litecoind-public/data:/data
+    command:
+      [
+        "litecoind",
+        "-testnet=1",
+        "-server=1",
+        "-rpcuser=admin",
+        "-rpcpassword=admin",
+        "-rpcallowip=172.0.0.0/8",
+        "-rpcport=19332",
+        "-rpcbind=0.0.0.0",
+        "-zmqpubrawtx=tcp://0.0.0.0:29332",
+        "-zmqpubrawblock=tcp://0.0.0.0:29332",
+        "-dbcache=512",
+        "-checkblocks=6",
+        "-txindex=1"
+      ]
+    restart: unless-stopped
+
+
+
+  faucet-litecoind-private:
+    container_name: faucet-litecoind-private
+    image: btcpayserver/litecoin:0.21.2.1-2
+    volumes:
+      - ./litecoind-private/data:/data
+    command:
+      [
+        "litecoind",
+        "-testnet=1",
+        "-server=1",
+        "-rpcuser=admin",
+        "-rpcpassword=admin",
+        "-rpcallowip=172.0.0.0/8",
+        "-rpcport=19332",
+        "-rpcbind=0.0.0.0",
+        "-zmqpubrawtx=tcp://0.0.0.0:29332",
+        "-zmqpubrawblock=tcp://0.0.0.0:29332",
+        "-dbcache=512",
+        "-checkblocks=6",
+        "-txindex=1",
+        "-dnsseed=0",
+        "-addnode=faucet-litecoind-dummy:19335"
+      ]
+    restart: unless-stopped
+
+  
+  faucet-litecoind-dummy:
+    container_name: faucet-litecoind-dummy
+    image: btcpayserver/litecoin:0.21.2.1-2
+    volumes:
+      - ./litecoind-dummy/data:/data
+    command:
+      [
+        "litecoind",
+        "-testnet=1",
+        "-server=1",
+        "-rpcuser=admin",
+        "-rpcpassword=admin",
+        "-rpcallowip=172.0.0.0/8",
+        "-rpcport=19332",
+        "-rpcbind=0.0.0.0",
+        "-zmqpubrawtx=tcp://0.0.0.0:29332",
+        "-zmqpubrawblock=tcp://0.0.0.0:29332",
+        "-dbcache=512",
+        "-prune=550",
+        "-checkblocks=6",
+        "-dnsseed=0"
+      ]
+    restart: unless-stopped
+
+
+
+  faucet-stratum:
+    container_name: faucet-stratum
+    image: vuknf/anypool-stratum:latest
+    ports:
+      - "63333:3333"
+    environment:
+      - RPC_HOST=faucet-litecoind-private
+      - RPC_PORT=19332
+      - RPC_USER=admin
+      - RPC_PASS=admin
+      - REWARD_ADDR=tltc1q485fru2s4j8rgy3tvrmmf0tu0veqhlqqqrp9c8
+      - COINBASE_MESSAGE=/VU KNF/
+      - POOL_DIFFICULTY=2000000
+      - POLL_DIFF_DROPPER=True
+      - DEBUG=False
+    restart: unless-stopped
+
+
+

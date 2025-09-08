@@ -23,6 +23,7 @@ A comprehensive multi-blockchain faucet system developed for Vilnius University.
 - **Blockchain Simulator**: Interactive SHA-256 blockchain demonstration
 - **Transaction Graph Visualizer**: Explore cryptocurrency transaction flows
 - **DApp Hosting**: File browser and hosting for decentralized applications
+- **51% Attack Tool**: Visual interface for 51% attack on LTC Testnet4 network
 
 ## 📋 Prerequisites
 
@@ -118,12 +119,22 @@ Networks are configured in `backend/main.py`:
 - Host decentralized applications
 - Manage hosted content
 
+#### 51% Attack Tool
+- Access at `/reorgattack`
+- Visual interface for 51% attack on LTC Testnet4 network
+- Explore and control blockchain structure
+- Test the impact of 51% attacks on the network
+- Rent and point miners to your private blockchain (Default port: 63333)
+
+
+
 ### Project Structure
 ```
 ├── backend/                 # Python Flask API
 │   ├── app/
-│   │   ├── evm_faucet/     # Ethereum-like blockchain logic
-│   │   └── utxo_faucet/    # UTXO-based blockchain logic (Bitcoin, Litecoin)
+│   │   ├── evm_faucet/     # Ethereum-like faucet logic
+│   │   ├── utxo_faucet/    # UTXO-based faucet logic (Bitcoin, Litecoin)
+│   │   └── reorg_attack/   # 51% attack tool (LTC Testnet4)
 │   ├── main.py             # Application entry point
 │   └── requirements.txt    # Python dependencies
 ├── vite/                   # React frontend
@@ -134,6 +145,9 @@ Networks are configured in `backend/main.py`:
 │       └── package.json    # Node.js dependencies
 ├── dapps-server/           # Static file hosting
 ├── dapps-filebrowser/      # File management interface
+├── litecoind-public/       # Public Litecoin node data (Represents public blockchain)
+├── litecoind-private/      # Private Litecoin node data (Controlled by students)
+├── litecoind-dummy/        # Dummy Litecoin node data (Required for private node to work)
 └── docker-compose.yml      # Container orchestration
 ```
 
