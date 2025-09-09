@@ -21,7 +21,7 @@ A comprehensive multi-blockchain faucet system developed for Vilnius University.
 
 ### Educational Tools
 - **Blockchain Simulator**: Interactive SHA-256 blockchain demonstration
-- **Transaction Graph Visualizer**: Explore cryptocurrency transaction flows
+- **Transaction Graph Visualizer**: Explore cryptocurrency transaction flows (See [more](_docs/txgraph/README.md))
 - **DApp Hosting**: File browser and hosting for decentralized applications
 - **51% Attack Tool**: Visual interface for 51% attack on LTC Testnet4 network (See [more](_docs/51percent/README.md))
 
@@ -109,7 +109,7 @@ Networks are configured in `backend/main.py`:
 - Interactive demonstration of blockchain concepts
 - Mine blocks and explore hash functions
 
-#### Transaction Graph
+#### Transaction Graph (See [more](_docs/txgraph/README.md))
 - Access at `/graph/{network}`
 - Visualize cryptocurrency transaction flows
 - Explore addresses and transaction relationships
@@ -119,7 +119,7 @@ Networks are configured in `backend/main.py`:
 - Host decentralized applications
 - Manage hosted content
 
-#### 51% Attack Tool (See [_docs/51percent/README.md](_docs/51percent/README.md))
+#### 51% Attack Tool (See [more](_docs/51percent/README.md))
 - Access at `/reorgattack`
 - Visual interface for 51% attack on LTC Testnet4 network
 - Explore and control blockchain structure
