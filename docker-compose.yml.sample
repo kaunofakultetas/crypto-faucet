@@ -33,14 +33,13 @@ services:
     environment:
       # - APP_DEBUG=True # Dev
       - FAUCET_DEFAULT_NETWORK=sepolia
-      - DEFAULT_WALLET_ETH_AMOUNT=0.2
 
       # Register and get from https://infura.io
       - INFURA_PROJECT_ID=...
 
       # Register and get from https://etherscan.io
       - ETHERSCAN_API_KEY=...
-      
+
       # Private key for faucet (CHANGE THIS TO RANDOM SHA256 HASH)
       - FAUCET_PRIVATE_KEY=52bd6e1cf039fde0c2bb3feafa7118be495952a1445a3eb3e050d1ca61a2e671
 
@@ -68,7 +67,7 @@ services:
   # # OPTIONAL: Database GUI
   # faucet-dbgate:
   #   container_name: faucet-dbgate
-  #   image: dbgate/dbgate:6.6.0
+  #   image: dbgate/dbgate:6.6.3
   #   environment:
   #     WEB_ROOT: /dbgate
 
@@ -98,9 +97,6 @@ services:
     read_only: false
     volumes:
       - ./dapps-server/data:/data
-    environment:
-      - PUID=1000
-      - PGID=1000
     restart: unless-stopped
 
 
@@ -108,7 +104,6 @@ services:
   faucet-dapps-caddy:
     container_name: faucet-dapps-caddy
     image: caddy:2-alpine
-    user: 1000:1000
     volumes:
       - ./dapps-server/data:/srv:ro
       - ./dapps-server/Caddyfile:/etc/caddy/Caddyfile:ro
@@ -168,7 +163,8 @@ services:
       ]
     restart: unless-stopped
 
-  
+
+
   faucet-litecoind-dummy:
     container_name: faucet-litecoind-dummy
     image: btcpayserver/litecoin:0.21.2.1-2
