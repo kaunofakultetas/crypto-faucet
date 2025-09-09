@@ -23,7 +23,7 @@ A comprehensive multi-blockchain faucet system developed for Vilnius University.
 - **Blockchain Simulator**: Interactive SHA-256 blockchain demonstration
 - **Transaction Graph Visualizer**: Explore cryptocurrency transaction flows
 - **DApp Hosting**: File browser and hosting for decentralized applications
-- **51% Attack Tool**: Visual interface for 51% attack on LTC Testnet4 network (See [_docs/51percent/README.md](_docs/51percent/README.md))
+- **51% Attack Tool**: Visual interface for 51% attack on LTC Testnet4 network (See [more](_docs/51percent/README.md))
 
 ## 📋 Prerequisites
 
