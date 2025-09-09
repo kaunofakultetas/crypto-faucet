@@ -1,6 +1,6 @@
 # Transaction Graph Visualizer
 
-An interactive tool to visualize how cryptocurrency flows from faucet addresses across blockchain networks.
+An interactive tool to visualize how cryptocurrency flows from faucet addresses across wallets and smart contracts.
 
 ![Transaction Graph Example](./img/image5.png)
 
