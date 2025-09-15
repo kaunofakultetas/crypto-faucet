@@ -20,7 +20,6 @@ class ReorgDatabase:
     Database operations for reorg attack system
     """
 
-
     @staticmethod
     def create_tables():
         """
@@ -38,6 +37,8 @@ class ReorgDatabase:
                     "CoinbaseMessage"	TEXT NOT NULL,
                     "Date"	TEXT NOT NULL,
                     "Time"	TEXT NOT NULL,
+                    "ScryptHash"	TEXT NOT NULL,
+                    "Chainwork"	REAL NOT NULL,
                     PRIMARY KEY("Hash")
                 )
             ''')
@@ -229,7 +230,9 @@ class ReorgAttackManager:
                             'prevHash', PrevHash,
                             'coinbase', CoinbaseMessage,
                             'date', Date,
-                            'time', Time
+                            'time', Time,
+                            'scryptHash', ScryptHash,
+                            'chainWork', ChainWork
                         )
                     )
                 FROM Blockchain_Blocks 

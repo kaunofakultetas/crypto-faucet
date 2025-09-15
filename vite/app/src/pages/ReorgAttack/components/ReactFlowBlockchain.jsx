@@ -1,12 +1,5 @@
 import React, { useMemo } from 'react';
-import ReactFlow, {
-  Background,
-  Controls,
-  useNodesState,
-  useEdgesState,
-  Handle,
-  Position,
-} from 'reactflow';
+import ReactFlow, { Background, Controls, useNodesState, useEdgesState, Handle, Position } from 'reactflow';
 import 'reactflow/dist/style.css';
 import { Box, Typography } from '@mui/material';
 
@@ -14,10 +7,15 @@ import { Box, Typography } from '@mui/material';
 import { SiHackaday } from "react-icons/si";
 import { BiWorld } from "react-icons/bi";
 
+// Import the new modal component
+import BlockDetailsModal from './BlockDetailsModal';
+
+
+
 
 // Custom Block Node Component
 const BlockNode = ({ data }) => {
-  const { block, transactions, isPublicTip, isPrivateTip, isAttacker } = data;
+  const { block, transactions, isPublicTip, isPrivateTip, isAttacker, onBlockClick, isWinningChain } = data;
   
   return (
     <Box
@@ -26,22 +24,117 @@ const BlockNode = ({ data }) => {
         borderRadius: 2,
         bgcolor: isAttacker ? 'rgba(244, 67, 54, 0.3)' : 'rgba(33, 150, 243, 0.3)',
         p: 1.5,
-        minWidth: 400,
+        minWidth: 450,
         position: 'relative',
         boxShadow: 3,
-        cursor: 'default',
+        cursor: 'pointer',
+        transition: 'transform 0.2s, box-shadow 0.2s',
+        '&:hover': {
+          transform: 'scale(1.02)',
+          boxShadow: 6,
+        }
       }}
+      onClick={() => onBlockClick?.(data)}
     >
+      {/* ChainWork bubble with pulsating animation for winning chain */}
+      {block.chainWork !== undefined && (
+        <Box
+          sx={{
+            position: 'absolute',
+            top: 8,
+            right: 8,
+            zIndex: 1,
+          }}
+        >          
+          {/* Main chainWork bubble */}
+          <Box
+            key={`chainwork-${block.hash}-${isWinningChain}`} // Force re-render on state change
+            sx={{
+              position: 'relative',
+              bgcolor: isWinningChain ? 'primary.main' : 'grey.400',
+              border: isWinningChain ? '2px solid' : '1px solid rgba(0, 0, 0, 0.2)',
+              borderColor: isWinningChain ? 'primary.main' : 'rgba(0, 0, 0, 0.2)',
+              borderRadius: '12px',
+              px: 1,
+              py: 0.5,
+              boxShadow: isWinningChain ? '0 0 12px rgba(33, 150, 243, 0.6)' : '0 2px 4px rgba(0,0,0,0.1)',
+              zIndex: 2,
+              transform: 'scale(1)', // Reset transform
+              // Only add animation if winning
+              ...(isWinningChain ? {
+                animation: 'primaryPulse 2s ease-in-out infinite',
+                '@keyframes primaryPulse': {
+                  '0%': {
+                    boxShadow: '0 0 8px rgba(33, 150, 243, 0.4), 0 0 16px rgba(33, 150, 243, 0.2)',
+                    transform: 'scale(1)',
+                  },
+                  '50%': {
+                    boxShadow: '0 0 20px rgba(33, 150, 243, 0.8), 0 0 30px rgba(33, 150, 243, 0.4), 0 0 40px rgba(33, 150, 243, 0.2)',
+                    transform: 'scale(1.05)',
+                  },
+                  '100%': {
+                    boxShadow: '0 0 8px rgba(33, 150, 243, 0.4), 0 0 16px rgba(33, 150, 243, 0.2)',
+                    transform: 'scale(1)',
+                  },
+                },
+                // Add ripple effect only for winning
+                '&::before': {
+                  content: '""',
+                  position: 'absolute',
+                  top: '-4px',
+                  left: '-4px',
+                  right: '-4px',
+                  bottom: '-4px',
+                  borderRadius: '16px',
+                  background: 'rgba(33, 150, 243, 0.1)',
+                  animation: 'ripple 3s ease-out infinite',
+                  zIndex: -1,
+                },
+                '@keyframes ripple': {
+                  '0%': {
+                    transform: 'scale(1)',
+                    opacity: 0.6,
+                  },
+                  '70%': {
+                    transform: 'scale(1.8)',
+                    opacity: 0,
+                  },
+                  '100%': {
+                    transform: 'scale(1.8)',
+                    opacity: 0,
+                  },
+                },
+              } : {
+                // No animations when not winning
+                animation: 'none',
+              }),
+            }}
+          >
+            <Typography 
+              variant="caption" 
+              sx={{ 
+                fontWeight: 'bold', 
+                fontSize: '0.7rem',
+                color: isWinningChain ? 'white' : 'text.primary',
+                textShadow: isWinningChain ? '0 1px 2px rgba(0,0,0,0.3)' : 'none',
+              }}
+            >
+              Chain Work: {Number(block.chainWork).toFixed(6)}
+            </Typography>
+          </Box>
+        </Box>
+      )}
+
       {/* Tip indicators */}
       {isPublicTip && (
         <Box sx={{ position: 'absolute', top: -55, left: 10 }} className="bg-green-700 rounded-full p-2 flex items-center gap-2 text-white">
           <BiWorld size={40} className="text-white" />
-          <Typography variant="h5" color="white">Public Tip</Typography>
+          <Typography variant="h5" color="white">Viešas</Typography>
         </Box>
       )}
       {isPrivateTip && (
         <Box sx={{ position: 'absolute', top: -55, right: 10 }} className="bg-red-700 rounded-full p-2 flex items-center gap-2 text-white">
-          <Typography variant="h5" color="white">Private Tip</Typography>
+          <Typography variant="h5" color="white">Privatus</Typography>
           <SiHackaday size={40} className="text-white" />
         </Box>
       )}
@@ -51,7 +144,7 @@ const BlockNode = ({ data }) => {
       </Typography>
       
       <Typography variant="body2" sx={{ mb: 1 }}>
-        <b>SHA256 Hash:</b> {block.hash.slice(0, 10)} ... {block.hash.slice(54, 64)}
+        <b>SHA256 Hash:</b> {block.hash.slice(0, 15)} ... {block.hash.slice(49, 64)}
       </Typography>
       
       <Typography variant="body2" sx={{ mb: 1 }}>
@@ -88,13 +181,32 @@ const BlockNode = ({ data }) => {
 };
 
 
+
+
 const nodeTypes = {
   block: BlockNode,
 };
 
 
 
+
+
 const ReactFlowBlockchain = ({ chainBlocks = [], chainTips = {}, transactions = [] }) => {
+  // Add modal state
+  const [selectedBlock, setSelectedBlock] = React.useState(null);
+  const [modalOpen, setModalOpen] = React.useState(false);
+
+  // Handle block click
+  const handleBlockClick = (blockData) => {
+    setSelectedBlock(blockData);
+    setModalOpen(true);
+  };
+
+  // Close modal
+  const handleCloseModal = () => {
+    setModalOpen(false);
+    setSelectedBlock(null);
+  };
 
   // Process blockchain data
   const { nodes, edges, maxHeight, minHeight } = useMemo(() => {
@@ -132,20 +244,33 @@ const ReactFlowBlockchain = ({ chainBlocks = [], chainTips = {}, transactions = 
       if (privateTipBlock) currentTipHeights.push(privateTipBlock.height);
     }
 
-    // Calculate height difference between competing chains
-    const heightDifference = currentTipHeights.length === 2 ? 
-      Math.abs(currentTipHeights[0] - currentTipHeights[1]) : 0;
-
-    // Find which chain has the higher tip (winning chain)
-    const maxTipHeight = Math.max(...currentTipHeights);
-    const winningChainHash = currentTipHeights.length === 2 ? 
-      (allBlocks.find(b => b.height === maxTipHeight && (b.hash === chainTips.public || b.hash === chainTips.private))?.hash) : null;
 
 
 
-    const sortedHeights = Object.keys(blocksByHeight).map(h => parseInt(h)).sort((a, b) => a - b);
-    for (const height of sortedHeights) {
-        const blocksAtHeight = blocksByHeight[height];
+    // Simple algorithm: Find the block with highest chainWork among ALL blocks
+    let winningChainHash = null;
+    let bestBlockWork = -1;
+    
+    console.log('Finding best block by chainWork among all blocks...');
+    allBlocks.forEach(block => {
+      const blockChainWork = Number(block.chainWork) || 0;
+      
+      console.log(`Checking block ${block.hash.slice(0, 8)}: chainWork = ${blockChainWork}`);
+      
+      if (blockChainWork > bestBlockWork) {
+        bestBlockWork = blockChainWork;
+        winningChainHash = block.hash;
+        console.log(`New best block: ${block.hash.slice(0, 8)} with chainWork ${blockChainWork}`);
+      }
+    });
+
+
+
+    
+    if (winningChainHash) {
+      console.log(`Final winner: ${winningChainHash.slice(0, 8)} with chainWork ${bestBlockWork}`);
+    } else {
+      console.log('No winning block found');
     }
 
 
@@ -157,71 +282,73 @@ const ReactFlowBlockchain = ({ chainBlocks = [], chainTips = {}, transactions = 
 
     // Create nodes - recent blocks at top (y=0), older blocks below
     Object.keys(blocksByHeight)
-      .sort((a, b) => parseInt(b) - parseInt(a)) // Sort descending (recent first)
-      .forEach((heightStr, levelIndex) => {
-        const height = parseInt(heightStr);
-        const blocksAtHeight = blocksByHeight[height];
+    .sort((a, b) => parseInt(b) - parseInt(a)) // Sort descending (recent first)
+    .forEach((heightStr, levelIndex) => {
+      const height = parseInt(heightStr);
+      const blocksAtHeight = blocksByHeight[height];
 
-        // Initialize position storage for this height
-        heightPositions[height] = heightPositions[height] || {};
+      // Initialize position storage for this height
+      heightPositions[height] = heightPositions[height] || {};
 
 
-        // CONSISTENT ORDERING: Sort blocks at same height for consistent positioning
-        const sortedBlocks = blocksAtHeight.sort((a, b) => {
-          // Primary sort: Attacker blocks (VU KNF) go to the RIGHT, honest blocks to the LEFT
-          const aIsAttacker = a.coinbase.includes('VU KNF');
-          const bIsAttacker = b.coinbase.includes('VU KNF');
-          
-          if (aIsAttacker !== bIsAttacker) {
-            return aIsAttacker ? 1 : -1; // Attacker blocks go right (higher index)
-          }
-          
-          // Secondary sort: By hash for consistency when same type
-          return a.hash.localeCompare(b.hash);
-        });
+      // CONSISTENT ORDERING: Sort blocks at same height for consistent positioning
+      const sortedBlocks = blocksAtHeight.sort((a, b) => {
+        // Primary sort: Attacker blocks (VU KNF) go to the RIGHT, honest blocks to the LEFT
+        const aIsAttacker = a.coinbase.includes('VU KNF');
+        const bIsAttacker = b.coinbase.includes('VU KNF');
         
-        sortedBlocks.forEach((block, index) => {
-          // CORRECTED DYNAMIC POSITIONING LOGIC
-          const isFork = sortedBlocks.length > 1;
-          let x = 0;
-          
-          if (isFork) {
-            // Rule: 1-9 blocks difference - Keep forks on separate sides
-              const spacing = 450;
-              const totalWidth = (sortedBlocks.length - 1) * spacing;
-              x = (index * spacing) - (totalWidth / 2);
-          }
+        if (aIsAttacker !== bIsAttacker) {
+          return aIsAttacker ? 1 : -1; // Attacker blocks go right (higher index)
+        }
+        
+        // Secondary sort: By hash for consistency when same type
+        return a.hash.localeCompare(b.hash);
+      });
+      
+      sortedBlocks.forEach((block, index) => {
+        // CORRECTED DYNAMIC POSITIONING LOGIC
+        const isFork = sortedBlocks.length > 1;
+        let x = 0;
+        
+        if (isFork) {
+          // Rule: 1-9 blocks difference - Keep forks on separate sides
+            const spacing = 500;
+            const totalWidth = (sortedBlocks.length - 1) * spacing;
+            x = (index * spacing) - (totalWidth / 2);
+        }
 
-          // Store this block's position for its children
-          heightPositions[height][block.hash] = x;
-          
-          // Recent blocks at top (y=0), older blocks below
-          const y = levelIndex * 200;
-          
-          // Detect attacker blocks
-          const isAttacker = block.coinbase.includes('VU KNF');
-          
-          // Find transactions for this block
-          const blockTransactions = transactions.filter(tx => 
-            block.transactions && block.transactions.includes(tx.txid)
-          ) || [];
-          
-          nodes.push({
-            id: block.hash,
-            type: 'block',
-            position: { x, y },
-            draggable: false, // Make blocks non-draggable
-            selectable: true, // Still allow selection for potential future features
-            data: {
-              block,
-              transactions: blockTransactions,
-              isPublicTip: block.hash === chainTips.public,
-              isPrivateTip: block.hash === chainTips.private,
-              isAttacker,
-            },
-          });
+        // Store this block's position for its children
+        heightPositions[height][block.hash] = x;
+        
+        // Recent blocks at top (y=0), older blocks below
+        const y = levelIndex * 200;
+        
+        // Detect attacker blocks
+        const isAttacker = block.coinbase.includes('VU KNF');
+        
+        // Find transactions for this block
+        const blockTransactions = transactions.filter(tx => 
+          block.transactions && block.transactions.includes(tx.txid)
+        ) || [];
+        
+        nodes.push({
+          id: block.hash,
+          type: 'block',
+          position: { x, y },
+          draggable: false, // Make blocks non-draggable
+          selectable: true, // Still allow selection for potential future features
+          data: {
+            block,
+            transactions: blockTransactions,
+            isPublicTip: block.hash === chainTips.public,
+            isPrivateTip: block.hash === chainTips.private,
+            isAttacker,
+            onBlockClick: handleBlockClick, // Add this line
+            isWinningChain: block.hash === winningChainHash, // Pass isWinningChain
+          },
         });
       });
+    });
 
     
     // Create edges AFTER all nodes are created
@@ -328,6 +455,17 @@ const ReactFlowBlockchain = ({ chainBlocks = [], chainTips = {}, transactions = 
           </Box>
         )}
       </Box>
+
+      {/* Add the modal */}
+      <BlockDetailsModal
+        open={modalOpen}
+        onClose={handleCloseModal}
+        blockData={selectedBlock}
+        transactions={selectedBlock?.transactions || []}
+        isPublicTip={selectedBlock?.isPublicTip || false}
+        isPrivateTip={selectedBlock?.isPrivateTip || false}
+        isAttacker={selectedBlock?.isAttacker || false}
+      />
     </Box>
   );
 };

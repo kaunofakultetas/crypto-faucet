@@ -28,6 +28,12 @@ REORG_ATTACK_CONFIG = {
         'rpcport': 19332,
         'rpcuser': 'admin',
         'rpcpassword': 'admin',
+    },
+    "dummy": {
+        'rpchost': 'faucet-litecoind-dummy',
+        'rpcport': 19332,
+        'rpcuser': 'admin',
+        'rpcpassword': 'admin',
     }
 }
 
@@ -39,7 +45,7 @@ reorg_manager = None
 
 
 ####################################################################################
-########################### Network Connection Endpoints ########################
+########################### Network Connection Endpoints ###########################
 ####################################################################################
 
 
@@ -79,12 +85,14 @@ def reorg_attack_get_peer_info():
 
 
 ####################################################################################
-################################# Transactions ###################################
+################################# Transactions #####################################
 ####################################################################################
 
 @bp_reorg_attack.route('/api/reorgattack/fetchtxinfo/<string:txid>', methods=['GET'])
 def reorg_fetch_tx_info(txid):
-    """Fetch transaction info from both sides"""
+    """
+    Fetch transaction info from both sides
+    """
 
     to_send = {
         "publicside": {
@@ -115,7 +123,9 @@ def reorg_fetch_tx_info(txid):
 
 @bp_reorg_attack.route('/api/reorgattack/transactions/send', methods=['POST'])
 def reorg_send_raw_transaction():
-    """Send raw transaction to private network"""
+    """
+    Send raw transaction to private network
+    """
     try:
         data = request.get_json()
         
@@ -143,12 +153,14 @@ def reorg_send_raw_transaction():
 
 
 ####################################################################################
-########################### Blockchain Data Endpoints ###########################
+########################### Blockchain Data Endpoints ##############################
 ####################################################################################
 
 @bp_reorg_attack.route('/api/reorgattack/blockchain/data', methods=['GET'])
 def get_blockchain_data():
-    """Get blockchain visualization data (today's blocks by default)"""
+    """
+    Get blockchain visualization data (today's blocks by default)
+    """
     dateNow = datetime.now().strftime("%Y-%m-%d")
     target_date = request.args.get('date', dateNow)
     
@@ -164,7 +176,9 @@ def get_blockchain_data():
 
 @bp_reorg_attack.route('/api/reorgattack/blocks/<string:network>', methods=['GET'])
 def get_network_blocks(network):
-    """Get blocks for a specific network (today's blocks by default)"""
+    """
+    Get blocks for a specific network (today's blocks by default)
+    """
     try:
         # Get optional parameters
         target_date = request.args.get('date')
@@ -207,7 +221,9 @@ def get_network_blocks(network):
 
 @bp_reorg_attack.route('/api/reorgattack/dates/available', methods=['GET'])
 def get_available_dates():
-    """Get list of available dates with blockchain data"""
+    """
+    Get list of available dates with blockchain data
+    """
     try:
         with get_db_connection() as conn:
             # Get distinct dates with block counts
@@ -272,12 +288,14 @@ def get_available_dates():
 
 
 ####################################################################################
-######################### Transaction Management Endpoints ######################
+######################### Transaction Management Endpoints #########################
 ####################################################################################
 
 @bp_reorg_attack.route('/api/reorgattack/transactions', methods=['GET'])
 def get_all_transactions():
-    """Get all tracked transactions"""
+    """
+    Get all tracked transactions
+    """
     try:
         transactions = ReorgDatabase.get_all_tracked_transactions()
         return jsonify({
@@ -296,7 +314,9 @@ def get_all_transactions():
 
 @bp_reorg_attack.route('/api/reorgattack/transactions', methods=['POST'])
 def add_transaction_tracking():
-    """Add a transaction for tracking"""
+    """
+    Add a transaction for tracking
+    """
     try:
         data = request.get_json()
         
@@ -325,7 +345,9 @@ def add_transaction_tracking():
 
 @bp_reorg_attack.route('/api/reorgattack/transactions/<string:txid>', methods=['DELETE'])
 def remove_transaction_tracking(txid):
-    """Remove a transaction from tracking"""
+    """
+    Remove a transaction from tracking
+    """
     result = reorg_manager.remove_transaction_tracking(txid)
     
     status_code = 200 if result['success'] else 500
@@ -339,12 +361,14 @@ def remove_transaction_tracking(txid):
 
 
 ####################################################################################
-############################ Network Status Endpoints ###########################
+############################ Network Status Endpoints ##############################
 ####################################################################################
 
 @bp_reorg_attack.route('/api/reorgattack/status', methods=['GET'])
 def get_network_status():
-    """Get current network connection status with blockchain tips"""
+    """
+    Get current network connection status with blockchain tips
+    """
     result = reorg_manager.get_network_status()
     
     status_code = 200 if result['success'] else 500
@@ -358,12 +382,14 @@ def get_network_status():
 
 
 ####################################################################################
-############################# System Information #################################
+############################# System Information ###################################
 ####################################################################################
 
 @bp_reorg_attack.route('/api/reorgattack/database/stats', methods=['GET'])
 def get_database_stats():
-    """Get statistics about stored blockchain data"""
+    """
+    Get statistics about stored blockchain data
+    """
     try:
         # Get stats for both networks
         public_stats = {
@@ -454,12 +480,14 @@ def get_database_stats():
 
 
 ####################################################################################
-########################## Administrative Endpoints ##############################
+########################## Administrative Endpoints ################################
 ####################################################################################
 
 @bp_reorg_attack.route('/api/reorgattack/system/sync/status', methods=['GET'])
 def get_sync_status():
-    """Get background sync status"""
+    """
+    Get background sync status
+    """
     try:
         return jsonify({
             'success': True,
@@ -480,7 +508,9 @@ def get_sync_status():
 
 @bp_reorg_attack.route('/api/reorgattack/system/sync/force', methods=['POST'])
 def force_sync():
-    """Force a sync of recent data (on-demand)"""
+    """
+    Force a sync of recent data (on-demand)
+    """
     try:
         # Force sync recent data
         reorg_manager.sync_recent_data()

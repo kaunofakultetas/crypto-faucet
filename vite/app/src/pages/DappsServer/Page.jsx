@@ -9,6 +9,8 @@ export default function DappsServerPage() {
       <Box className="flex flex-wrap gap-12 justify-center">
         <Button
           href="/dapps/hosting"
+          target="_blank"
+          rel="noopener noreferrer"
           variant="contained"
           color="primary"
           className="h-60 w-96 rounded-lg shadow-md hover:shadow-lg flex flex-col items-center justify-center gap-4 normal-case"
@@ -16,12 +18,14 @@ export default function DappsServerPage() {
         >
           <PlayCircleFilledWhiteIcon sx={{ fontSize: 60 }} />
           <span className="text-center leading-tight text-white">
-            DAPPS Applikacijos <br /> Paleidimas
+            DAPPS Aplikacijos <br /> Paleidimas
           </span>
         </Button>
 
         <Button
           href="/dapps/files"
+          target="_blank"
+          rel="noopener noreferrer"
           variant="contained"
           color="primary"
           className="h-60 w-96 rounded-lg shadow-md hover:shadow-lg flex flex-col items-center justify-center gap-4 normal-case"
@@ -29,7 +33,7 @@ export default function DappsServerPage() {
         >
           <SettingsApplicationsIcon sx={{ fontSize: 60 }} />
           <span className="text-center leading-tight text-white">
-            DAPPS Applikacijos <br /> Redagavimas
+            DAPPS Aplikacijos <br /> Redagavimas
           </span>
         </Button>
       </Box>

@@ -12,7 +12,6 @@ import os
 import time
 import json
 import logging
-import sqlite3
 from datetime import datetime, timedelta
 
 import requests
@@ -43,12 +42,11 @@ class EVMFaucet:
 
 
 
+        # Convert private key to 0x prefixed hex string and pad to 66 characters if necessary
         self.FAUCET_PRIVATE_KEY = os.getenv('FAUCET_PRIVATE_KEY')
-        if(self.FAUCET_PRIVATE_KEY.startswith("0x") == False):
-            self.FAUCET_PRIVATE_KEY = "0x" + self.FAUCET_PRIVATE_KEY
-        if(len(self.FAUCET_PRIVATE_KEY) < 66):
-            self.FAUCET_PRIVATE_KEY = self.FAUCET_PRIVATE_KEY.ljust(66, '0')
-
+        self.FAUCET_PRIVATE_KEY = "0x" + self.FAUCET_PRIVATE_KEY.replace("0x", "")
+        self.FAUCET_PRIVATE_KEY = self.FAUCET_PRIVATE_KEY.ljust(66, '0')
+    
 
         try:
             self.FAUCET_ADDRESS = Account.from_key(self.FAUCET_PRIVATE_KEY).address if self.FAUCET_PRIVATE_KEY else None
@@ -352,6 +350,5 @@ class EVMFaucet:
 
         with get_db_connection() as conn:
             conn.execute(''' UPDATE addresses SET name = ? WHERE address = ? ''', [name, address])
-
 
         return {"status": "OK"}, 200

@@ -12,6 +12,11 @@ from requests.auth import HTTPBasicAuth
 from typing import List, Dict
 from datetime import datetime
 from app.database.db import get_db_connection
+import scrypt
+import math
+
+
+
 
 
 class FullNodeRPC:
@@ -209,6 +214,46 @@ class FullNodeRPC:
 
 
 
+    def reverse_hex(self, hex_str: str) -> str:
+        """
+        Reverse hex string in 2-char chunks
+
+        INPUT:
+        +---------------------------------------+
+        | 01 | 23 | 45 | 67 | 89 | AB | CD | EF |
+        +---------------------------------------+
+            
+        OUTPUT:
+        +---------------------------------------+
+        | EF | CD | AB | 89 | 67 | 45 | 23 | 01 |
+        +---------------------------------------+
+        """
+        return ''.join(reversed([hex_str[i:i+2] for i in range(0, len(hex_str), 2)]))
+
+
+
+    def get_scrypt_hash(self, block_info: Dict) -> str:
+        """
+        Get Scrypt hash of the block
+        """
+        # Step 1: Extract header values and prepare for concatenation
+        version_final = self.reverse_hex(block_info['versionHex'])
+        prevhash_final = self.reverse_hex(block_info['previousblockhash'])
+        merkle_final = self.reverse_hex(block_info['merkleroot'])
+        ntime_final = self.reverse_hex(f"{block_info['time']:08x}")
+        nbits_final = self.reverse_hex(f"{int(block_info["bits"], 16):08x}")
+        nonce_final = self.reverse_hex(f"{block_info['nonce']:08x}")
+        
+        # Step 2: Concatenate header values and convert to bytes
+        header_bytes = bytes.fromhex(version_final + prevhash_final + merkle_final + ntime_final + nbits_final + nonce_final)
+        
+        # Step 3: Calculate Scrypt hash
+        scrypt_hash_hex = scrypt.hash(header_bytes, header_bytes, 1024, 1, 1, 32)[::-1].hex()
+        
+        return scrypt_hash_hex
+
+
+
     def sync_recent_blocks(self, depth: int = 100) -> bool:
         """
         Sync recent blocks from the full node
@@ -249,11 +294,19 @@ class FullNodeRPC:
                     dt = datetime.fromtimestamp(block_info.get('time', 0))
                     block_date = dt.strftime('%Y-%m-%d')
                     block_time = dt.strftime('%H:%M:%S')
-                    
 
-                    # Step 5: Insert block data into the database
-                    conn.execute(' INSERT OR REPLACE INTO Blockchain_Blocks (Height, Hash, PrevHash, CoinbaseMessage, Date, Time) VALUES (?, ?, ?, ?, ?, ?)', 
-                        (height, block_hash, block_info.get('previousblockhash', 'genesis'), coinbase_message, block_date, block_time))
+
+                    # Step 5: Calculate Scrypt hash
+                    scrypt_hash_hex = self.get_scrypt_hash(block_info)
+
+
+                    # Step 6: Calculate chainwork
+                    log2_chainwork_value = math.log2(int(block_info['chainwork'], 16))
+
+
+                    # Step 7: Insert block data into the database
+                    conn.execute(' INSERT OR REPLACE INTO Blockchain_Blocks (Height, Hash, PrevHash, CoinbaseMessage, Date, Time, ScryptHash, Chainwork) VALUES (?,?,?,?,?,?,?,?)', 
+                        (height, block_hash, block_info.get('previousblockhash', 'genesis'), coinbase_message, block_date, block_time, scrypt_hash_hex, log2_chainwork_value))
                 
 
                 # Commit after finishing the loop
@@ -281,11 +334,17 @@ class FullNodeConnections:
 
 
 
-    def get_peer_info(self) -> List[Dict]:
+    def get_peer_info(self, show_dummy: bool = False) -> List[Dict]:
         """
         Get peer info from the full node
         """
-        return self.rpc.rpc_call("getpeerinfo")
+        peer_info = []
+        if not show_dummy:
+            peer_info = self.rpc.rpc_call("getpeerinfo")
+            peer_info = [peer for peer in peer_info if peer['addr'] != "faucet-litecoind-dummy:19335"]
+        else:
+            peer_info = self.rpc.rpc_call("getpeerinfo")
+        return peer_info
 
 
 

@@ -41,12 +41,14 @@ export default function ReorgAttackPage() {
   // API base URL
   const API_BASE = '/api/reorgattack';
 
+
   // Show snackbar message
   const showMessage = (message, severity = 'info') => {
     setSnackbarMessage(message);
     setSnackbarSeverity(severity);
     setSnackbarOpen(true);
   };
+
 
   // Fetch blockchain data from backend
   const fetchBlockchainData = async () => {
@@ -68,6 +70,7 @@ export default function ReorgAttackPage() {
     }
   };
 
+
   // Fetch network status
   const fetchNetworkStatus = async () => {
     try {
@@ -84,6 +87,7 @@ export default function ReorgAttackPage() {
       console.error('Error fetching network status:', err);
     }
   };
+
 
   // Initial data load
   React.useEffect(() => {
@@ -104,7 +108,8 @@ export default function ReorgAttackPage() {
     loadInitialData();
   }, []);
 
-  // Auto-refresh data every 30 seconds to stay in sync with background updates
+
+  // Auto-refresh data every 10 seconds to stay in sync with background updates
   React.useEffect(() => {
     const interval = setInterval(() => {
       fetchBlockchainData();
@@ -113,6 +118,7 @@ export default function ReorgAttackPage() {
 
     return () => clearInterval(interval);
   }, []);
+
 
   // Handle connection toggle
   const handleConnectionToggle = async (connected) => {
@@ -124,21 +130,22 @@ export default function ReorgAttackPage() {
       if (result.success) {
         setIsConnectedToPublic(connected);
         showMessage(
-          connected ? 'Connected to public network' : 'Disconnected from public network',
+          connected ? 'Prisijungta prie viešo tinklo' : 'Atjungta nuo viešo tinklo',
           'success'
         );
         // Refresh network status after connection change
         setTimeout(fetchNetworkStatus, 1000);
       } else {
-        throw new Error(result.message || 'Connection operation failed');
+        throw new Error(result.message || 'Prisijungimo operacija nepavyko');
       }
     } catch (err) {
       console.error('Error toggling connection:', err);
-      showMessage(`Failed to ${connected ? 'connect' : 'disconnect'}: ${err.message}`, 'error');
+      showMessage(`Nepavyko ${connected ? 'prisijungti' : 'atjungti'}: ${err.message}`, 'error');
       // Revert the toggle if it failed
       setIsConnectedToPublic(!connected);
     }
   };
+
 
   // Handle raw transaction send
   const handleSendRawTransaction = async () => {
@@ -158,18 +165,19 @@ export default function ReorgAttackPage() {
       const result = await response.json();
       
       if (result.success) {
-        showMessage(`Transaction sent successfully! TXID: ${result.txid}`, 'success');
+        showMessage(`Transakcija sėkmingai išsiųsta! TXID: ${result.txid}`, 'success');
         setRawTransaction('');
         // Refresh data to show any new blocks
         setTimeout(fetchBlockchainData, 2000);
       } else {
-        throw new Error(result.message || 'Failed to send transaction');
+        throw new Error(result.message || 'Nepavyko išsiųsti transakcijos');
       }
     } catch (err) {
       console.error('Error sending transaction:', err);
-      showMessage(`Failed to send transaction: ${err.message}`, 'error');
+      showMessage(`Nepavyko išsiųsti transakcijos: ${err.message}`, 'error');
     }
   };
+
 
   // Handle add transaction tracking
   const handleAddTransaction = async () => {
@@ -203,6 +211,7 @@ export default function ReorgAttackPage() {
     }
   };
 
+
   // Handle remove transaction tracking
   const handleRemoveTransaction = async (txid) => {
     try {
@@ -225,6 +234,10 @@ export default function ReorgAttackPage() {
     }
   };
 
+
+
+
+
   // Show loading spinner while data loads
   if (loading) {
     return (
@@ -244,6 +257,7 @@ export default function ReorgAttackPage() {
     );
   }
 
+
   // Show error if data loading failed
   if (error && chainBlocks.length === 0) {
     return (
@@ -258,7 +272,9 @@ export default function ReorgAttackPage() {
     );
   }
     
-    return (
+
+
+  return (
     <Box sx={{ 
       p: 2, 
       position: 'relative',
@@ -317,19 +333,19 @@ export default function ReorgAttackPage() {
       {/* Title */}
       <Box sx={{ position: 'relative', mb: 1 }}>
         <Typography variant="h5" sx={{ textAlign: 'center', fontWeight: 'bold' }}>
-          51% Blockchain Attack Tool
+          51% Atakos Įrankis
         </Typography>
         {/* Status indicator */}
         {networkStatus && (
           <Box sx={{ display: 'flex', justifyContent: 'center', mt: 1, gap: 2 }}>
             {networkStatus.publicTip && (
-              <Typography variant="body2" color="text.secondary">
-                Public Tip: {networkStatus.publicTip.height || 'N/A'}
+              <Typography variant="body2" className="bg-green-700 p-1 px-2 rounded-md text-white">
+                Viešas: {networkStatus.publicTip.height || 'N/A'}
               </Typography>
             )}
             {networkStatus.privateTip && (
-              <Typography variant="body2" color="text.secondary">
-                Private Tip: {networkStatus.privateTip.height || 'N/A'}
+              <Typography variant="body2" className="bg-red-700 p-1 px-2 rounded-md text-white">
+                Privatus: {networkStatus.privateTip.height || 'N/A'}
               </Typography>
             )}
           </Box>

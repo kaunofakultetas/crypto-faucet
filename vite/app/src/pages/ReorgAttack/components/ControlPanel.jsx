@@ -1,42 +1,13 @@
 import React from 'react';
-import {
-  Box,
-  Typography,
-  Paper,
-  Button,
-  TextField,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
-  Chip,
-  IconButton,
-  Divider,
-  Alert,
-  Switch,
-  FormControlLabel
-} from '@mui/material';
+import { Box, Typography, Paper, Button, TextField, FormControl, InputLabel, Select, MenuItem, IconButton, Divider, Alert, Switch, FormControlLabel } from '@mui/material';
 import { MdAdd, MdRemove, MdSend, MdWifi, MdWifiOff, MdClose } from "react-icons/md";
 
-const ControlPanel = ({
-  isPanelOpen,
-  setIsPanelOpen,
-  isConnectedToPublic,
-  onConnectionToggle,
-  rawTransaction,
-  setRawTransaction,
-  onSendRawTransaction,
-  transactions,
-  onAddTransaction,
-  onRemoveTransaction,
-  newTxid,
-  setNewTxid,
-  selectedColor,
-  setSelectedColor,
-  networkStatus,
-  PANEL_WIDTH,
-  TRANSACTION_COLORS
+const ControlPanel = ({ 
+  isPanelOpen, setIsPanelOpen, isConnectedToPublic, onConnectionToggle, rawTransaction, setRawTransaction, onSendRawTransaction,
+  transactions, onAddTransaction, onRemoveTransaction, newTxid, setNewTxid, selectedColor, setSelectedColor,
+  networkStatus, PANEL_WIDTH, TRANSACTION_COLORS 
 }) => {
+  
   // Control panel functions - now use props handlers
   const handleSendRawTransaction = () => {
     if (rawTransaction.trim() && onSendRawTransaction) {
@@ -94,7 +65,7 @@ const ControlPanel = ({
     >
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
         <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
-          Control Panel
+          Valdymo Skydas
         </Typography>
         <IconButton 
           onClick={() => setIsPanelOpen(false)}
@@ -118,7 +89,7 @@ const ControlPanel = ({
           label={
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               {isConnectedToPublic ? <MdWifi /> : <MdWifiOff />}
-              {isConnectedToPublic ? 'Connected to Public Network' : 'Disconnected from Public Network'}
+              {isConnectedToPublic ? 'Prisijungę prie viešo tinklo' : 'Atjungę nuo viešo tinklo'}
             </Box>
           }
         />
@@ -127,8 +98,8 @@ const ControlPanel = ({
           sx={{ mt: 1, fontSize: '0.8rem' }}
         >
           {isConnectedToPublic 
-            ? 'Receiving blocks from public network' 
-            : 'Operating in private mode only'
+            ? 'Mazgas operuoja viešai' 
+            : 'Mazgas operuoja privačiai'
           }
         </Alert>
         
@@ -136,7 +107,7 @@ const ControlPanel = ({
         {networkStatus && (
           <Box sx={{ mt: 2 }}>
             <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 1 }}>
-              Network Status:
+              Tinklų Būsena:
             </Typography>
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, fontSize: '0.75rem' }}>
               {networkStatus.connection && (
@@ -146,45 +117,33 @@ const ControlPanel = ({
               )}
               {networkStatus.publicTip && (
                 <Typography variant="caption" color="text.secondary">
-                  Public Tip: Height {networkStatus.publicTip.height} 
+                  Viešo tinklo viršūnės aukštis: {networkStatus.publicTip.height} 
                   {networkStatus.publicTip.available ? ' ✅' : ' ❌'}
                 </Typography>
               )}
               {networkStatus.privateTip && (
                 <Typography variant="caption" color="text.secondary">
-                  Private Tip: Height {networkStatus.privateTip.height}
+                  Privataus mazgo viršūnės aukštis: {networkStatus.privateTip.height}
                   {networkStatus.privateTip.available ? ' ✅' : ' ❌'}
                 </Typography>
               )}
-              <Typography variant="caption" color="primary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                <Box
-                  sx={{
-                    width: 8,
-                    height: 8,
-                    borderRadius: '50%',
-                    backgroundColor: 'success.main',
-                    animation: 'pulse 2s infinite'
-                  }}
-                />
-                Auto-sync active
-              </Typography>
             </Box>
           </Box>
         )}
       </Box>
 
-      <Divider sx={{ mb: 3 }} />
+      <Divider sx={{ mb: 2 }} />
 
       {/* Send Raw Transaction */}
       <Box sx={{ mb: 3 }}>
         <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 'bold' }}>
-          Send Raw Transaction to Private Network
+          Siųsti Transakciją į Privatų Mazgą
         </Typography>
         <TextField
           fullWidth
           multiline
           rows={3}
-          placeholder="Enter raw transaction hex..."
+          placeholder="Įveskite transakciją HEX formatu..."
           value={rawTransaction}
           onChange={(e) => setRawTransaction(e.target.value)}
           variant="outlined"
@@ -199,7 +158,7 @@ const ControlPanel = ({
           startIcon={<MdSend />}
           sx={{ backgroundColor: '#1976d2' }}
         >
-          Send Transaction
+          Siųsti Transakciją
         </Button>
       </Box>
 
@@ -208,14 +167,14 @@ const ControlPanel = ({
       {/* Transaction Tracking */}
       <Box>
         <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 'bold' }}>
-          Transaction Tracking
+          Transakcijų Sekimas
         </Typography>
         
         {/* Add New Transaction */}
         <Box sx={{ mb: 2 }}>
           <TextField
             fullWidth
-            placeholder="Enter transaction ID..."
+            placeholder="Įveskite transakcijos ID..."
             value={newTxid}
             onChange={(e) => setNewTxid(e.target.value)}
             variant="outlined"
@@ -224,7 +183,7 @@ const ControlPanel = ({
           />
           <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
             <FormControl size="small" sx={{ flex: 1 }}>
-              <InputLabel>Color</InputLabel>
+              <InputLabel>Spalva</InputLabel>
               <Select
                 value={selectedColor}
                 onChange={(e) => setSelectedColor(e.target.value)}
@@ -263,11 +222,11 @@ const ControlPanel = ({
         {/* Tracked Transactions List */}
         <Box>
           <Typography variant="body2" sx={{ mb: 1, color: 'text.secondary' }}>
-            Tracked Transactions ({transactions.length})
+            Sekamos Transakcijos ({transactions.length})
           </Typography>
           {transactions.length === 0 ? (
             <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
-              No transactions being tracked
+              Nesekama nei viena transakcija
             </Typography>
           ) : (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -299,7 +258,7 @@ const ControlPanel = ({
                   <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
                     {tx.blocks && tx.blocks.length > 0 
                       ? `Found in ${tx.blocks.length} block(s)`
-                      : 'Not found in any blocks yet'
+                      : 'Nerasta nei viename bloke'
                     }
                   </Typography>
                 </Box>
