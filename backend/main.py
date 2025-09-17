@@ -145,7 +145,8 @@ UTXO_NETWORK_CONFIGS = {
         'short_name': "tLTC4",
         'full_name': 'Litecoin Testnet4',
         'network': 'testnet',
-        'electrum_server': 'electrum-ltc.bysh.me:51002',
+        # 'electrum_server': 'electrum-ltc.bysh.me:51002',
+        'electrum_server': 'faucet-electrumx:50002',
         'block_explorer': 'https://litecoinspace.org/testnet'
     }
 }

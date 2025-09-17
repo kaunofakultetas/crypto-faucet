@@ -210,3 +210,20 @@ services:
 
 
 
+  # https://github.com/spesmilo/electrumx/blob/master/docs/environment.rst
+  # https://github.com/spesmilo/electrumx/blob/master/src/electrumx/lib/coins.py
+  faucet-electrumx:
+    container_name: faucet-electrumx
+    image: lukechilds/electrumx:v1.18.0
+    ports:
+      - "51002:50002"
+    volumes:
+      - ./litecoind-public/electrumx:/data
+    environment:
+      - COIN=Litecoin
+      - NET=testnet
+      - DAEMON_URL=http://admin:admin@faucet-litecoind-public:19332
+    restart: unless-stopped
+
+
+
