@@ -184,8 +184,25 @@ const Navbar = () => {
           )}
         </div>
 
+
         {/* Spacer pushes dropdown to the right edge */}
         <div className="ml-auto" />
+
+
+        {/* --- Vaizdo Įrašai --- */}
+        <Button
+          component={Link}
+          to="/videos"
+          variant="outlined"
+          sx={{
+            color: 'white',
+            borderColor: 'white',
+            '&:hover': { borderColor: 'white', backgroundColor: '#78003F' },
+          }}
+        >
+          Vaizdo Įrašai
+        </Button>
+
 
         {/* --- MUI Dropdown “Kiti Įrankiai” --- */}
         <Button

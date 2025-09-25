@@ -264,9 +264,15 @@ const SHA256Train = () => {
             </Select>
           </FormControl>
 
-          <Button variant="contained" color="primary" onClick={() => loadExampleBlockchain()}>
-            Užkrauti pavyzdinę blokų grandinę
-          </Button>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+            <Button variant="contained" color="primary" onClick={() => loadExampleBlockchain()}>
+              Užkrauti pavyzdinę blokų grandinę
+            </Button>
+
+            <Button variant="contained" color="primary" onClick={() => window.open('https://emn178.github.io/online-tools/sha256.html', '_blank')}>
+              SHA256 Online Įrankis
+            </Button>
+          </Box>
         </RoundedBox>
 
         {/* Main Blockchain Content */}

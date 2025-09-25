@@ -20,61 +20,6 @@ class ReorgDatabase:
     Database operations for reorg attack system
     """
 
-    @staticmethod
-    def create_tables():
-        """
-        Create the blockchain-related tables if they don't exist
-        """
-
-        with get_db_connection() as conn:
-
-            # Create Blockchain_Blocks table (without Network and Source columns)
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS "Blockchain_Blocks" (
-                    "Height"	INTEGER NOT NULL,
-                    "Hash"	TEXT NOT NULL UNIQUE,
-                    "PrevHash"	TEXT NOT NULL,
-                    "CoinbaseMessage"	TEXT NOT NULL,
-                    "Date"	TEXT NOT NULL,
-                    "Time"	TEXT NOT NULL,
-                    "ScryptHash"	TEXT NOT NULL,
-                    "Chainwork"	REAL NOT NULL,
-                    PRIMARY KEY("Hash")
-                )
-            ''')
-            
-            # Create indexes for better performance
-            conn.execute('''
-                CREATE INDEX IF NOT EXISTS idx_blocks_height ON Blockchain_Blocks(Height)
-            ''')
-            conn.execute('''
-                CREATE INDEX IF NOT EXISTS idx_blocks_date ON Blockchain_Blocks(Date)
-            ''')
-            conn.execute('''
-                CREATE INDEX IF NOT EXISTS idx_blocks_coinbase ON Blockchain_Blocks(CoinbaseMessage)
-            ''')
-            
-            # Create Blockchain_Transactions table
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS "Blockchain_Transactions" (
-                    "TXID"	TEXT NOT NULL UNIQUE,
-                    "Inputs"	TEXT NOT NULL,
-                    "Outputs"	TEXT NOT NULL,
-                    PRIMARY KEY("TXID")
-                )
-            ''')
-            
-            # Create Blockchain_TxInBlocks table
-            conn.execute('''
-                CREATE TABLE IF NOT EXISTS "Blockchain_TxInBlocks" (
-                    "TXID"	TEXT NOT NULL,
-                    "BlockHash"	TEXT NOT NULL,
-                    UNIQUE("TXID","BlockHash")
-                )
-            ''')
-            conn.commit()
-
-
 
     @staticmethod
     def get_existing_block_hashes(date=None) -> set:
@@ -114,11 +59,11 @@ class ReorgDatabase:
                 txid = row[0]
                 
                 # Get blocks associated with this transaction
-                conn.execute('''
+                sqlFetchData = conn.execute('''
                     SELECT BlockHash FROM Blockchain_TxInBlocks WHERE TXID = ?
                 ''', (txid,))
                 
-                blocks = [block[0] for block in conn.fetchall()]
+                blocks = [block[0] for block in sqlFetchData.fetchall()]
                 
                 transactions.append({
                     'txid': txid,
@@ -190,13 +135,9 @@ class ReorgAttackManager:
     Main manager for reorg attack operations
     """
     
-
     def __init__(self, config: Dict):
         self.config = config
         self.depth_per_sync = 100
-        
-        # Initialize database
-        ReorgDatabase.create_tables()
         
         # Initialize RPC clients
         self.public_rpc = FullNodeRPC(self.config['publicside'])
@@ -216,7 +157,8 @@ class ReorgAttackManager:
         # Step 1: Sync recent data before returning
         self.private_rpc.sync_recent_blocks(self.depth_per_sync)
         self.public_rpc.sync_recent_blocks(self.depth_per_sync)
-        
+
+
 
         # Step 2: Get blocks from database
         all_blocks = []
@@ -242,13 +184,28 @@ class ReorgAttackManager:
             all_blocks = json.loads(sqlFetchData.fetchone()[0])
 
 
+
+        # Step 3: Sync tracked transactions
+        all_tracked_txids = []
+        with get_db_connection() as conn:
+            sqlFetchData = conn.execute('''
+                SELECT TXID FROM Blockchain_Transactions
+            ''')
+            all_tracked_txids = [row[0] for row in sqlFetchData.fetchall()]
+        self.public_rpc.sync_tracked_transactions(all_tracked_txids)
+        self.private_rpc.sync_tracked_transactions(all_tracked_txids)
+
+
+
         # Step 4: Get tracked transactions
         tracked_transactions = ReorgDatabase.get_all_tracked_transactions()
+
 
 
         # Step 5: Get tips
         public_tip = self.public_rpc.get_tip_info()
         private_tip = self.private_rpc.get_tip_info()
+
 
 
         # Step 6: Return data
@@ -270,7 +227,6 @@ class ReorgAttackManager:
         """
         Get comprehensive network status including tips
         """
-        
         # Get connection status from full node
         connection_status = self.fullnode_connections.get_connection_status()
         
@@ -294,7 +250,7 @@ class ReorgAttackManager:
         Send raw transaction to private network
         """
         try:
-            txid = self.fullnode_rpc.send_raw_transaction(raw_tx)
+            txid = self.private_rpc.send_raw_transaction(raw_tx)
             return {
                 'success': True,
                 'message': 'Transaction sent successfully',
@@ -313,28 +269,28 @@ class ReorgAttackManager:
         Track a transaction
         """
         
-        inputs_json = "[]"
-        outputs_json = "[]"
+        inputs_json = None
+        outputs_json = None
         found_blocks = []
-        
+
 
         # Step 1: Get transaction info from private network
-        private_tx_info = self.fullnode_rpc.get_raw_transaction(txid)
-        inputs_json = json.dumps(private_tx_info.get("vin", []))
-        outputs_json = json.dumps(private_tx_info.get("vout", []))
-        
+        private_tx_info = self.private_rpc.get_raw_transaction(txid)
+        if(inputs_json is None and outputs_json is None):
+            inputs_json = json.dumps(private_tx_info.get("vin", []))
+            outputs_json = json.dumps(private_tx_info.get("vout", []))
         if "blockhash" in private_tx_info:
             found_blocks.append(private_tx_info["blockhash"])
-                
 
-        # Step 2: Get from public network via Electrum
-        if self.electrum_rpc:
-            public_tx_info = self.electrum_rpc.get_transaction(txid)
+
+
+        # Step 2: Get transaction info from public network
+        public_tx_info = self.public_rpc.get_raw_transaction(txid)
+        if(inputs_json is None and outputs_json is None):
             inputs_json = json.dumps(public_tx_info.get("vin", []))
             outputs_json = json.dumps(public_tx_info.get("vout", []))
-            
-            if "blockhash" in public_tx_info:
-                found_blocks.append(public_tx_info["blockhash"])
+        if "blockhash" in public_tx_info:
+            found_blocks.append(public_tx_info["blockhash"])
                     
         
 
@@ -342,17 +298,15 @@ class ReorgAttackManager:
         with get_db_connection() as conn:
             conn.execute('''
                 INSERT OR REPLACE INTO Blockchain_Transactions (TXID, Inputs, Outputs, Color)
-                VALUES (?, ?, ?)
+                VALUES (?, ?, ?, ?)
             ''', (txid, inputs_json, outputs_json, color))
             
             for block_hash in found_blocks:
                 conn.execute('''
-                    INSERT OR IGNORE INTO Blockchain_TxInBlocks 
-                    (TXID, BlockHash)
+                    INSERT OR IGNORE INTO Blockchain_TxInBlocks (TXID, BlockHash)
                     VALUES (?, ?)
                 ''', (txid, block_hash))
             conn.commit()
-
 
         return {
             'success': True,

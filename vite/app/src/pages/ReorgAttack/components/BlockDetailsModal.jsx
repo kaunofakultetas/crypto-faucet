@@ -1,8 +1,7 @@
 import React from 'react';
 import { Dialog, DialogTitle, DialogContent, DialogActions, Button, IconButton, Box, Typography, Chip, Divider, Tooltip } from '@mui/material';
 import { Close as CloseIcon, ContentCopy as ContentCopyIcon } from '@mui/icons-material';
-import { SiHackaday } from "react-icons/si";
-import { BiWorld } from "react-icons/bi";
+
 
 const BlockDetailsModal = ({ 
   open, 
@@ -166,54 +165,27 @@ const BlockDetailsModal = ({
           <>
             <Divider sx={{ my: 2 }} />
             <Box>
-              <Typography variant="h6" sx={{ mb: 2, color: 'primary.main' }}>
-                Sekamos Transakcijos ({transactions.length})
+              <Typography variant="h6" sx={{ mb: 2, color: 'black' }}>
+                Sekamos Transakcijos
               </Typography>
               <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
                 {transactions.map((tx, idx) => (
-                  <Tooltip key={idx} title={`Transakcija ${idx + 1}`}>
-                    <Chip
-                      label={`TX ${idx + 1}`}
-                      size="small"
-                      sx={{
-                        bgcolor: tx.color,
-                        color: 'white',
-                        '&:hover': {
-                          opacity: 0.8
-                        }
-                      }}
-                    />
-                  </Tooltip>
+                  <Chip
+                    label={tx.txid}
+                    size="small"
+                    sx={{
+                      bgcolor: tx.color,
+                      color: 'white',
+                      '&:hover': {
+                        opacity: 0.8
+                      }
+                    }}
+                  />
                 ))}
               </Box>
             </Box>
           </>
         )}
-
-
-        {/* Transakcijos */}
-        <Divider sx={{ my: 2 }} />
-        <Box>
-          <Typography variant="h6" sx={{ mb: 1 }}>
-            Sekamos Transakcijos
-          </Typography>
-          <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-            {transactions.length === 0 ? (
-              <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
-                Šiame bloke sekamų transakcijų nėra
-              </Typography>
-            ) : (
-              transactions.map((tx, idx) => (
-                <Chip
-                  key={idx}
-                  label={`TX ${idx + 1}`}
-                  size="small"
-                />
-              ))
-            )}
-            
-          </Box>
-        </Box>
 
 
       </DialogContent>

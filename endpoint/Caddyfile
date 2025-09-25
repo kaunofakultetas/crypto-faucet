@@ -58,6 +58,18 @@
             reverse_proxy faucet-backend:8000
         }
 
+        # VIDEOS
+        redir /served/videos /served/videos/
+        handle /served/videos/* {
+            root * /var/www/videos
+            uri strip_prefix /served/videos
+            file_server browse
+            header {
+                Cache-Control "public, max-age=86400"
+                -Pragma
+            }
+        }
+
         # VITE
         handle /* {
             reverse_proxy faucet-vite:80

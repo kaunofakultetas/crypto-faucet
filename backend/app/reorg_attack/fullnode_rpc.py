@@ -14,7 +14,7 @@ from datetime import datetime
 from app.database.db import get_db_connection
 import scrypt
 import math
-
+import json
 
 
 
@@ -319,7 +319,29 @@ class FullNodeRPC:
         return False
 
                     
+    def sync_tracked_transactions(self, txids: List[str]) -> bool:
+        """
+        Sync tracked transactions
+        """
+        print(f"[*] Syncing tracked transactions from full node...")
+        for txid in txids:
+            found_blocks = []
+            
+            # Step 1: Get transaction info from private network
+            private_tx_info = self.get_raw_transaction(txid)
+            if "blockhash" in private_tx_info:
+                found_blocks.append(private_tx_info["blockhash"])
 
+
+            # Step 2: Store transaction data
+            with get_db_connection() as conn:
+                for block_hash in found_blocks:
+                    conn.execute('''
+                        INSERT OR IGNORE INTO Blockchain_TxInBlocks (TXID, BlockHash)
+                        VALUES (?, ?)
+                    ''', (txid, block_hash))
+                conn.commit()
+        return True
 
 
 

@@ -329,7 +329,7 @@ def add_transaction_tracking():
         txid = data['txid']
         color = data.get('color', 'blue')
         
-        result = reorg_manager.add_transaction_tracking(txid, color)
+        result = reorg_manager.track_transaction(txid, color)
         
         status_code = 201 if result['success'] else 500
         return jsonify(result), status_code

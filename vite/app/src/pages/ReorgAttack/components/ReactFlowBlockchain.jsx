@@ -192,6 +192,7 @@ const nodeTypes = {
 
 
 const ReactFlowBlockchain = ({ chainBlocks = [], chainTips = {}, transactions = [] }) => {
+
   // Add modal state
   const [selectedBlock, setSelectedBlock] = React.useState(null);
   const [modalOpen, setModalOpen] = React.useState(false);
@@ -254,9 +255,7 @@ const ReactFlowBlockchain = ({ chainBlocks = [], chainTips = {}, transactions = 
     console.log('Finding best block by chainWork among all blocks...');
     allBlocks.forEach(block => {
       const blockChainWork = Number(block.chainWork) || 0;
-      
-      console.log(`Checking block ${block.hash.slice(0, 8)}: chainWork = ${blockChainWork}`);
-      
+            
       if (blockChainWork > bestBlockWork) {
         bestBlockWork = blockChainWork;
         winningChainHash = block.hash;
@@ -328,7 +327,7 @@ const ReactFlowBlockchain = ({ chainBlocks = [], chainTips = {}, transactions = 
         
         // Find transactions for this block
         const blockTransactions = transactions.filter(tx => 
-          block.transactions && block.transactions.includes(tx.txid)
+          tx.blocks && tx.blocks.includes(block.hash)
         ) || [];
         
         nodes.push({
@@ -406,7 +405,7 @@ const ReactFlowBlockchain = ({ chainBlocks = [], chainTips = {}, transactions = 
   return (
     <Box sx={{ width: '100%', border: '1px solid #1976d2', borderRadius: 1 }}>
       
-      <Box sx={{ height: 'calc(100vh - 205px)', bgcolor: '#f5f5f5' }}>
+      <Box sx={{ height: 'calc(100vh - 215px)', bgcolor: '#f5f5f5' }}>
         {flowNodes.length > 0 ? (
           <ReactFlow
             nodes={flowNodes}

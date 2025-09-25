@@ -25,7 +25,7 @@ import GraphPage from './pages/Graph/Page';
 import BlockchainSimulatorPage from './pages/BlockchainSimulator/Page';
 import DappsServerPage from './pages/DappsServer/Page';
 import ReorgAttackPage from './pages/ReorgAttack/Page';
-
+import VideosPage from './pages/Videos/Page';
 
 
 function DynamicDefaultRedirect() {
@@ -89,6 +89,9 @@ createRoot(document.getElementById('root')).render(
 
               {/* 51% Attack Routes */}
               <Route path="reorgattack" element={<ReorgAttackPage />} />
+
+              {/* Videos Page */}
+              <Route path="videos" element={<VideosPage />} />
 
             </Routes>
           </Box>
