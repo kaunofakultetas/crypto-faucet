@@ -19,6 +19,20 @@ from bitcoinlib.transactions import Transaction, Output, Input
 import bech32
 
 
+class NetworkContext:
+    """Holds network-specific context for a single request (thread-safe)."""
+    def __init__(self):
+        self.network = None
+        self.coin_type = None
+        self.key = None
+        self.address = None
+        self.scripthash = None
+        self.electrum_host = None
+        self.electrum_port = None
+        self.ssock = None
+        self.chunk_size_btc = None
+
+
 class UTXOFaucet:
     """
     UTXO-based cryptocurrency faucet supporting Bitcoin and Litecoin networks.
@@ -37,23 +51,6 @@ class UTXOFaucet:
         
         # Request tracking for cooldown
         self.last_request = {}
-        
-        # Current wallet context (set per network request)
-        self._reset_context()
-    
-
-
-    def _reset_context(self):
-        """Reset wallet context for a new network request."""
-        self.network = None
-        self.coin_type = None
-        self.key = None
-        self.address = None
-        self.scripthash = None
-        self.electrum_host = None
-        self.electrum_port = None
-        self.ssock = None
-        self.chunk_size_btc = None
     
 
 
@@ -85,28 +82,28 @@ class UTXOFaucet:
     
 
 
-    def _get_hrp(self) -> str:
+    def _get_hrp(self, network: str, coin_type: str) -> str:
         """Get Human Readable Part for bech32 encoding based on network and coin type."""
-        if self.coin_type == 'litecoin':
-            if self.network in ('testnet', 'litecoin_testnet'):
+        if coin_type == 'litecoin':
+            if network in ('testnet', 'litecoin_testnet'):
                 return 'tltc'
-            elif self.network in ('regtest', 'litecoin_regtest'):
+            elif network in ('regtest', 'litecoin_regtest'):
                 return 'rltc'
             else:
                 return 'ltc'  # mainnet
         else:  # bitcoin
-            if self.network in ('testnet', 'bitcoin_testnet'):
+            if network in ('testnet', 'bitcoin_testnet'):
                 return 'tb'
-            elif self.network in ('regtest', 'bitcoin_regtest'):
+            elif network in ('regtest', 'bitcoin_regtest'):
                 return 'bcrt'
             else:
                 return 'bc'  # mainnet
     
 
 
-    def _create_bech32_address(self, pubkey_hash: bytes) -> str:
+    def _create_bech32_address(self, pubkey_hash: bytes, network: str, coin_type: str) -> str:
         """Create bech32 address from public key hash."""
-        hrp = self._get_hrp()
+        hrp = self._get_hrp(network, coin_type)
         converted = bech32.convertbits(pubkey_hash, 8, 5)
         return bech32.bech32_encode(hrp, [0] + converted)
     
@@ -158,8 +155,10 @@ class UTXOFaucet:
             else:  # testnet
                 return 'testnet'
 
-    def _setup_wallet_for_network(self, network_key: str):
+    def _setup_wallet_for_network(self, network_key: str) -> NetworkContext:
         """Initialize wallet context for the specified network."""
+        ctx = NetworkContext()
+        
         # Get network configuration
         config = self.network_configs.get(network_key)
         if not config:
@@ -167,19 +166,19 @@ class UTXOFaucet:
         
         # Use explicit network type from config
         generic_network = config.get('network', 'testnet')
-        self.coin_type = self._get_coin_type_from_key(network_key)
+        ctx.coin_type = self._get_coin_type_from_key(network_key)
         
         # Get the specific network name that bitcoinlib expects
-        self.network = self._get_bitcoinlib_network_name(generic_network, self.coin_type)
+        ctx.network = self._get_bitcoinlib_network_name(generic_network, ctx.coin_type)
         
         # Setup Electrum server connection
         electrum_server = config.get('electrum_server', '')
         if ':' in electrum_server:
-            self.electrum_host, port_str = electrum_server.split(':', 1)
-            self.electrum_port = int(port_str)
+            ctx.electrum_host, port_str = electrum_server.split(':', 1)
+            ctx.electrum_port = int(port_str)
         else:
-            self.electrum_host = electrum_server
-            self.electrum_port = 50002  # Default Electrum port
+            ctx.electrum_host = electrum_server
+            ctx.electrum_port = 50002  # Default Electrum port
         
         # Initialize wallet from private key
         if not self.faucet_private_key:
@@ -188,45 +187,47 @@ class UTXOFaucet:
         try:
             # Convert Ethereum hex private key to Bitcoin format
             btc_private_key = self._convert_ethereum_key_to_bitcoin(self.faucet_private_key)
-            self.key = HDKey(import_key=btc_private_key, network=self.network)
+            ctx.key = HDKey(import_key=btc_private_key, network=ctx.network)
         except Exception as e:
-            raise ValueError(f'Invalid private key for network {self.network}: {e}')
+            raise ValueError(f'Invalid private key for network {ctx.network}: {e}')
         
         # Generate address and scripthash
-        pubkey = self.key.public_byte
+        pubkey = ctx.key.public_byte
         pubkey_hash = self._hash160(pubkey)
-        self.address = self._create_bech32_address(pubkey_hash)
-        self.scripthash = self._bech32_address_to_scripthash(self.address)
+        ctx.address = self._create_bech32_address(pubkey_hash, ctx.network, ctx.coin_type)
+        ctx.scripthash = self._bech32_address_to_scripthash(ctx.address)
 
         # Determine chunk size for this network (fallback to env default)
-        self.chunk_size_btc = float(config.get('chunk_size', self.default_amount_btc))
+        ctx.chunk_size_btc = float(config.get('chunk_size', self.default_amount_btc))
+        
+        return ctx
     
 
 
-    def _connect_electrum(self):
+    def _connect_electrum(self, ctx: NetworkContext):
         """Connect to Electrum server."""
-        if not self.electrum_host or not self.electrum_port:
+        if not ctx.electrum_host or not ctx.electrum_port:
             raise ValueError('Electrum server not configured')
         
-        sock = socket.create_connection((self.electrum_host, self.electrum_port))
+        sock = socket.create_connection((ctx.electrum_host, ctx.electrum_port))
         context = ssl.create_default_context()
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
-        self.ssock = context.wrap_socket(sock, server_hostname=self.electrum_host)
+        ctx.ssock = context.wrap_socket(sock, server_hostname=ctx.electrum_host)
     
 
 
-    def _disconnect_electrum(self):
+    def _disconnect_electrum(self, ctx: NetworkContext):
         """Disconnect from Electrum server."""
-        if self.ssock:
-            self.ssock.close()
-            self.ssock = None
+        if ctx.ssock:
+            ctx.ssock.close()
+            ctx.ssock = None
     
 
 
-    def _send_electrum_request(self, method: str, params: list):
+    def _send_electrum_request(self, ctx: NetworkContext, method: str, params: list):
         """Send JSON-RPC request to Electrum server."""
-        if not self.ssock:
+        if not ctx.ssock:
             raise ConnectionError("Not connected to Electrum server")
         
         request = {
@@ -236,12 +237,15 @@ class UTXOFaucet:
             "params": params
         }
         
-        self.ssock.sendall((json.dumps(request) + "\n").encode("utf-8"))
+        # Start timing
+        start_time = time.time()
+        
+        ctx.ssock.sendall((json.dumps(request) + "\n").encode("utf-8"))
         
         # Read response until we get a complete line (JSON-RPC messages end with \n)
         response_data = b""
         while True:
-            chunk = self.ssock.recv(1024)
+            chunk = ctx.ssock.recv(1024)
             if not chunk:
                 raise ConnectionError("Connection closed by server")
             response_data += chunk
@@ -249,6 +253,10 @@ class UTXOFaucet:
                 # Get the first complete message
                 response_line = response_data.split(b'\n', 1)[0]
                 break
+        
+        # Calculate elapsed time
+        elapsed_time = time.time() - start_time
+        print(f"[DEBUG] Electrum request '{method}' took {elapsed_time:.3f}s (network: {ctx.network})")
         
         try:
             response = json.loads(response_line.decode('utf-8'))
@@ -265,9 +273,9 @@ class UTXOFaucet:
     
 
 
-    def _get_balance(self) -> dict:
+    def _get_balance(self, ctx: NetworkContext) -> dict:
         """Get balance information in BTC."""
-        result = self._send_electrum_request("blockchain.scripthash.get_balance", [self.scripthash])
+        result = self._send_electrum_request(ctx, "blockchain.scripthash.get_balance", [ctx.scripthash])
         confirmed = result.get("confirmed", 0) / 1e8
         unconfirmed = result.get("unconfirmed", 0) / 1e8
         total = confirmed + unconfirmed
@@ -280,13 +288,13 @@ class UTXOFaucet:
     
 
 
-    def _get_utxos(self) -> list:
+    def _get_utxos(self, ctx: NetworkContext) -> list:
         """Get unspent transaction outputs."""
-        return self._send_electrum_request("blockchain.scripthash.listunspent", [self.scripthash])
+        return self._send_electrum_request(ctx, "blockchain.scripthash.listunspent", [ctx.scripthash])
     
 
 
-    def _create_inputs(self, utxos: list, target_amount_sat: int = None) -> tuple:
+    def _create_inputs(self, ctx: NetworkContext, utxos: list, target_amount_sat: int = None) -> tuple:
         """Create transaction inputs from UTXOs."""
         inputs = []
         total_input = 0
@@ -299,9 +307,9 @@ class UTXOFaucet:
                 prev_txid=utxo['tx_hash'],
                 output_n=utxo['tx_pos'],
                 value=utxo['value'],
-                address=self.address,
+                address=ctx.address,
                 script_type='p2wpkh',
-                network=self.network
+                network=ctx.network
             )
             inputs.append(input_obj)
             total_input += utxo['value']
@@ -318,24 +326,24 @@ class UTXOFaucet:
     
 
 
-    def _create_and_broadcast_transaction(self, to_address: str, amount_sat: int) -> str:
+    def _create_and_broadcast_transaction(self, ctx: NetworkContext, to_address: str, amount_sat: int) -> str:
         """Create, sign and broadcast a cryptocurrency transaction."""
-        utxos = self._get_utxos()
+        utxos = self._get_utxos(ctx)
         if not utxos:
             raise ValueError("No UTXOs available")
         
-        inputs, total_input = self._create_inputs(utxos, amount_sat)
+        inputs, total_input = self._create_inputs(ctx, utxos, amount_sat)
         if total_input < amount_sat:
             raise ValueError("Insufficient funds")
         
         # Calculate fee and create outputs
         fee = self._estimate_fee(len(inputs), 2)  # Assuming 2 outputs (recipient + change)
-        outputs = [Output(amount_sat, to_address, network=self.network)]
+        outputs = [Output(amount_sat, to_address, network=ctx.network)]
         
         # Add change output if economical
         change = total_input - amount_sat - fee
         if change > 546:  # Dust threshold
-            outputs.append(Output(change, self.address, network=self.network))
+            outputs.append(Output(change, ctx.address, network=ctx.network))
         else:
             # Add dust to fee
             fee += change
@@ -344,24 +352,24 @@ class UTXOFaucet:
         tx = Transaction(
             inputs=inputs, 
             outputs=outputs, 
-            network=self.network, 
+            network=ctx.network, 
             witness_type='segwit'
         )
-        tx.sign(self.key)
+        tx.sign(ctx.key)
         
         # Broadcast transaction
         raw_tx = tx.raw_hex()
-        return self._send_electrum_request("blockchain.transaction.broadcast", [raw_tx])
+        return self._send_electrum_request(ctx, "blockchain.transaction.broadcast", [raw_tx])
     
 
 
-    def _validate_address(self, address: str) -> bool:
+    def _validate_address(self, ctx: NetworkContext, address: str) -> bool:
         """Validate address for current network and coin type."""
         if not address:
             return False
         
         address_lower = address.lower()
-        expected_hrp = self._get_hrp()
+        expected_hrp = self._get_hrp(ctx.network, ctx.coin_type)
         
         return address_lower.startswith(expected_hrp + '1')
     
@@ -391,33 +399,34 @@ class UTXOFaucet:
 
     def get_faucet_balance(self, network_key: str) -> tuple:
         """Get faucet balance for specified network."""
+        ctx = None
         try:
-            self._reset_context()
-            self._setup_wallet_for_network(network_key)
+            ctx = self._setup_wallet_for_network(network_key)
             
-            self._connect_electrum()
-            balance_info = self._get_balance()
+            self._connect_electrum(ctx)
+            balance_info = self._get_balance(ctx)
             
             return {
                 "balance": balance_info["total"],  # Total balance (confirmed + unconfirmed)
                 "balance_confirmed": balance_info["confirmed"],
                 "balance_unconfirmed": balance_info["unconfirmed"],
-                "address": self.address,
-                "chunk_size": float(self.chunk_size_btc or self.default_amount_btc)
+                "address": ctx.address,
+                "chunk_size": float(ctx.chunk_size_btc or self.default_amount_btc)
             }, 200
             
         except Exception as e:
             return {"error": str(e)}, 500
         finally:
-            self._disconnect_electrum()
+            if ctx:
+                self._disconnect_electrum(ctx)
     
 
 
     def request_crypto(self, network_key: str, to_address: str) -> tuple:
         """Send cryptocurrency to specified address."""
+        ctx = None
         try:
-            self._reset_context()
-            self._setup_wallet_for_network(network_key)
+            ctx = self._setup_wallet_for_network(network_key)
             
             # Validate inputs
             if not to_address:
@@ -425,10 +434,10 @@ class UTXOFaucet:
             
             to_address = to_address.strip()
             
-            if not self._validate_address(to_address):
+            if not self._validate_address(ctx, to_address):
                 return {"error": "Neteisingas adresas"}, 400
             
-            if to_address.lower() == self.address.lower():
+            if to_address.lower() == ctx.address.lower():
                 return {"error": "Negalima siųsti į čiaupo adresą"}, 400
             
             # Check cooldown
@@ -442,20 +451,20 @@ class UTXOFaucet:
                 }, 429
             
             # Validate amount (per-network chunk size)
-            if not self.chunk_size_btc or self.chunk_size_btc <= 0:
+            if not ctx.chunk_size_btc or ctx.chunk_size_btc <= 0:
                 return {"error": "chunk_size must be > 0 for this network"}, 500
             
             # Connect and check balance
-            self._connect_electrum()
+            self._connect_electrum(ctx)
             
-            balance_info = self._get_balance()
+            balance_info = self._get_balance(ctx)
             current_balance = balance_info["confirmed"]  # Use confirmed balance for sending
-            if current_balance < self.chunk_size_btc:
+            if current_balance < ctx.chunk_size_btc:
                 return {"error": "Čiaupas nebeturi kriptovaliutos. Praneškite dėstytojui."}, 503
             
             # Send transaction
-            amount_sat = int(float(self.chunk_size_btc) * 1e8)
-            tx_id = self._create_and_broadcast_transaction(to_address, amount_sat)
+            amount_sat = int(float(ctx.chunk_size_btc) * 1e8)
+            tx_id = self._create_and_broadcast_transaction(ctx, to_address, amount_sat)
             
             # Update cooldown tracking
             self.last_request[to_address.lower()] = now
@@ -463,13 +472,14 @@ class UTXOFaucet:
             return {
                 "message": "Cryptocurrency sent successfully",
                 "transaction_id": tx_id,
-                "amount": float(self.chunk_size_btc),
-                "from_address": self.address,
-                "network": self.network,
-                "coin_type": self.coin_type
+                "amount": float(ctx.chunk_size_btc),
+                "from_address": ctx.address,
+                "network": ctx.network,
+                "coin_type": ctx.coin_type
             }, 200
             
         except Exception as e:
             return {"error": "Nepavyko išsiųsti kriptovaliutą", "details": str(e)}, 500
         finally:
-            self._disconnect_electrum()
+            if ctx:
+                self._disconnect_electrum(ctx)
