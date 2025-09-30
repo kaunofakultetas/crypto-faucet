@@ -86,7 +86,7 @@ EVM_NETWORK_CONFIGS = {
         'id': 6,
         'chunk_size': 0.05,
         'chain_id': 560048,
-        'infura_network': 'hoodi',
+        'infura_network': 'https://rpc.hoodi.ethpandaops.io',
         'short_name': "ETH",
         'full_name': 'Ethereum Hoodi',
         'native_currency': {

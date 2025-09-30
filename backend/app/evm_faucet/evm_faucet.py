@@ -38,7 +38,12 @@ class EVMFaucet:
                 infura_url = f"https://{self.NETWORK_CONFIGS[network]['infura_network']}.infura.io/v3/{os.getenv('INFURA_PROJECT_ID')}"
             else:
                 infura_url = self.NETWORK_CONFIGS[network]['infura_network']
-            self.w3_instances[network] = Web3(Web3.HTTPProvider(infura_url))
+            
+            # Configure HTTPProvider with proper timeout and connection settings
+            request_kwargs = {
+                'timeout': 10  # 10 second timeout for all requests
+            }
+            self.w3_instances[network] = Web3(Web3.HTTPProvider(infura_url, request_kwargs=request_kwargs))
 
 
 
@@ -144,12 +149,36 @@ class EVMFaucet:
         if not self.is_supported_network(network):
             return {"error": f"Unsupported network: {network}"}, 400
 
+        # Check if faucet address is valid
+        if not self.FAUCET_ADDRESS:
+            logging.error("FAUCET_ADDRESS is None or empty")
+            return {"error": "Čiaupo adresas nesukonfigūruotas"}, 500
+
         w3 = self.w3_instances[network]
-        balance = w3.eth.get_balance(self.FAUCET_ADDRESS)
+        
+        # Log the request details
+        logging.info(f"Getting balance for network={network}, address={self.FAUCET_ADDRESS}")
+        
+        try:
+            # Check if web3 is connected
+            if not w3.is_connected():
+                logging.error(f"Web3 is not connected for network {network}")
+                return {"error": "Nepavyko prisijungti prie tinklo"}, 500
+            
+            balance = w3.eth.get_balance(self.FAUCET_ADDRESS)
+            balance_eth = float(w3.from_wei(balance, 'ether'))
+            
+            # Log the successful response
+            logging.info(f"Balance retrieved successfully: {balance_eth} ETH (raw: {balance} wei)")
+            
+        except Exception as e:
+            # Log the actual error for debugging while returning user-friendly message
+            logging.error(f"Failed to get faucet balance for network {network}: {type(e).__name__}: {e}")
+            return {"error": "Nepavyko gauti čiaupo balanso"}, 500
 
         return {
-            "balance": float(w3.from_wei(balance, 'ether')),
-            "address": (self.FAUCET_ADDRESS or "").lower(),
+            "balance": balance_eth,
+            "address": self.FAUCET_ADDRESS.lower(),
             "chunk_size": float(self.NETWORK_CONFIGS[network]['chunk_size'])
         }, 200
 
