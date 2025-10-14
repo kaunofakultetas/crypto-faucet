@@ -17,6 +17,8 @@ import hashlib
 from bitcoinlib.keys import HDKey
 from bitcoinlib.transactions import Transaction, Output, Input
 import bech32
+import ecdsa
+import struct
 
 
 class NetworkContext:
@@ -82,28 +84,22 @@ class UTXOFaucet:
     
 
 
-    def _get_hrp(self, network: str, coin_type: str) -> str:
-        """Get Human Readable Part for bech32 encoding based on network and coin type."""
-        if coin_type == 'litecoin':
-            if network in ('testnet', 'litecoin_testnet'):
-                return 'tltc'
-            elif network in ('regtest', 'litecoin_regtest'):
-                return 'rltc'
-            else:
-                return 'ltc'  # mainnet
-        else:  # bitcoin
-            if network in ('testnet', 'bitcoin_testnet'):
-                return 'tb'
-            elif network in ('regtest', 'bitcoin_regtest'):
-                return 'bcrt'
-            else:
-                return 'bc'  # mainnet
+    def _get_hrp(self, network: str, coin_type: str, network_key: str = None) -> str:
+        """Get Human Readable Part for bech32 encoding from network configuration."""
+        
+        if network_key and network_key in self.network_configs:
+            config_hrp = self.network_configs[network_key].get('hrp')
+            if config_hrp:
+                return config_hrp
+        
+        # If no HRP found in config, raise an error instead of falling back
+        raise ValueError(f"No HRP configured for network: {network_key}")
     
 
 
-    def _create_bech32_address(self, pubkey_hash: bytes, network: str, coin_type: str) -> str:
+    def _create_bech32_address(self, pubkey_hash: bytes, network: str, coin_type: str, network_key: str = None) -> str:
         """Create bech32 address from public key hash."""
-        hrp = self._get_hrp(network, coin_type)
+        hrp = self._get_hrp(network, coin_type, network_key)
         converted = bech32.convertbits(pubkey_hash, 8, 5)
         return bech32.bech32_encode(hrp, [0] + converted)
     
@@ -112,7 +108,7 @@ class UTXOFaucet:
     def _bech32_address_to_scripthash(self, address: str) -> str:
         """Convert bech32 address to scripthash for Electrum queries."""
         hrp, data = bech32.bech32_decode(address)
-        valid_hrps = ('tb', 'bc', 'bcrt', 'tltc', 'ltc', 'rltc')
+        valid_hrps = ('tb', 'bc', 'bcrt', 'tltc', 'ltc', 'rltc', 'knf')
         if hrp not in valid_hrps:
             raise ValueError('Invalid Bech32 address')
         
@@ -130,6 +126,8 @@ class UTXOFaucet:
         
         if 'ltc' in key_lower:
             return 'litecoin'
+        elif 'knf' in key_lower:
+            return 'knf'
         else:
             return 'bitcoin'
     
@@ -147,6 +145,9 @@ class UTXOFaucet:
                 return 'litecoin_regtest'
             else:  # testnet
                 return 'litecoin_testnet'
+        elif coin_lower == 'knf':
+            # For custom networks like KNF, use bitcoin mainnet as base but handle specially
+            return 'bitcoin'
         else:  # bitcoin
             if generic_lower == 'mainnet':
                 return 'bitcoin'
@@ -154,6 +155,8 @@ class UTXOFaucet:
                 return 'regtest'
             else:  # testnet
                 return 'testnet'
+
+
 
     def _setup_wallet_for_network(self, network_key: str) -> NetworkContext:
         """Initialize wallet context for the specified network."""
@@ -187,14 +190,19 @@ class UTXOFaucet:
         try:
             # Convert Ethereum hex private key to Bitcoin format
             btc_private_key = self._convert_ethereum_key_to_bitcoin(self.faucet_private_key)
-            ctx.key = HDKey(import_key=btc_private_key, network=ctx.network)
+            
+            # For custom networks like KNF, don't specify network in HDKey to avoid validation issues
+            if ctx.coin_type == 'knf':
+                ctx.key = HDKey(import_key=btc_private_key)
+            else:
+                ctx.key = HDKey(import_key=btc_private_key, network=ctx.network)
         except Exception as e:
             raise ValueError(f'Invalid private key for network {ctx.network}: {e}')
         
         # Generate address and scripthash
         pubkey = ctx.key.public_byte
         pubkey_hash = self._hash160(pubkey)
-        ctx.address = self._create_bech32_address(pubkey_hash, ctx.network, ctx.coin_type)
+        ctx.address = self._create_bech32_address(pubkey_hash, ctx.network, ctx.coin_type, network_key)
         ctx.scripthash = self._bech32_address_to_scripthash(ctx.address)
 
         # Determine chunk size for this network (fallback to env default)
@@ -303,14 +311,24 @@ class UTXOFaucet:
             if target_amount_sat and total_input >= target_amount_sat:
                 break
             
-            input_obj = Input(
-                prev_txid=utxo['tx_hash'],
-                output_n=utxo['tx_pos'],
-                value=utxo['value'],
-                address=ctx.address,
-                script_type='p2wpkh',
-                network=ctx.network
-            )
+            # For custom networks like KNF, don't specify network in Input to avoid validation issues
+            if ctx.coin_type == 'knf':
+                input_obj = Input(
+                    prev_txid=utxo['tx_hash'],
+                    output_n=utxo['tx_pos'],
+                    value=utxo['value'],
+                    address=ctx.address,
+                    script_type='p2wpkh'
+                )
+            else:
+                input_obj = Input(
+                    prev_txid=utxo['tx_hash'],
+                    output_n=utxo['tx_pos'],
+                    value=utxo['value'],
+                    address=ctx.address,
+                    script_type='p2wpkh',
+                    network=ctx.network
+                )
             inputs.append(input_obj)
             total_input += utxo['value']
         
@@ -332,20 +350,24 @@ class UTXOFaucet:
         if not utxos:
             raise ValueError("No UTXOs available")
         
+        # For KNF, use manual raw transaction construction
+        if ctx.coin_type == 'knf':
+            return self._create_and_broadcast_raw_transaction(ctx, to_address, amount_sat, utxos)
+        
+        # For Bitcoin/Litecoin, use bitcoinlib
         inputs, total_input = self._create_inputs(ctx, utxos, amount_sat)
         if total_input < amount_sat:
             raise ValueError("Insufficient funds")
         
         # Calculate fee and create outputs
-        fee = self._estimate_fee(len(inputs), 2)  # Assuming 2 outputs (recipient + change)
+        fee = self._estimate_fee(len(inputs), 2)
         outputs = [Output(amount_sat, to_address, network=ctx.network)]
         
         # Add change output if economical
         change = total_input - amount_sat - fee
-        if change > 546:  # Dust threshold
+        if change > 546:
             outputs.append(Output(change, ctx.address, network=ctx.network))
         else:
-            # Add dust to fee
             fee += change
         
         # Create and sign transaction
@@ -360,16 +382,155 @@ class UTXOFaucet:
         # Broadcast transaction
         raw_tx = tx.raw_hex()
         return self._send_electrum_request(ctx, "blockchain.transaction.broadcast", [raw_tx])
-    
 
 
-    def _validate_address(self, ctx: NetworkContext, address: str) -> bool:
+
+
+    def _create_and_broadcast_raw_transaction(self, ctx: NetworkContext, to_address: str, amount_sat: int, utxos: list) -> str:
+        """Create raw SegWit transaction for custom networks like KNF."""
+        
+        # Select UTXOs
+        selected_utxos = []
+        total_input = 0
+        for utxo in utxos:
+            selected_utxos.append(utxo)
+            total_input += utxo['value']
+            if total_input >= amount_sat:
+                break
+        
+        if total_input < amount_sat:
+            raise ValueError("Insufficient funds")
+        
+        # Calculate fee
+        fee = self._estimate_fee(len(selected_utxos), 2)
+        change = total_input - amount_sat - fee
+        
+        # Decode recipient address
+        to_hrp, to_data = bech32.bech32_decode(to_address)
+        to_decoded = bech32.convertbits(to_data[1:], 5, 8, False)
+        to_pubkey_hash = bytes(to_decoded)
+        
+        # Decode sender address (for change)
+        from_hrp, from_data = bech32.bech32_decode(ctx.address)
+        from_decoded = bech32.convertbits(from_data[1:], 5, 8, False)
+        from_pubkey_hash = bytes(from_decoded)
+        
+        # Build outputs
+        outputs = []
+        # Output 1: to recipient
+        outputs.append({
+            'amount': amount_sat,
+            'script_pubkey': b'\x00\x14' + to_pubkey_hash  # OP_0 + 20 bytes
+        })
+        
+        # Output 2: change (if economical)
+        if change > 546:
+            outputs.append({
+                'amount': change,
+                'script_pubkey': b'\x00\x14' + from_pubkey_hash
+            })
+        
+        # Build transaction
+        # Version (4 bytes, little endian)
+        tx_bytes = struct.pack('<I', 2)
+        
+        # Marker and flag for SegWit
+        tx_bytes += b'\x00\x01'
+        
+        # Input count
+        tx_bytes += bytes([len(selected_utxos)])
+        
+        # Inputs
+        for utxo in selected_utxos:
+            # Previous TX hash (32 bytes, reversed)
+            tx_bytes += bytes.fromhex(utxo['tx_hash'])[::-1]
+            # Previous output index (4 bytes, little endian)
+            tx_bytes += struct.pack('<I', utxo['tx_pos'])
+            # Script length (0 for SegWit)
+            tx_bytes += b'\x00'
+            # Sequence (4 bytes)
+            tx_bytes += b'\xff\xff\xff\xff'
+        
+        # Output count
+        tx_bytes += bytes([len(outputs)])
+        
+        # Outputs
+        for output in outputs:
+            # Amount (8 bytes, little endian)
+            tx_bytes += struct.pack('<Q', output['amount'])
+            # Script length
+            tx_bytes += bytes([len(output['script_pubkey'])])
+            # Script
+            tx_bytes += output['script_pubkey']
+        
+        # Witness data
+        for i, utxo in enumerate(selected_utxos):
+            # Sign this input
+            # Build sighash preimage for SegWit
+            hash_prevouts = hashlib.sha256(hashlib.sha256(
+                b''.join([bytes.fromhex(u['tx_hash'])[::-1] + struct.pack('<I', u['tx_pos']) for u in selected_utxos])
+            ).digest()).digest()
+            
+            hash_sequence = hashlib.sha256(hashlib.sha256(
+                b'\xff\xff\xff\xff' * len(selected_utxos)
+            ).digest()).digest()
+            
+            hash_outputs = hashlib.sha256(hashlib.sha256(
+                b''.join([struct.pack('<Q', o['amount']) + bytes([len(o['script_pubkey'])]) + o['script_pubkey'] for o in outputs])
+            ).digest()).digest()
+            
+            # Script code for p2wpkh: OP_DUP OP_HASH160 <20-byte-pubkey-hash> OP_EQUALVERIFY OP_CHECKSIG
+            script_code = b'\x19\x76\xa9\x14' + from_pubkey_hash + b'\x88\xac'
+            
+            # Sighash preimage
+            sighash_preimage = (
+                struct.pack('<I', 2) +  # version
+                hash_prevouts +
+                hash_sequence +
+                bytes.fromhex(utxo['tx_hash'])[::-1] +  # outpoint
+                struct.pack('<I', utxo['tx_pos']) +
+                script_code +
+                struct.pack('<Q', utxo['value']) +  # amount
+                b'\xff\xff\xff\xff' +  # sequence
+                hash_outputs +
+                struct.pack('<I', 0) +  # locktime
+                struct.pack('<I', 1)  # sighash type (SIGHASH_ALL)
+            )
+            
+            # Hash for signing
+            sighash = hashlib.sha256(hashlib.sha256(sighash_preimage).digest()).digest()
+            
+            # Sign with private key
+            sk = ecdsa.SigningKey.from_string(ctx.key.private_byte, curve=ecdsa.SECP256k1)
+            signature = sk.sign_digest(sighash, sigencode=ecdsa.util.sigencode_der_canonize)
+            
+            # Add witness (number of items: 2, signature + pubkey)
+            tx_bytes += b'\x02'  # 2 witness items
+            # Signature with SIGHASH_ALL byte
+            sig_with_hashtype = signature + b'\x01'
+            tx_bytes += bytes([len(sig_with_hashtype)]) + sig_with_hashtype
+            # Public key
+            pubkey = ctx.key.public_byte
+            tx_bytes += bytes([len(pubkey)]) + pubkey
+        
+        # Locktime (4 bytes)
+        tx_bytes += struct.pack('<I', 0)
+        
+        # Convert to hex
+        raw_tx = tx_bytes.hex()
+        
+        # Broadcast
+        return self._send_electrum_request(ctx, "blockchain.transaction.broadcast", [raw_tx])
+
+
+
+    def _validate_address(self, ctx: NetworkContext, address: str, network_key: str = None) -> bool:
         """Validate address for current network and coin type."""
         if not address:
             return False
         
         address_lower = address.lower()
-        expected_hrp = self._get_hrp(ctx.network, ctx.coin_type)
+        expected_hrp = self._get_hrp(ctx.network, ctx.coin_type, network_key)
         
         return address_lower.startswith(expected_hrp + '1')
     
@@ -434,7 +595,7 @@ class UTXOFaucet:
             
             to_address = to_address.strip()
             
-            if not self._validate_address(ctx, to_address):
+            if not self._validate_address(ctx, to_address, network_key):
                 return {"error": "Neteisingas adresas"}, 400
             
             if to_address.lower() == ctx.address.lower():

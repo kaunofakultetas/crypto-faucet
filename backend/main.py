@@ -121,35 +121,45 @@ EVM_NETWORK_CONFIGS = {
 
 
 UTXO_NETWORK_CONFIGS = {
-    'btc3': {
+    'knf': {
         'id': 1,
+        'chunk_size': 25,
+        'short_name': "KNF",
+        'full_name': 'KNF Coin',
+        'network': 'mainnet',
+        'hrp': 'knf',
+        'electrum_server': '158.129.172.247:49002',
+        'block_explorer': 'https://knfcoin.knf.vu.lt/explorer'
+    },
+    'ltc4': {
+        'id': 2,
+        'chunk_size': 0.1,
+        'short_name': "tLTC4",
+        'full_name': 'Litecoin Testnet4',
+        'network': 'testnet',
+        'hrp': 'tltc',
+        'electrum_server': '158.129.172.247:50002',
+        'block_explorer': 'https://litecoinspace.org/testnet'
+    },
+    'btc3': {
+        'id': 3,
         'chunk_size': 0.005,
         'short_name': "tBTC3",
         'full_name': 'Bitcoin Testnet3',
         'network': 'testnet',
-        # 'electrum_server': 'electrum.blockstream.info:60002',
+        'hrp': 'tb',
         'electrum_server': '158.129.172.247:51002',
         'block_explorer': 'https://mempool.space/testnet'
     },
     'btc4': {
-        'id': 2,
+        'id': 4,
         'chunk_size': 0.01,
         'short_name': "tBTC4",
         'full_name': 'Bitcoin Testnet4',
         'network': 'testnet',
-        # 'electrum_server': 'testnet4-electrumx.wakiyamap.dev:51002',
+        'hrp': 'tb',
         'electrum_server': '158.129.172.247:52002',
         'block_explorer': 'https://mempool.space/testnet4'
-    },
-    'ltc4': {
-        'id': 3,
-        'chunk_size': 0.01,
-        'short_name': "tLTC4",
-        'full_name': 'Litecoin Testnet4',
-        'network': 'testnet',
-        # 'electrum_server': 'electrum-ltc.bysh.me:51002',
-        'electrum_server': '158.129.172.247:50002',
-        'block_explorer': 'https://litecoinspace.org/testnet'
     }
 }
 
