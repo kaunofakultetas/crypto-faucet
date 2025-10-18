@@ -363,7 +363,7 @@ class FullNodeConnections:
         peer_info = []
         if not show_dummy:
             peer_info = self.rpc.rpc_call("getpeerinfo")
-            peer_info = [peer for peer in peer_info if peer['addr'] != "faucet-litecoind-dummy:19335"]
+            peer_info = [peer for peer in peer_info if peer['addr'] != "faucet-knfcoind-dummy:49333"]
         else:
             peer_info = self.rpc.rpc_call("getpeerinfo")
         return peer_info
@@ -374,7 +374,7 @@ class FullNodeConnections:
         """
         Enable network activity
         """
-        self.rpc.rpc_call("addnode", ["faucet-litecoind-public:19335", "onetry"])
+        self.rpc.rpc_call("addnode", ["faucet-knfcoind-public:49333", "onetry"])
 
         return {
             'success': True,
@@ -390,7 +390,7 @@ class FullNodeConnections:
         """
         # First disconnect all current peers
         try:
-            self.rpc.rpc_call("disconnectnode", ["faucet-litecoind-public:19335"])
+            self.rpc.rpc_call("disconnectnode", ["faucet-knfcoind-public:49333"])
         except Exception as e:
             pass
         

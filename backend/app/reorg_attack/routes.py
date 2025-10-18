@@ -18,19 +18,19 @@ bp_reorg_attack = Blueprint('reorg_attack', __name__)
 # Configuration
 REORG_ATTACK_CONFIG = {
     'publicside': {
-        'rpchost': 'faucet-litecoind-public',
+        'rpchost': 'faucet-knfcoind-public',
         'rpcport': 19332,
         'rpcuser': 'admin',
         'rpcpassword': 'admin',
     },
     'privateside': {
-        'rpchost': 'faucet-litecoind-private',
+        'rpchost': 'faucet-knfcoind-private',
         'rpcport': 19332,
         'rpcuser': 'admin',
         'rpcpassword': 'admin',
     },
     "dummy": {
-        'rpchost': 'faucet-litecoind-dummy',
+        'rpchost': 'faucet-knfcoind-dummy',
         'rpcport': 19332,
         'rpcuser': 'admin',
         'rpcpassword': 'admin',

@@ -2,10 +2,10 @@
 docker-compose.yml
 
 
-# Litecoind data folders
-litecoind-private/
-litecoind-public/
-litecoind-dummy/
+# Knfcoind data folders
+knfcoind-private/
+knfcoind-public/
+knfcoind-dummy/
 
 
 # Stratum server data folder

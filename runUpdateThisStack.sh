@@ -4,10 +4,10 @@
 mkdir -p ./dapps-server/data
 
 # 51% attack tool
-mkdir -p ./litecoind-public
-mkdir -p ./litecoind-public/electrumx
-mkdir -p ./litecoind-private
-mkdir -p ./litecoind-dummy
+mkdir -p ./knfcoind-public
+mkdir -p ./knfcoind-public/electrumx
+mkdir -p ./knfcoind-private
+mkdir -p ./knfcoind-dummy
 
 
 # Run the stack

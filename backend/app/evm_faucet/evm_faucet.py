@@ -227,6 +227,9 @@ class EVMFaucet:
             elif result.get('message') == 'No transactions found':
                 break
             else:
+                print("+----------------------------------------+")
+                print(json.dumps(result, indent=4))
+                print("+----------------------------------------+")
                 raise Exception(f"Etherscan API error: {result.get('message', 'Unknown error')}")
 
         return all_transactions
