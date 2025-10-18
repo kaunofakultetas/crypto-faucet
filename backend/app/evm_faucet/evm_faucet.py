@@ -210,6 +210,7 @@ class EVMFaucet:
                 'page': page,
                 'offset': 1000,
                 'sort': 'asc',
+                'chainid': self.NETWORK_CONFIGS[network]['chain_id'],
                 'apikey': self.ETHERSCAN_API_KEY
             }
             response = requests.get(url, params=params)

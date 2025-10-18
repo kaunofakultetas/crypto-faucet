@@ -32,7 +32,7 @@ EVM_NETWORK_CONFIGS = {
         },
         'rpc_urls': ['https://rpc.sepolia.org'],
         'block_explorer_urls': ['https://sepolia.etherscan.io'],
-        'etherscan_api_url': 'https://api-sepolia.etherscan.io/api'
+        'etherscan_api_url': 'https://api.etherscan.io/v2/api',
     },
     'zkSyncSepolia': {
         'id': 3,
@@ -96,7 +96,7 @@ EVM_NETWORK_CONFIGS = {
         },
         'rpc_urls': ['https://rpc.hoodi.ethpandaops.io'],
         'block_explorer_urls': ['https://light-hoodi.beaconcha.in'],
-        'etherscan_api_url': 'https://api-hoodi.etherscan.io/api'
+        'etherscan_api_url': 'https://api.etherscan.io/v2/api',
     },
     "arbitrumSepolia": {
         'id': 7,
