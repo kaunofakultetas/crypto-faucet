@@ -8,16 +8,9 @@ knfcoind-public/
 knfcoind-dummy/
 
 
-# Stratum server data folder
-anypool-stratum/
-
-
 # Served dapps
 dapps-server/data
 
-
-
-_OLD
 
 
 
