@@ -53,14 +53,7 @@ services:
 
   faucet-vite:
     container_name: faucet-vite
-    image: faucet-vite
-    user: 1000:1000
-    build:
-      context: ./vite
-      dockerfile: Dockerfile                   # Prod
-      # dockerfile: Dockerfile.dev               # Dev
-    # volumes:                                   # Dev
-    #   - ./vite/app:/app                        # Dev
+    image: vuknf/faucet-vite:latest
     restart: unless-stopped
 
 
