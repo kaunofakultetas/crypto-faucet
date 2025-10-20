@@ -328,7 +328,12 @@ class FullNodeRPC:
             found_blocks = []
             
             # Step 1: Get transaction info from private network
-            private_tx_info = self.get_raw_transaction(txid)
+            try:
+                private_tx_info = self.get_raw_transaction(txid)
+            except Exception as e:
+                print(f"Note: Could not get transaction info: {str(e)}")
+                continue
+
             if "blockhash" in private_tx_info:
                 found_blocks.append(private_tx_info["blockhash"])
 

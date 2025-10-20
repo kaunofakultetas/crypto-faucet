@@ -50,13 +50,14 @@ class ReorgDatabase:
         """
         with get_db_connection() as conn:            
             sqlFetchData = conn.execute('''
-                SELECT DISTINCT t.TXID, t.Inputs, t.Outputs
+                SELECT DISTINCT t.TXID, t.Inputs, t.Outputs, t.Color
                 FROM Blockchain_Transactions t
             ''')
             
             transactions = []
             for row in sqlFetchData.fetchall():
                 txid = row[0]
+                color = row[3] if row[3] else 'blue'  # Use stored color or default to blue
                 
                 # Get blocks associated with this transaction
                 sqlFetchData = conn.execute('''
@@ -67,7 +68,7 @@ class ReorgDatabase:
                 
                 transactions.append({
                     'txid': txid,
-                    'color': 'blue',  # Default color - could be stored in DB if needed
+                    'color': color,
                     'blocks': blocks
                 })
             
@@ -245,12 +246,20 @@ class ReorgAttackManager:
         
 
 
-    def send_raw_transaction(self, raw_tx: str) -> Dict:
+    def send_raw_transaction(self, raw_tx: str, color: str = 'blue') -> Dict:
         """
-        Send raw transaction to private network
+        Send raw transaction to private network and automatically track it
         """
         try:
             txid = self.private_rpc.send_raw_transaction(raw_tx)
+            
+            # Automatically track the transaction with the specified color
+            try:
+                self.track_transaction(txid, color)
+            except Exception as track_err:
+                # Log tracking error but don't fail the transaction send
+                print(f"Warning: Failed to track transaction {txid}: {str(track_err)}")
+            
             return {
                 'success': True,
                 'message': 'Transaction sent successfully',
@@ -275,26 +284,32 @@ class ReorgAttackManager:
 
 
         # Step 1: Get transaction info from private network
-        private_tx_info = self.private_rpc.get_raw_transaction(txid)
-        if(inputs_json is None and outputs_json is None):
-            inputs_json = json.dumps(private_tx_info.get("vin", []))
-            outputs_json = json.dumps(private_tx_info.get("vout", []))
-        if "blockhash" in private_tx_info:
-            found_blocks.append(private_tx_info["blockhash"])
+        try:
+            private_tx_info = self.private_rpc.get_raw_transaction(txid)
+            if(inputs_json is None and outputs_json is None):
+                inputs_json = json.dumps(private_tx_info.get("vin", []))
+                outputs_json = json.dumps(private_tx_info.get("vout", []))
+            if "blockhash" in private_tx_info:
+                found_blocks.append(private_tx_info["blockhash"])
+        except Exception as e:
+            print(f"Note: Could not get transaction from private network: {str(e)}")
 
 
 
         # Step 2: Get transaction info from public network
-        public_tx_info = self.public_rpc.get_raw_transaction(txid)
-        if(inputs_json is None and outputs_json is None):
-            inputs_json = json.dumps(public_tx_info.get("vin", []))
-            outputs_json = json.dumps(public_tx_info.get("vout", []))
-        if "blockhash" in public_tx_info:
-            found_blocks.append(public_tx_info["blockhash"])
+        try:
+            public_tx_info = self.public_rpc.get_raw_transaction(txid)
+            if(inputs_json is None and outputs_json is None):
+                inputs_json = json.dumps(public_tx_info.get("vin", []))
+                outputs_json = json.dumps(public_tx_info.get("vout", []))
+            if "blockhash" in public_tx_info:
+                found_blocks.append(public_tx_info["blockhash"])
+        except Exception as e:
+            print(f"Note: Could not get transaction from public network: {str(e)}")
                     
         
 
-        # Step 3: Store transaction data
+        # Step 3: Store transaction data (even if it's not in a block yet)
         with get_db_connection() as conn:
             conn.execute('''
                 INSERT OR REPLACE INTO Blockchain_Transactions (TXID, Inputs, Outputs, Color)
@@ -328,3 +343,9 @@ class ReorgAttackManager:
         with get_db_connection() as conn:
             conn.execute('DELETE FROM Blockchain_TxInBlocks WHERE TXID = ?', (txid,))
             conn.execute('DELETE FROM Blockchain_Transactions WHERE TXID = ?', (txid,))
+            conn.commit()
+        
+        return {
+            'success': True,
+            'message': 'Transaction tracking removed successfully'
+        }

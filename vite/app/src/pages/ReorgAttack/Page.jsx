@@ -22,9 +22,10 @@ export default function ReorgAttackPage() {
   const [isPanelOpen, setIsPanelOpen] = React.useState(false);
   const [isConnectedToPublic, setIsConnectedToPublic] = React.useState(true);
   const [rawTransaction, setRawTransaction] = React.useState('');
+  const [rawTxColor, setRawTxColor] = React.useState('red');
   const [transactions, setTransactions] = React.useState([]);
   const [newTxid, setNewTxid] = React.useState('');
-  const [selectedColor, setSelectedColor] = React.useState('red');
+  const [selectedColor, setSelectedColor] = React.useState('green');
 
   // Data state
   const [chainBlocks, setChainBlocks] = React.useState([]);
@@ -109,6 +110,7 @@ export default function ReorgAttackPage() {
   }, []);
 
 
+
   // Auto-refresh data every 10 seconds to stay in sync with background updates
   React.useEffect(() => {
     const interval = setInterval(() => {
@@ -118,6 +120,9 @@ export default function ReorgAttackPage() {
 
     return () => clearInterval(interval);
   }, []);
+
+
+
 
 
   // Handle connection toggle
@@ -147,6 +152,8 @@ export default function ReorgAttackPage() {
   };
 
 
+
+
   // Handle raw transaction send
   const handleSendRawTransaction = async () => {
     if (!rawTransaction.trim()) return;
@@ -158,7 +165,8 @@ export default function ReorgAttackPage() {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          raw_transaction: rawTransaction.trim()
+          raw_transaction: rawTransaction.trim(),
+          color: rawTxColor
         }),
       });
       
@@ -177,6 +185,8 @@ export default function ReorgAttackPage() {
       showMessage(`Nepavyko išsiųsti transakcijos: ${err.message}`, 'error');
     }
   };
+
+
 
 
   // Handle add transaction tracking
@@ -212,6 +222,8 @@ export default function ReorgAttackPage() {
   };
 
 
+
+
   // Handle remove transaction tracking
   const handleRemoveTransaction = async (txid) => {
     try {
@@ -235,6 +247,8 @@ export default function ReorgAttackPage() {
   };
 
 
+
+  
 
 
 
@@ -311,6 +325,8 @@ export default function ReorgAttackPage() {
         onConnectionToggle={handleConnectionToggle}
         rawTransaction={rawTransaction}
         setRawTransaction={setRawTransaction}
+        rawTxColor={rawTxColor}
+        setRawTxColor={setRawTxColor}
         onSendRawTransaction={handleSendRawTransaction}
         transactions={transactions}
         onAddTransaction={handleAddTransaction}

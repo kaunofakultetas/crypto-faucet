@@ -1,13 +1,24 @@
 import React from 'react';
 import { Box, Typography, Paper, Button, TextField, FormControl, InputLabel, Select, MenuItem, IconButton, Divider, Alert, Switch, FormControlLabel } from '@mui/material';
+
+
+// Icons
 import { MdAdd, MdRemove, MdSend, MdWifi, MdWifiOff, MdClose } from "react-icons/md";
+import DeleteIcon from '@mui/icons-material/Delete';
+
+
+
+
+
 
 const ControlPanel = ({ 
-  isPanelOpen, setIsPanelOpen, isConnectedToPublic, onConnectionToggle, rawTransaction, setRawTransaction, onSendRawTransaction,
+  isPanelOpen, setIsPanelOpen, isConnectedToPublic, onConnectionToggle, rawTransaction, setRawTransaction, rawTxColor, setRawTxColor, onSendRawTransaction,
   transactions, onAddTransaction, onRemoveTransaction, newTxid, setNewTxid, selectedColor, setSelectedColor,
   networkStatus, PANEL_WIDTH, TRANSACTION_COLORS 
 }) => {
   
+
+
   // Control panel functions - now use props handlers
   const handleSendRawTransaction = () => {
     if (rawTransaction.trim() && onSendRawTransaction) {
@@ -32,6 +43,9 @@ const ControlPanel = ({
       onConnectionToggle(event.target.checked);
     }
   };
+
+
+
 
   return (
     <Paper 
@@ -63,6 +77,9 @@ const ControlPanel = ({
         }
       }}
     >
+
+
+
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
         <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
           Valdymo Skydas
@@ -76,6 +93,10 @@ const ControlPanel = ({
         </IconButton>
       </Box>
       
+
+
+
+
       {/* Connection Status */}
       <Box sx={{ mb: 3 }}>
         <FormControlLabel
@@ -132,7 +153,13 @@ const ControlPanel = ({
         )}
       </Box>
 
+
+
+
       <Divider sx={{ mb: 2 }} />
+
+
+
 
       {/* Send Raw Transaction */}
       <Box sx={{ mb: 3 }}>
@@ -150,6 +177,33 @@ const ControlPanel = ({
           size="small"
           sx={{ mb: 1 }}
         />
+        <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
+          <FormControl size="small" sx={{ flex: 1 }}>
+            <InputLabel>Spalva</InputLabel>
+            <Select
+              value={rawTxColor}
+              onChange={(e) => setRawTxColor(e.target.value)}
+              label="Spalva"
+            >
+              {TRANSACTION_COLORS.map(color => (
+                <MenuItem key={color} value={color}>
+                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                    <Box 
+                      sx={{ 
+                        width: 16, 
+                        height: 16, 
+                        borderRadius: '50%', 
+                        backgroundColor: color,
+                        border: '1px solid rgba(0,0,0,0.2)'
+                      }} 
+                    />
+                    {color.charAt(0).toUpperCase() + color.slice(1)}
+                  </Box>
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+        </Box>
         <Button
           fullWidth
           variant="contained"
@@ -162,7 +216,12 @@ const ControlPanel = ({
         </Button>
       </Box>
 
+
+
+
       <Divider sx={{ mb: 3 }} />
+
+
 
       {/* Transaction Tracking */}
       <Box>
@@ -219,6 +278,8 @@ const ControlPanel = ({
           </Box>
         </Box>
 
+
+
         {/* Tracked Transactions List */}
         <Box>
           <Typography variant="body2" sx={{ mb: 1, color: 'text.secondary' }}>
@@ -252,7 +313,7 @@ const ControlPanel = ({
                       onClick={() => handleRemoveTransaction(tx.txid)}
                       sx={{ p: 0.5 }}
                     >
-                      <MdRemove size={14} />
+                      <DeleteIcon sx={{ fontSize: 16 }} />
                     </IconButton>
                   </Box>
                   <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
@@ -266,6 +327,10 @@ const ControlPanel = ({
             </Box>
           )}
         </Box>
+
+
+
+
       </Box>
     </Paper>
   );

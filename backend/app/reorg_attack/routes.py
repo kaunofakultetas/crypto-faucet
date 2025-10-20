@@ -136,7 +136,8 @@ def reorg_send_raw_transaction():
             }), 400
         
         raw_tx = data['raw_transaction']
-        result = reorg_manager.send_raw_transaction(raw_tx)
+        color = data.get('color', 'blue')  # Default to blue if not provided
+        result = reorg_manager.send_raw_transaction(raw_tx, color)
         
         status_code = 200 if result['success'] else 500
         return jsonify(result), status_code

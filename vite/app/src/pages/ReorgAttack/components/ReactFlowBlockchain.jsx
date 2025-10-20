@@ -6,6 +6,7 @@ import { Box, Typography } from '@mui/material';
 
 import { SiHackaday } from "react-icons/si";
 import { BiWorld } from "react-icons/bi";
+import AttachMoneyIcon from '@mui/icons-material/AttachMoney';
 
 // Import the new modal component
 import BlockDetailsModal from './BlockDetailsModal';
@@ -162,13 +163,19 @@ const BlockNode = ({ data }) => {
             <Box
               key={idx}
               sx={{
-                width: 10,
-                height: 10,
+                // width: 10,
+                // height: 10,
                 borderRadius: '50%',
                 bgcolor: tx.color,
-                border: '1px solid white'
+                border: '1px solid white',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                p: 0.5,
               }}
-            />
+            >
+              <AttachMoneyIcon sx={{ fontSize: 16 }} />
+            </Box>
           ))}
         </Box>
       )}
