@@ -123,7 +123,7 @@ EVM_NETWORK_CONFIGS = {
 UTXO_NETWORK_CONFIGS = {
     'knf': {
         'id': 1,
-        'chunk_size': 25,
+        'chunk_size': 1000,
         'short_name': "KNF",
         'full_name': 'KNF Coin',
         'network': 'mainnet',

@@ -67,7 +67,7 @@ services:
   # # OPTIONAL: Database GUI
   # faucet-dbgate:
   #   container_name: faucet-dbgate
-  #   image: dbgate/dbgate:6.6.3
+  #   image: dbgate/dbgate:6.6.5
   #   environment:
   #     WEB_ROOT: /dbgate
 
@@ -85,6 +85,12 @@ services:
 
 
 
+
+
+
+  #####################################
+  ############ DAPPS SERVER ###########
+  #####################################
   faucet-dapps-filebrowser:
     container_name: faucet-dapps-filebrowser
     image: faucet-dapps-filebrowser
@@ -100,7 +106,6 @@ services:
     restart: unless-stopped
 
 
-
   faucet-dapps-caddy:
     container_name: faucet-dapps-caddy
     image: caddy:2-alpine
@@ -110,133 +115,124 @@ services:
     environment:
       - CADDY_LISTEN=0.0.0.0
     restart: unless-stopped
+  #####################################
+  #####################################
+  #####################################
 
 
 
-  faucet-litecoind-public:
-    container_name: faucet-litecoind-public
-    image: btcpayserver/litecoin:0.21.2.1-2
+
+
+
+
+  #####################################
+  ############# FULLNODES #############
+  #####################################
+  faucet-knfcoind-public:
+    container_name: faucet-knfcoind-public
+    image: vuknf/knfcoin-fullnode:20251014
     volumes:
-      - ./litecoind-public/data:/data
+      - ./knfcoind-public:/root/.litecoin
     command:
       [
-        "litecoind",
-        "-testnet=1",
+        "knfcoind",
         "-server=1",
-        "-rpcuser=admin",
-        "-rpcpassword=admin",
-        "-rpcallowip=172.0.0.0/8",
-        "-rpcport=19332",
-        "-rpcbind=0.0.0.0",
-        "-zmqpubrawtx=tcp://0.0.0.0:29332",
-        "-zmqpubrawblock=tcp://0.0.0.0:29332",
-        "-dbcache=512",
-        "-checkblocks=6",
-        "-txindex=1"
-      ]
-    restart: unless-stopped
-
-
-
-  faucet-litecoind-private:
-    container_name: faucet-litecoind-private
-    image: btcpayserver/litecoin:0.21.2.1-2
-    volumes:
-      - ./litecoind-private/data:/data
-    command:
-      [
-        "litecoind",
-        "-testnet=1",
-        "-server=1",
-        "-rpcuser=admin",
-        "-rpcpassword=admin",
-        "-rpcallowip=172.0.0.0/8",
-        "-rpcport=19332",
-        "-rpcbind=0.0.0.0",
-        "-zmqpubrawtx=tcp://0.0.0.0:29332",
-        "-zmqpubrawblock=tcp://0.0.0.0:29332",
-        "-dbcache=512",
-        "-checkblocks=6",
         "-txindex=1",
-        "-dnsseed=0",
-        "-addnode=faucet-litecoind-dummy:19335"
-      ]
-    restart: unless-stopped
-
-
-
-  faucet-litecoind-dummy:
-    container_name: faucet-litecoind-dummy
-    image: btcpayserver/litecoin:0.21.2.1-2
-    volumes:
-      - ./litecoind-dummy/data:/data
-    command:
-      [
-        "litecoind",
-        "-testnet=1",
-        "-server=1",
         "-rpcuser=admin",
         "-rpcpassword=admin",
         "-rpcallowip=172.0.0.0/8",
         "-rpcport=19332",
         "-rpcbind=0.0.0.0",
-        "-zmqpubrawtx=tcp://0.0.0.0:29332",
-        "-zmqpubrawblock=tcp://0.0.0.0:29332",
         "-dbcache=512",
-        "-prune=550",
         "-checkblocks=6",
         "-dnsseed=0"
       ]
+    networks:
+      - external
+      - isolated
     restart: unless-stopped
+
+
+  faucet-knfcoind-private:
+    container_name: faucet-knfcoind-private
+    image: vuknf/knfcoin-fullnode:20251014
+    volumes:
+      - ./knfcoind-private:/root/.litecoin
+    command:
+      [
+        "knfcoind",
+        "-server=1",
+        "-txindex=1",
+        "-rpcuser=admin",
+        "-rpcpassword=admin",
+        "-rpcallowip=172.0.0.0/8",
+        "-rpcport=19332",
+        "-rpcbind=0.0.0.0",
+        "-dbcache=512",
+        "-checkblocks=6",
+        "-dnsseed=0",
+        "-addnode=faucet-knfcoind-dummy:49333"
+      ]
+    networks:
+      - isolated
+    restart: unless-stopped
+
+
+  faucet-knfcoind-dummy:
+    container_name: faucet-knfcoind-dummy
+    image: vuknf/knfcoin-fullnode:20251014
+    volumes:
+      - ./knfcoind-dummy:/root/.litecoin
+    command:
+      [
+        "knfcoind",
+        "-server=1",
+        "-txindex=1",
+        "-rpcuser=admin",
+        "-rpcpassword=admin",
+        "-rpcallowip=172.0.0.0/8",
+        "-rpcport=19332",
+        "-rpcbind=0.0.0.0",
+        "-dbcache=512",
+        "-checkblocks=6",
+        "-dnsseed=0"
+      ]
+    networks:
+      - isolated
+    restart: unless-stopped
+  #####################################
+  #####################################
+  #####################################
+
 
 
 
   faucet-stratum:
     container_name: faucet-stratum
-    image: vuknf/anypool-stratum:latest
+    image: vuknf/anypool-stratum:20251016
     ports:
-      - "63333:3333"
+      - "61033:3333"
     environment:
-      - RPC_HOST=faucet-litecoind-private
+      # Coin Selection
+      - COIN=KNF
+      - COIN_NETWORK=mainnet
+
+      # Fullnode RPC
+      - RPC_HOST=faucet-knfcoind-private
       - RPC_PORT=19332
       - RPC_USER=admin
       - RPC_PASS=admin
-      - REWARD_ADDR=tltc1q485fru2s4j8rgy3tvrmmf0tu0veqhlqqqrp9c8
+
+      # Coinbase Transaction
+      - REWARD_ADDR=knf1q6v5tfdrvaunzz60c6as9fx9dttzc98j435ll4a
       - COINBASE_MESSAGE=/VU KNF/
-      - POOL_DIFFICULTY=2000000
+
+      # Pool Settings
+      - POOL_DIFFICULTY=100000
       - POLL_DIFF_DROPPER=True
+
       - DEBUG=False
-    restart: unless-stopped
-
-
-
-  # https://github.com/spesmilo/electrumx/blob/master/docs/environment.rst
-  # https://github.com/spesmilo/electrumx/blob/master/src/electrumx/lib/coins.py
-  faucet-electrumx:
-    container_name: faucet-electrumx
-    image: lukechilds/electrumx:v1.18.0
-    ports:
-      - "51002:50002"
     volumes:
-      - ./litecoind-public/electrumx:/data
-    environment:
-      - COIN=Litecoin
-      - NET=testnet
-      - DAEMON_URL=http://admin:admin@faucet-litecoind-public:19332
-
-      # Disable all rate limiting
-      - MAX_SESSIONS=1000000
-      - SESSION_TIMEOUT=0
-      - MAX_RECV=1000000000
-      - MAX_SEND=1000000000
-      - COST_SOFT_LIMIT=0
-      - COST_HARD_LIMIT=0
-      - REQUEST_SLEEP=0
-      - INITIAL_CONCURRENT=1000000
-      - BANDWIDTH_UNIT_COST=1000000000
-      - REQUEST_TIMEOUT=0
-      
+      - /etc/localtime:/etc/localtime:ro
     restart: unless-stopped
-
-
 
