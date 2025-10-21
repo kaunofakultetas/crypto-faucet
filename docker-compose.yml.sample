@@ -24,6 +24,21 @@ services:
 
 
 
+  faucet-etherpad:
+    container_name: faucet-etherpad
+    image: etherpad/etherpad:2.2.7
+    user: root
+    environment:
+      - TITLE=Etherpad
+      - DEFAULT_PAD_TEXT=KNF Faucet Notes
+    volumes:
+      - ./_DATA/etherpad:/opt/etherpad-lite/var
+    networks:
+      - isolated
+    restart: unless-stopped
+    
+
+
   faucet-backend:
     container_name: faucet-backend
     image: faucet-backend

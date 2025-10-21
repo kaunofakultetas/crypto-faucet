@@ -32,6 +32,15 @@
     }
 
 
+    ##### UNAUTHENTICATED: Etherpad Notes
+    handle /etherpad/* {
+        # Strip the prefix '/etherpad' before proxying
+        uri strip_prefix /etherpad
+        reverse_proxy faucet-etherpad:9001
+    }
+
+
+
     ############ APP PASSWORD 1 ############
     @hasCookie1 header_regexp cookieCheck Cookie "(;|^|\ )app-password={$APP_PASSWORD_1}(;|$|\ )"
     handle @hasCookie1 {

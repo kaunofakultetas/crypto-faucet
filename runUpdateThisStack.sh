@@ -9,6 +9,9 @@ mkdir -p ./knfcoind-public/electrumx
 mkdir -p ./knfcoind-private
 mkdir -p ./knfcoind-dummy
 
+# Notes
+mkdir -p ./_DATA/etherpad
+
 
 # Run the stack
 sudo docker-compose down --timeout 60

@@ -12,6 +12,10 @@ knfcoind-dummy/
 dapps-server/data
 
 
+# Local faucet data
+_DATA/
+
+
 
 
 
