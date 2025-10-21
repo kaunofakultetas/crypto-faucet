@@ -1,28 +1,9 @@
 :80 {
 
-    
-    ####################################
-    #           Common section         #
-    ####################################
-    # SECURITY: Restricts the app in the browser from communicating with external sources
-    header Content-Security-Policy "
-        default-src 'self';
-        script-src 'self' 'unsafe-inline' 'unsafe-eval';
-        style-src 'self' 'unsafe-inline';
-        img-src 'self' data:;
-        font-src 'self' data:;
-        connect-src 'self';
-        frame-ancestors 'self';
-        frame-src 'self';
-        child-src 'self';
-        form-action 'self';
-        base-uri 'self';
-        worker-src 'self';
-        block-all-mixed-content;
-    "
-    ####################################
-    ####################################
-    ####################################
+
+    #################################################
+    #### CSP Disabled, required for DAPPS server ####
+    #################################################
 
 
 

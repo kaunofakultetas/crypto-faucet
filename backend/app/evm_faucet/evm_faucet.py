@@ -240,10 +240,16 @@ class EVMFaucet:
     def store_transactions(self, transactions, network):
         with get_db_connection() as conn:
 
+            # # Debugging: print the fetched transactions
+            # print("----------------------------------------")
+            # print("Fetched transactions:")
+            # print(json.dumps(transactions, indent=4))
+            # print("----------------------------------------")
+
             for tx in transactions:
                 is_contract = 0
                 recipient = tx.get('to', '')
-                if recipient == '':
+                if recipient == '' or recipient == None:
                     is_contract = 1
                     recipient = tx.get('contractAddress', '')
 
