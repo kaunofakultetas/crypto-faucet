@@ -183,6 +183,31 @@ class ReorgAttackManager:
                 ORDER BY Height ASC
             ''', [target_date])
             all_blocks = json.loads(sqlFetchData.fetchone()[0])
+            
+            # If there are very few blocks (less than 100), fetch the last 100 blocks instead
+            if len(all_blocks) < 100:
+                sqlFetchData = conn.execute('''
+                    SELECT
+                        json_group_array(
+                            json_object(
+                                'height', Height,
+                                'hash', Hash,
+                                'prevHash', PrevHash,
+                                'coinbase', CoinbaseMessage,
+                                'date', Date,
+                                'time', Time,
+                                'scryptHash', ScryptHash,
+                                'chainWork', ChainWork
+                            )
+                        )
+                    FROM (
+                        SELECT * FROM Blockchain_Blocks
+                        ORDER BY Height DESC
+                        LIMIT 100
+                    )
+                    ORDER BY Height ASC
+                ''')
+                all_blocks = json.loads(sqlFetchData.fetchone()[0])
 
 
 
