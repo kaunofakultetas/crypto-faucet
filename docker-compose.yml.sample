@@ -75,7 +75,7 @@ services:
   # # OPTIONAL: Database GUI
   # faucet-dbgate:
   #   container_name: faucet-dbgate
-  #   image: dbgate/dbgate:6.6.5
+  #   image: dbgate/dbgate:7.1.4
   #   environment:
   #     WEB_ROOT: /dbgate
 
