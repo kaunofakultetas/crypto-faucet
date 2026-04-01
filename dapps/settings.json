@@ -1,6 +1,6 @@
 {
   "port": 80,
-  "baseURL": "FILEBROWSER_BASE_URL",
+  "baseURL": "/dapps/files",
   "address": "",
   "log": "stdout",
   "database": "/filebrowser.db",

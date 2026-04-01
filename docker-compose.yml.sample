@@ -109,27 +109,29 @@ services:
   #####################################
   faucet-dapps-filebrowser:
     container_name: faucet-dapps-filebrowser
-    image: faucet-dapps-filebrowser
-    build:
-      context: ./dapps-filebrowser
-      dockerfile: Dockerfile
-      args:
-        - FILEBROWSER_TITLE=VU KNF DAPP Hosting
-        - FILEBROWSER_BASE_URL=/dapps
+    image: vuknf/filebrowser-noauth:latest
+    # user: 1000:1000
     read_only: false
     volumes:
-      - ./dapps-server/data:/data
+      # Filebrowser Configuration
+      - ./dapps/settings.json:/config/settings.json
+
+      # Filebrowser Root Directory
+      - ./_DATA/dapps:/data
     restart: unless-stopped
 
 
   faucet-dapps-caddy:
     container_name: faucet-dapps-caddy
-    image: caddy:2-alpine
-    user: 1000:1000
+    image: caddy:2.11-alpine
+    # user: 1000:1000
     read_only: true
     volumes:
-      - ./dapps-server/data:/srv:ro
-      - ./dapps-server/Caddyfile:/etc/caddy/Caddyfile:ro
+      # Caddy Configuration
+      - ./dapps/Caddyfile:/etc/caddy/Caddyfile:ro
+
+      # Dapps Root Directory
+      - ./_DATA/dapps:/srv:ro
     restart: unless-stopped
   #####################################
   #####################################
