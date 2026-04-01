@@ -116,7 +116,7 @@ services:
       # Filebrowser Configuration
       - ./dapps/settings.json:/config/settings.json
 
-      # Filebrowser Root Directory
+      # Dapps Root Directory
       - ./_DATA/dapps:/data
     restart: unless-stopped
 
