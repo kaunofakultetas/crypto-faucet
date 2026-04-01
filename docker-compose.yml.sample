@@ -125,11 +125,11 @@ services:
   faucet-dapps-caddy:
     container_name: faucet-dapps-caddy
     image: caddy:2-alpine
+    user: 1000:1000
+    read_only: true
     volumes:
       - ./dapps-server/data:/srv:ro
       - ./dapps-server/Caddyfile:/etc/caddy/Caddyfile:ro
-    environment:
-      - CADDY_LISTEN=0.0.0.0
     restart: unless-stopped
   #####################################
   #####################################
