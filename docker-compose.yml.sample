@@ -2,15 +2,18 @@ services:
 
   faucet-endpoint:
     container_name: faucet-endpoint
-    image: caddy:2.9.1-alpine
-    volumes:
-      - ./endpoint/Caddyfile:/etc/caddy/Caddyfile:ro
-    ports:
-      - 80:80
+    image: caddy:2.11-alpine
+    # user: 1000:1000
+    read_only: true
     environment:
       ############################ SISTEMOS PASSWORD #######################
       APP_PASSWORD_1: FAUCET_GUI_PASSWORD
       ######################################################################
+    volumes:
+      - ./endpoint/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./_VIDEOS:/var/www/videos
+    ports:
+      - 80:80
     restart: unless-stopped
 
 
@@ -33,8 +36,6 @@ services:
       - DEFAULT_PAD_TEXT=KNF Faucet Notes
     volumes:
       - ./_DATA/etherpad:/opt/etherpad-lite/var
-    networks:
-      - isolated
     restart: unless-stopped
     
 
@@ -68,7 +69,14 @@ services:
 
   faucet-vite:
     container_name: faucet-vite
-    image: vuknf/faucet-vite:latest
+    image: faucet-vite
+    # user: 1000:1000
+    build:
+      context: ./vite
+      dockerfile: Dockerfile                   # Prod
+    #   dockerfile: Dockerfile.dev               # Dev
+    # volumes:                                   # Dev
+    #   - ./vite/app:/app                        # Dev
     restart: unless-stopped
 
 
@@ -155,9 +163,6 @@ services:
         "-checkblocks=6",
         "-dnsseed=0"
       ]
-    networks:
-      - external
-      - isolated
     restart: unless-stopped
 
 
@@ -181,8 +186,6 @@ services:
         "-dnsseed=0",
         "-addnode=faucet-knfcoind-dummy:49333"
       ]
-    networks:
-      - isolated
     restart: unless-stopped
 
 
@@ -205,8 +208,6 @@ services:
         "-checkblocks=6",
         "-dnsseed=0"
       ]
-    networks:
-      - isolated
     restart: unless-stopped
   #####################################
   #####################################
