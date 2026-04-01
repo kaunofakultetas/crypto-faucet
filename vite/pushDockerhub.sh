@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 CONTAINER_NAME=faucet-vite
 
