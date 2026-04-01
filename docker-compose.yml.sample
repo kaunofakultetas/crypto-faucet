@@ -46,7 +46,11 @@ services:
     build: ./backend
     user: 1000:1000
     environment:
-      # - APP_DEBUG=True # Dev
+      # App Configuration
+      - APP_DEBUG=True                                                               # Dev
+      - DB_PATH=/data/database.db
+
+      # Faucet Configs:
       - FAUCET_DEFAULT_NETWORK=sepolia
 
       # Register and get from https://infura.io
@@ -61,6 +65,13 @@ services:
     tmpfs:
       - /.bitcoinlib:uid=1000,gid=1000
     volumes:
+      # Configuration
+      - /etc/localtime:/etc/localtime:ro
+
+      # Backend Database
+      - ./_DATA/backend:/data
+
+      # Backend Source Code
       - ./backend:/app
     restart: unless-stopped
 

@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Backend Database
+mkdir -p ./_DATA/backend
+
 # Dapps
 mkdir -p ./_DATA/dapps
 

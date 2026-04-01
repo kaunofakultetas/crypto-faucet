@@ -12,6 +12,8 @@ import json
 import sqlite3
 from flask import Flask, Response
 
+from app.database.db import get_db_connection
+
 
 app = Flask(__name__)
 
@@ -160,7 +162,17 @@ UTXO_NETWORK_CONFIGS = {
         'hrp': 'tb',
         'electrum_server': '158.129.172.247:52002',
         'block_explorer': 'https://mempool.space/testnet4'
-    }
+    },
+    # 'doge3': {
+    #     'id': 5,
+    #     'chunk_size': 0.01,
+    #     'short_name': "tDOGE3",
+    #     'full_name': 'Dogecoin Testnet3',
+    #     'network': 'testnet',
+    #     'hrp': 'doge',
+    #     'electrum_server': '158.129.172.247:53002',
+    #     'block_explorer': 'https://mempool.space/testnet3'
+    # }
 }
 
 
@@ -169,24 +181,21 @@ UTXO_NETWORK_CONFIGS = {
 
 @app.route('/api/get-example-blockchain', methods=['GET'])
 def get_example_blockchain():
-    conn = sqlite3.connect('transactions.db')
-    c = conn.cursor()
-    c.execute('''
-        SELECT
-            json_group_array(
-                json_object(
-                    'data', Transactions, 
-                    'previousHash', PrevBlock, 
-                    'nonce', Nonce, 
-                    'hash', BlockHash
-                )
-            ) AS json_block
-        FROM BlockchainSimulator_Blocks
-    ''')
-    result = c.fetchone()[0]
-    result = json.dumps(json.loads(result), indent=4)
-    c.close()
-    return Response(result, mimetype='application/json')
+    with get_db_connection() as conn:
+        sqlFetchData = conn.execute('''
+            SELECT
+                json_group_array(
+                    json_object(
+                        'data', Transactions, 
+                        'previousHash', PrevBlock, 
+                        'nonce', Nonce, 
+                        'hash', BlockHash
+                    )
+                ) AS json_block
+            FROM BlockchainSimulator_Blocks
+        ''')
+        returnJson = sqlFetchData.fetchone()[0]
+    return Response(returnJson, mimetype='application/json')
 
 
 
@@ -208,6 +217,9 @@ if __name__ == '__main__':
 
     from app.utxo_faucet.utxo_routes import bp_utxo_faucet
     app.register_blueprint(bp_utxo_faucet, url_prefix='')
+
+    # from app.erc20_faucet.erc20_routes import bp_erc20_faucet
+    # app.register_blueprint(bp_erc20_faucet, url_prefix='')
 
     from app.reorg_attack.routes import bp_reorg_attack
     app.register_blueprint(bp_reorg_attack, url_prefix='')
