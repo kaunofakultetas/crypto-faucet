@@ -1,16 +1,17 @@
 #!/bin/bash
 
 # Dapps
-mkdir -p ./dapps-server/data
+mkdir -p ./_DATA/dapps
 
 # 51% attack tool
-mkdir -p ./knfcoind-public
-mkdir -p ./knfcoind-public/electrumx
-mkdir -p ./knfcoind-private
-mkdir -p ./knfcoind-dummy
+mkdir -p ./_DATA/fullnodes/public
+mkdir -p ./_DATA/fullnodes/private
+mkdir -p ./_DATA/fullnodes/dummy
 
 # Notes
 mkdir -p ./_DATA/etherpad
+
+
 
 
 # Run the stack

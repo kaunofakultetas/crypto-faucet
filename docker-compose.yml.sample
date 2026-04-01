@@ -150,7 +150,7 @@ services:
     container_name: faucet-knfcoind-public
     image: vuknf/knfcoin-fullnode:20251014
     volumes:
-      - ./knfcoind-public:/root/.litecoin
+      - ./_DATA/fullnodes/public:/root/.litecoin
     command:
       [
         "knfcoind",
@@ -172,7 +172,7 @@ services:
     container_name: faucet-knfcoind-private
     image: vuknf/knfcoin-fullnode:20251014
     volumes:
-      - ./knfcoind-private:/root/.litecoin
+      - ./_DATA/fullnodes/private:/root/.litecoin
     command:
       [
         "knfcoind",
@@ -195,7 +195,7 @@ services:
     container_name: faucet-knfcoind-dummy
     image: vuknf/knfcoin-fullnode:20251014
     volumes:
-      - ./knfcoind-dummy:/root/.litecoin
+      - ./_DATA/fullnodes/dummy:/root/.litecoin
     command:
       [
         "knfcoind",
