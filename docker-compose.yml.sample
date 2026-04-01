@@ -70,13 +70,16 @@ services:
   faucet-vite:
     container_name: faucet-vite
     image: faucet-vite
-    # user: 1000:1000
     build:
       context: ./vite
-      dockerfile: Dockerfile                   # Prod
-    #   dockerfile: Dockerfile.dev               # Dev
-    # volumes:                                   # Dev
-    #   - ./vite/app:/app                        # Dev
+      dockerfile: Dockerfile                                                         # Prod
+      # dockerfile: Dockerfile.dev                                                     # Dev
+    user: 1000:1000
+    read_only: true
+    # tmpfs:                                                                           # Dev
+    #   - /home/node/.npm:uid=1000,gid=1000                                            # Dev
+    # volumes:                                                                         # Dev
+    #   - ./vite/app:/app                                                              # Dev
     restart: unless-stopped
 
 

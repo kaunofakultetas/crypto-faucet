@@ -4,11 +4,10 @@ WORKDIR /app
 
 # Copy application source code
 COPY app /app
-RUN rm -rf node_modules dist
+
 
 # Install dependencies and build
 RUN npm install
-ARG VITE_SYSTEM_NAME
 RUN npm run build
 
 
@@ -16,7 +15,7 @@ RUN npm run build
 ################################
 ##### Production container #####
 ################################
-FROM caddy:2.9.1-alpine AS prod
+FROM caddy:2.11-alpine AS prod
 
 WORKDIR /app
 
