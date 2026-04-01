@@ -20,7 +20,7 @@ services:
 
   faucet-login:
     container_name: faucet-login
-    image: vuknf/simple-login-page:20250524
+    image: vuknf/simple-login-page:20260401
     environment:
       VITE_SYSTEM_NAME: "KNF Testnet<br/>Kriptovaliutų Faucet'as"
     restart: unless-stopped
@@ -43,9 +43,8 @@ services:
   faucet-backend:
     container_name: faucet-backend
     image: faucet-backend
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    build: ./backend
+    user: 1000:1000
     environment:
       # - APP_DEBUG=True # Dev
       - FAUCET_DEFAULT_NETWORK=sepolia
