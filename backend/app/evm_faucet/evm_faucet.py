@@ -1,12 +1,30 @@
-############################################################
-# Author:           Tomas Vanagas
-# Updated:          2025-09-04
-# Version:          1.0
-# Description:      EVM faucet for blockchain 
-############################################################
-
-
-
+# -----------------------------------------------------------
+#  [*] EVM Faucet
+#
+#  A faucet for EVM chains (Sepolia and friends), talking to
+#  each network through a Web3 HTTP provider (Infura or any
+#  custom RPC URL from the network config).
+#
+#  How a payout works, end to end:
+#
+#    1. The student signs a fixed Lithuanian message (with a
+#       nonce) in MetaMask; the signature proves they control
+#       the address they're asking to fund.
+#    2. The faucet checks the address doesn't already hold a
+#       full chunk, that the cooldown has passed, and that the
+#       faucet wallet itself still has coins.
+#    3. A plain value transfer is signed with the faucet key
+#       (shared with the UTXO faucet) and broadcast.
+#
+#  On top of the faucet itself, this class also feeds the
+#  transaction explorer: it pulls an address' history from
+#  Etherscan, caches it in the local SQLite database and
+#  serves aggregated "flows" (grouped from->to transfers)
+#  for the graph view on the frontend.
+#
+#  Used by:
+#    - evm_routes.py — the Flask endpoints under /api/evm/*
+# -----------------------------------------------------------
 
 import os
 import time
@@ -22,54 +40,72 @@ from eth_account.messages import encode_defunct
 from ..database.db import get_db_connection
 
 
-class EVMFaucet:
 
+
+# -----------------------------------------------------------
+# EVMFaucet
+# -----------------------------------------------------------
+
+class EVMFaucet:
 
     def __init__(self, network_configs, default_network=None):
         self.APP_DEBUG = os.getenv('APP_DEBUG', 'false').lower() == "true"
         self.FAUCET_DEFAULT_NETWORK = default_network or os.getenv('FAUCET_DEFAULT_NETWORK', 'sepolia')
         self.ETHERSCAN_API_KEY = os.getenv('ETHERSCAN_API_KEY', '')
 
+        # Per-network settings (infura_network, chain_id, chunk_size,
+        # etherscan_api_url, ...) coming from main.py.
         self.NETWORK_CONFIGS = network_configs
 
+        # One Web3 instance per network, created up front. The config
+        # value is either an Infura network name ('sepolia') or a full
+        # RPC URL — anything containing 'http' is used as-is.
         self.w3_instances = {}
         for network in self.NETWORK_CONFIGS:
             if 'http' not in self.NETWORK_CONFIGS[network]['infura_network']:
                 infura_url = f"https://{self.NETWORK_CONFIGS[network]['infura_network']}.infura.io/v3/{os.getenv('INFURA_PROJECT_ID')}"
             else:
                 infura_url = self.NETWORK_CONFIGS[network]['infura_network']
-            
-            # Configure HTTPProvider with proper timeout and connection settings
+
+            # 10s timeout so a dead RPC endpoint fails the request
+            # instead of hanging the Flask worker.
             request_kwargs = {
-                'timeout': 10  # 10 second timeout for all requests
+                'timeout': 10
             }
             self.w3_instances[network] = Web3(Web3.HTTPProvider(infura_url, request_kwargs=request_kwargs))
 
-
-
-        # Convert private key to 0x prefixed hex string and pad to 66 characters if necessary
+        # Same private key as the UTXO faucet, so one funded identity
+        # covers every chain the site offers. Normalize to a 0x-prefixed,
+        # 66-character hex string (pad with zeros if it came in short).
         self.FAUCET_PRIVATE_KEY = os.getenv('FAUCET_PRIVATE_KEY')
         self.FAUCET_PRIVATE_KEY = "0x" + self.FAUCET_PRIVATE_KEY.replace("0x", "")
         self.FAUCET_PRIVATE_KEY = self.FAUCET_PRIVATE_KEY.ljust(66, '0')
-    
 
         try:
             self.FAUCET_ADDRESS = Account.from_key(self.FAUCET_PRIVATE_KEY).address if self.FAUCET_PRIVATE_KEY else None
         except Exception:
             self.FAUCET_ADDRESS = None
 
-
+        # address (lowercased) -> unix time of its last payout,
+        # used to enforce the cooldown between requests.
         self.COOLDOWN_PERIOD = 60
         self.last_request = {}
 
 
 
+
+    # -----------------------------------------------------------
+    # Network & signature helpers
+    # -----------------------------------------------------------
+
     def is_supported_network(self, network):
         return network in self.NETWORK_CONFIGS
 
 
-
     def verify_signature(self, network, address, message, signature):
+        # Recover the signer from an EIP-191 personal_sign signature and
+        # check it matches the address asking for coins — proves the
+        # requester actually controls that wallet.
         w3 = self.w3_instances[network]
         try:
             message_hash = encode_defunct(text=message)
@@ -80,7 +116,14 @@ class EVMFaucet:
 
 
 
+
+    # -----------------------------------------------------------
+    # Faucet operations
+    # -----------------------------------------------------------
+
     def request_eth(self, network, to_address, signature, nonce):
+        # The actual payout: validate everything, then broadcast one chunk.
+        # Returns (payload, http_status); user-facing errors in Lithuanian.
         if not self.is_supported_network(network):
             return {"error": f"Nepalaikomas tinklas: {network}"}, 400
 
@@ -89,6 +132,7 @@ class EVMFaucet:
         amount_to_send = self.NETWORK_CONFIGS[network]['chunk_size']
         amount_to_send_wei = Web3.to_wei(float(amount_to_send), 'ether')
 
+        # --- Input validation ---------------------------------
         if not all([to_address, signature, nonce]):
             return {"error": "Trūksta reikalingų parametrų"}, 400
 
@@ -100,10 +144,14 @@ class EVMFaucet:
         if not w3.is_address(to_address):
             return {"error": "Neteisingas adresas"}, 400
 
+        # The exact message the frontend asks MetaMask to sign — any
+        # mismatch (different nonce, different wording) fails recovery.
         message = f"Pasirašykite žinutę kad patvirtintumėte jog naudojate šią piniginę. Nonce: {nonce}"
         if not self.verify_signature(network, to_address, message, signature):
             return {"error": "Kriptografinis parašas kažkodėl neatitinka"}, 403
 
+        # --- Eligibility checks -------------------------------
+        # No top-up if the wallet already holds a full chunk.
         try:
             user_balance = w3.eth.get_balance(to_address)
         except Exception:
@@ -122,6 +170,9 @@ class EVMFaucet:
         if faucet_balance < amount_to_send_wei:
             return {"error": "Čiaupas nebeturi kriptovaliutos. Praneškite dėstytojui."}, 503
 
+        # --- Send ----------------------------------------------
+        # Plain legacy value transfer; the generous gas limit doesn't
+        # cost anything extra, unused gas is refunded.
         nonce_tx = w3.eth.get_transaction_count(self.FAUCET_ADDRESS)
         tx = {
             'nonce': nonce_tx,
@@ -135,6 +186,7 @@ class EVMFaucet:
         signed_tx = w3.eth.account.sign_transaction(tx, self.FAUCET_PRIVATE_KEY)
         tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
 
+        # Start the cooldown only after a successful broadcast.
         self.last_request[addr_key] = int(time.time())
 
         return {
@@ -144,35 +196,32 @@ class EVMFaucet:
         }, 200
 
 
-
     def get_faucet_balance(self, network):
+        # Faucet wallet balance, so the UI (and the operator) can see
+        # whether the faucet needs a top-up.
         if not self.is_supported_network(network):
             return {"error": f"Unsupported network: {network}"}, 400
 
-        # Check if faucet address is valid
         if not self.FAUCET_ADDRESS:
             logging.error("FAUCET_ADDRESS is None or empty")
             return {"error": "Čiaupo adresas nesukonfigūruotas"}, 500
 
         w3 = self.w3_instances[network]
-        
-        # Log the request details
+
         logging.info(f"Getting balance for network={network}, address={self.FAUCET_ADDRESS}")
-        
+
         try:
-            # Check if web3 is connected
             if not w3.is_connected():
                 logging.error(f"Web3 is not connected for network {network}")
                 return {"error": "Nepavyko prisijungti prie tinklo"}, 500
-            
+
             balance = w3.eth.get_balance(self.FAUCET_ADDRESS)
             balance_eth = float(w3.from_wei(balance, 'ether'))
-            
-            # Log the successful response
+
             logging.info(f"Balance retrieved successfully: {balance_eth} ETH (raw: {balance} wei)")
-            
+
         except Exception as e:
-            # Log the actual error for debugging while returning user-friendly message
+            # Log the real error for debugging; the user gets a generic one.
             logging.error(f"Failed to get faucet balance for network {network}: {type(e).__name__}: {e}")
             return {"error": "Nepavyko gauti čiaupo balanso"}, 500
 
@@ -183,8 +232,8 @@ class EVMFaucet:
         }, 200
 
 
-
     def get_networks(self):
+        # Everything the frontend needs to render the network picker.
         return {
             "networks": self.NETWORK_CONFIGS,
             "default_network": self.FAUCET_DEFAULT_NETWORK
@@ -192,7 +241,15 @@ class EVMFaucet:
 
 
 
+
+    # -----------------------------------------------------------
+    # Transaction explorer (Etherscan -> SQLite -> frontend)
+    # -----------------------------------------------------------
+
     def fetch_all_transactions_from_etherscan(self, address, network):
+        # Pull the full transaction history of an address from the
+        # Etherscan API, 1000 records per page, until a short page
+        # signals the end.
         if not self.is_supported_network(network):
             raise ValueError(f"Unsupported network: {network}")
 
@@ -221,13 +278,18 @@ class EVMFaucet:
                 transactions = result['result']
                 all_transactions.extend(transactions)
 
+                # A page shorter than the limit means we've seen everything.
                 if len(transactions) < 1000:
                     break
 
                 page += 1
+
             elif result.get('message') == 'No transactions found':
                 break
+
             else:
+                # Dump the raw response so rate limits / bad API keys
+                # are easy to spot in the container logs.
                 print("+----------------------------------------+")
                 print(json.dumps(result, indent=4))
                 print("+----------------------------------------+")
@@ -236,17 +298,15 @@ class EVMFaucet:
         return all_transactions
 
 
-
     def store_transactions(self, transactions, network):
+        # Cache Etherscan transactions in the local SQLite database.
+        # INSERT OR IGNORE + UPDATE makes the whole thing idempotent:
+        # re-fetching the same history never duplicates rows.
         with get_db_connection() as conn:
 
-            # # Debugging: print the fetched transactions
-            # print("----------------------------------------")
-            # print("Fetched transactions:")
-            # print(json.dumps(transactions, indent=4))
-            # print("----------------------------------------")
-
             for tx in transactions:
+                # Contract deployments have no 'to' — the recipient is
+                # the freshly created contract address.
                 is_contract = 0
                 recipient = tx.get('to', '')
                 if recipient == '' or recipient == None:
@@ -260,23 +320,24 @@ class EVMFaucet:
                     int(tx['blockNumber']), int(tx['timeStamp'])
                 ))
 
-                conn.execute(''' 
+                conn.execute('''
                     UPDATE transactions SET from_address = ?, to_address = ?, value = ?, block_number = ?, timestamp = ?
                         WHERE LOWER(network) = ? AND hash = ?''',
                 (tx['from'].lower(), recipient.lower(), float(tx['value']) / 10**18, int(tx['blockNumber']),
                     int(tx['timeStamp']), network.lower(), tx['hash']
                 ))
 
-                conn.execute('''      
+                # Make sure both endpoints of the transfer exist in the
+                # addresses table (names are filled in later by the user).
+                conn.execute('''
                     INSERT OR IGNORE INTO addresses (address, name, is_contract)
                     VALUES (?, ?, ?) ''',
                     (tx['from'].lower(), "", 0))
 
-                conn.execute('''   
+                conn.execute('''
                     INSERT OR IGNORE INTO addresses (address, name, is_contract)
                     VALUES (?, ?, ?) ''',
                     (recipient.lower(), "", is_contract))
-
 
 
     def fetch_and_store_transactions(self, network, address):
@@ -290,8 +351,11 @@ class EVMFaucet:
         }
 
 
-
     def get_stored_transactions(self, network, address, hours=24):
+        # Data for the frontend's transaction graph: refresh the cache
+        # from Etherscan, then aggregate transfers into "flows" — one row
+        # per (from, to) pair with the summed value and count, plus the
+        # display names and last-seen timestamps of both endpoints.
         if not address:
             return {"error": "Address is required"}, 400
         if not self.is_supported_network(network):
@@ -306,6 +370,10 @@ class EVMFaucet:
         with get_db_connection() as conn:
             threshold_time = int((datetime.utcnow() - timedelta(hours=hours)).timestamp())
 
+            # GetLatestUpdate: when each address was last seen on either
+            # side of a transaction. GetFlows: the aggregated transfers,
+            # already packed as JSON objects so the final SELECT can
+            # return the whole result as a single JSON array.
             sqlQueryResult = conn.execute('''
                 WITH GetLatestUpdate AS (
                     SELECT
@@ -319,7 +387,7 @@ class EVMFaucet:
                         FROM
                             transactions
                         GROUP BY from_address
-                        
+
                         UNION ALL
                         SELECT
                             to_address AS address,
@@ -330,14 +398,14 @@ class EVMFaucet:
                     )
                     GROUP BY address
                 ),
-                    
+
                 GetFlows AS (
                     SELECT
                         json_object(
                             'from_address',         transactions.from_address,
                             'from_name',            addr_from.name,
                             'from_timestamp',       latest_update_from.timestamp,
-                        
+
                             'to_address',           transactions.to_address,
                             'to_name',              addr_to.name,
                             'to_timestamp',         latest_update_to.timestamp,
@@ -346,21 +414,21 @@ class EVMFaucet:
                             'value',                SUM(transactions.value),
                             'count',                COUNT(*)
                         ) as JSON
-                    FROM 
+                    FROM
                         transactions
-                    
+
                     LEFT JOIN addresses AS addr_from
                         ON addr_from.address = transactions.from_address
                     LEFT JOIN addresses AS addr_to
                         ON addr_to.address = transactions.to_address
-                    
+
                     LEFT JOIN GetLatestUpdate AS latest_update_from
                         ON latest_update_from.address = transactions.from_address
                     LEFT JOIN GetLatestUpdate AS latest_update_to
                         ON latest_update_to.address = transactions.to_address
-        
-                    WHERE 
-                        LOWER(network) = ? AND 
+
+                    WHERE
+                        LOWER(network) = ? AND
                         (LOWER(from_address) = ? OR LOWER(to_address) = ?) AND
                         transactions.timestamp >= ?
                     GROUP BY transactions.from_address, transactions.to_address
@@ -382,8 +450,8 @@ class EVMFaucet:
             return {"transactions": json.loads(transactions_json)}, 200
 
 
-
     def set_address_name(self, address, name):
+        # Lets the user label an address in the transaction graph.
         if not address:
             return {"error": "Address is required"}, 400
 
