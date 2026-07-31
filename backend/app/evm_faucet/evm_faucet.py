@@ -1,4 +1,4 @@
-# -----------------------------------------------------------
+############################################################
 #  [*] EVM Faucet
 #
 #  A faucet for EVM chains (Sepolia and friends), talking to
@@ -24,7 +24,8 @@
 #
 #  Used by:
 #    - evm_routes.py — the Flask endpoints under /api/evm/*
-# -----------------------------------------------------------
+############################################################
+
 
 import os
 import time
@@ -42,11 +43,44 @@ from ..database.db import get_db_connection
 
 
 
-# -----------------------------------------------------------
+
+
+
+
+############################################################
 # EVMFaucet
-# -----------------------------------------------------------
+############################################################
+#
+# One instance serves every configured network. Methods in
+# three groups:
+#
+#   setup    — __init__
+#   faucet   — is_supported_network, verify_signature,
+#              request_eth, get_faucet_balance, get_networks
+#   explorer — fetch_all_transactions_from_etherscan,
+#              store_transactions,
+#              fetch_and_store_transactions,
+#              get_stored_transactions, set_address_name
+#
+# Used by:
+#   - evm_routes.py — one shared instance for all handlers
+############################################################
 
 class EVMFaucet:
+
+    ############################################################
+    # __init__
+    ############################################################
+    #
+    # Wires one faucet for every configured network: a Web3
+    # instance per network (Infura name or raw RPC URL), the
+    # shared faucet key normalized to 0x + 64 hex characters,
+    # and the in-memory cooldown table. network_configs is
+    # main.py's EVM_NETWORK_CONFIGS.
+    #
+    # Used by:
+    #   - evm_routes.py — at import time, the single instance
+    ############################################################
 
     def __init__(self, network_configs, default_network=None):
         self.APP_DEBUG = os.getenv('APP_DEBUG', 'false').lower() == "true"
@@ -93,19 +127,35 @@ class EVMFaucet:
 
 
 
-
-    # -----------------------------------------------------------
-    # Network & signature helpers
-    # -----------------------------------------------------------
+    ############################################################
+    # is_supported_network
+    ############################################################
+    #
+    # Used by:
+    #   - request_eth / get_faucet_balance (below)
+    #   - fetch_all_transactions_from_etherscan /
+    #     get_stored_transactions (below)
+    ############################################################
 
     def is_supported_network(self, network):
         return network in self.NETWORK_CONFIGS
 
 
+
+    ############################################################
+    # verify_signature
+    ############################################################
+    #
+    # Recovers the signer from an EIP-191 personal_sign
+    # signature and checks it matches the address asking for
+    # coins — proves the requester actually controls that
+    # wallet. Any decoding hiccup counts as "not verified".
+    #
+    # Used by:
+    #   - request_eth (below)
+    ############################################################
+
     def verify_signature(self, network, address, message, signature):
-        # Recover the signer from an EIP-191 personal_sign signature and
-        # check it matches the address asking for coins — proves the
-        # requester actually controls that wallet.
         w3 = self.w3_instances[network]
         try:
             message_hash = encode_defunct(text=message)
@@ -116,14 +166,19 @@ class EVMFaucet:
 
 
 
-
-    # -----------------------------------------------------------
-    # Faucet operations
-    # -----------------------------------------------------------
+    ############################################################
+    # request_eth
+    ############################################################
+    #
+    # The actual payout: validate everything, then broadcast
+    # one chunk-sized value transfer. Returns a (payload,
+    # http_status) tuple; user-facing errors are Lithuanian.
+    #
+    # Used by:
+    #   - evm_routes.py — GET /api/evm/<network>/request-eth
+    ############################################################
 
     def request_eth(self, network, to_address, signature, nonce):
-        # The actual payout: validate everything, then broadcast one chunk.
-        # Returns (payload, http_status); user-facing errors in Lithuanian.
         if not self.is_supported_network(network):
             return {"error": f"Nepalaikomas tinklas: {network}"}, 400
 
@@ -132,7 +187,8 @@ class EVMFaucet:
         amount_to_send = self.NETWORK_CONFIGS[network]['chunk_size']
         amount_to_send_wei = Web3.to_wei(float(amount_to_send), 'ether')
 
-        # --- Input validation ---------------------------------
+        # STEP 1: input validation — all parameters present and the
+        # address parses
         if not all([to_address, signature, nonce]):
             return {"error": "Trūksta reikalingų parametrų"}, 400
 
@@ -144,14 +200,16 @@ class EVMFaucet:
         if not w3.is_address(to_address):
             return {"error": "Neteisingas adresas"}, 400
 
-        # The exact message the frontend asks MetaMask to sign — any
-        # mismatch (different nonce, different wording) fails recovery.
+        # STEP 2: signature check. This is the exact message the
+        # frontend asks MetaMask to sign — any mismatch (different
+        # nonce, different wording) fails recovery.
         message = f"Pasirašykite žinutę kad patvirtintumėte jog naudojate šią piniginę. Nonce: {nonce}"
         if not self.verify_signature(network, to_address, message, signature):
             return {"error": "Kriptografinis parašas kažkodėl neatitinka"}, 403
 
-        # --- Eligibility checks -------------------------------
-        # No top-up if the wallet already holds a full chunk.
+        # STEP 3: eligibility — no top-up if the wallet already holds
+        # a full chunk, the per-address cooldown has to be over, and
+        # the faucet itself must still have coins.
         try:
             user_balance = w3.eth.get_balance(to_address)
         except Exception:
@@ -170,9 +228,9 @@ class EVMFaucet:
         if faucet_balance < amount_to_send_wei:
             return {"error": "Čiaupas nebeturi kriptovaliutos. Praneškite dėstytojui."}, 503
 
-        # --- Send ----------------------------------------------
-        # Plain legacy value transfer; the generous gas limit doesn't
-        # cost anything extra, unused gas is refunded.
+        # STEP 4: sign and broadcast. A plain legacy value transfer;
+        # the generous gas limit doesn't cost anything extra, unused
+        # gas is refunded.
         nonce_tx = w3.eth.get_transaction_count(self.FAUCET_ADDRESS)
         tx = {
             'nonce': nonce_tx,
@@ -186,7 +244,7 @@ class EVMFaucet:
         signed_tx = w3.eth.account.sign_transaction(tx, self.FAUCET_PRIVATE_KEY)
         tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
 
-        # Start the cooldown only after a successful broadcast.
+        # The cooldown starts only after a successful broadcast.
         self.last_request[addr_key] = int(time.time())
 
         return {
@@ -196,9 +254,21 @@ class EVMFaucet:
         }, 200
 
 
+
+    ############################################################
+    # get_faucet_balance
+    ############################################################
+    #
+    # The faucet wallet's balance, address and chunk size — the
+    # UI shows it, and it's the operator's way to notice the
+    # faucet needs a top-up. Logs verbosely on purpose: a dead
+    # RPC endpoint is the most common failure here.
+    #
+    # Used by:
+    #   - evm_routes.py — GET /api/evm/<network>/faucet-balance
+    ############################################################
+
     def get_faucet_balance(self, network):
-        # Faucet wallet balance, so the UI (and the operator) can see
-        # whether the faucet needs a top-up.
         if not self.is_supported_network(network):
             return {"error": f"Unsupported network: {network}"}, 400
 
@@ -232,8 +302,20 @@ class EVMFaucet:
         }, 200
 
 
+
+    ############################################################
+    # get_networks
+    ############################################################
+    #
+    # Everything the frontend needs to render the network
+    # picker: the full config map and which network to
+    # preselect.
+    #
+    # Used by:
+    #   - evm_routes.py — GET /api/evm/networks
+    ############################################################
+
     def get_networks(self):
-        # Everything the frontend needs to render the network picker.
         return {
             "networks": self.NETWORK_CONFIGS,
             "default_network": self.FAUCET_DEFAULT_NETWORK
@@ -241,15 +323,21 @@ class EVMFaucet:
 
 
 
-
-    # -----------------------------------------------------------
-    # Transaction explorer (Etherscan -> SQLite -> frontend)
-    # -----------------------------------------------------------
+    ############################################################
+    # fetch_all_transactions_from_etherscan
+    ############################################################
+    #
+    # Pulls the full transaction history of an address from
+    # the Etherscan API, 1000 records per page, until a short
+    # page signals the end. An unknown API answer dumps the
+    # raw response into the container log (rate limits and bad
+    # API keys are the usual suspects) and raises.
+    #
+    # Used by:
+    #   - fetch_and_store_transactions (below)
+    ############################################################
 
     def fetch_all_transactions_from_etherscan(self, address, network):
-        # Pull the full transaction history of an address from the
-        # Etherscan API, 1000 records per page, until a short page
-        # signals the end.
         if not self.is_supported_network(network):
             raise ValueError(f"Unsupported network: {network}")
 
@@ -288,8 +376,6 @@ class EVMFaucet:
                 break
 
             else:
-                # Dump the raw response so rate limits / bad API keys
-                # are easy to spot in the container logs.
                 print("+----------------------------------------+")
                 print(json.dumps(result, indent=4))
                 print("+----------------------------------------+")
@@ -298,10 +384,23 @@ class EVMFaucet:
         return all_transactions
 
 
+
+    ############################################################
+    # store_transactions
+    ############################################################
+    #
+    # Caches Etherscan transactions in the local SQLite
+    # database. INSERT OR IGNORE + UPDATE keeps the whole
+    # thing idempotent: re-fetching the same history never
+    # duplicates rows and refreshes what's already there.
+    # Both endpoints of every transfer are also seeded into
+    # the addresses table, where the user can name them later.
+    #
+    # Used by:
+    #   - fetch_and_store_transactions (below)
+    ############################################################
+
     def store_transactions(self, transactions, network):
-        # Cache Etherscan transactions in the local SQLite database.
-        # INSERT OR IGNORE + UPDATE makes the whole thing idempotent:
-        # re-fetching the same history never duplicates rows.
         with get_db_connection() as conn:
 
             for tx in transactions:
@@ -327,8 +426,6 @@ class EVMFaucet:
                     int(tx['timeStamp']), network.lower(), tx['hash']
                 ))
 
-                # Make sure both endpoints of the transfer exist in the
-                # addresses table (names are filled in later by the user).
                 conn.execute('''
                     INSERT OR IGNORE INTO addresses (address, name, is_contract)
                     VALUES (?, ?, ?) ''',
@@ -339,6 +436,18 @@ class EVMFaucet:
                     VALUES (?, ?, ?) ''',
                     (recipient.lower(), "", is_contract))
 
+
+
+    ############################################################
+    # fetch_and_store_transactions
+    ############################################################
+    #
+    # Etherscan -> SQLite in one call. The summary payload it
+    # returns is ignored by its only caller today.
+    #
+    # Used by:
+    #   - get_stored_transactions (below)
+    ############################################################
 
     def fetch_and_store_transactions(self, network, address):
         transactions = self.fetch_all_transactions_from_etherscan(address, network)
@@ -351,29 +460,44 @@ class EVMFaucet:
         }
 
 
+
+    ############################################################
+    # get_stored_transactions
+    ############################################################
+    #
+    # Data for the frontend's transaction graph: refresh the
+    # cache from Etherscan, then aggregate transfers into
+    # "flows" — one row per (from, to) pair with the summed
+    # value and count, plus the display names and last-seen
+    # timestamps of both endpoints.
+    #
+    # Used by:
+    #   - evm_routes.py —
+    #     GET /api/evm/<network>/get-stored-transactions
+    ############################################################
+
     def get_stored_transactions(self, network, address, hours=24):
-        # Data for the frontend's transaction graph: refresh the cache
-        # from Etherscan, then aggregate transfers into "flows" — one row
-        # per (from, to) pair with the summed value and count, plus the
-        # display names and last-seen timestamps of both endpoints.
         if not address:
             return {"error": "Address is required"}, 400
         if not self.is_supported_network(network):
             return {"error": f"Unsupported network: {network}"}, 400
 
+        # STEP 1: refresh the local cache from Etherscan — the graph
+        # always serves fresh data at the cost of one API round trip.
         try:
             self.fetch_and_store_transactions(network, address)
         except Exception:
             logging.exception("Error fetching/storing transactions")
             return {"error": "Failed to refresh transactions"}, 500
 
+        # STEP 2: aggregate. GetLatestUpdate: when each address was
+        # last seen on either side of a transaction. GetFlows: the
+        # aggregated transfers, already packed as JSON objects so the
+        # final SELECT can return the whole result as a single JSON
+        # array.
         with get_db_connection() as conn:
             threshold_time = int((datetime.utcnow() - timedelta(hours=hours)).timestamp())
 
-            # GetLatestUpdate: when each address was last seen on either
-            # side of a transaction. GetFlows: the aggregated transfers,
-            # already packed as JSON objects so the final SELECT can
-            # return the whole result as a single JSON array.
             sqlQueryResult = conn.execute('''
                 WITH GetLatestUpdate AS (
                     SELECT
@@ -450,8 +574,21 @@ class EVMFaucet:
             return {"transactions": json.loads(transactions_json)}, 200
 
 
+
+    ############################################################
+    # set_address_name
+    ############################################################
+    #
+    # Lets the user label an address shown in the transaction
+    # graph. Matches the address exactly as sent — the graph
+    # always sends lowercase, which is how store_transactions
+    # writes the rows.
+    #
+    # Used by:
+    #   - evm_routes.py — GET /api/evm/set-address-name
+    ############################################################
+
     def set_address_name(self, address, name):
-        # Lets the user label an address in the transaction graph.
         if not address:
             return {"error": "Address is required"}, 400
 
