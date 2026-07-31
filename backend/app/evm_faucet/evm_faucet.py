@@ -31,7 +31,8 @@ import os
 import time
 import json
 import logging
-from datetime import datetime, timedelta
+import threading
+from datetime import datetime, timedelta, timezone
 
 import requests
 from web3 import Web3
@@ -67,6 +68,10 @@ from ..database.db import get_db_connection
 ############################################################
 
 class EVMFaucet:
+
+
+
+
 
     ############################################################
     # __init__
@@ -110,20 +115,42 @@ class EVMFaucet:
 
         # Same private key as the UTXO faucet, so one funded identity
         # covers every chain the site offers. Normalize to a 0x-prefixed,
-        # 66-character hex string (pad with zeros if it came in short).
+        # 66-character hex string — zfill pads on the LEFT, because a
+        # short key means stripped leading zeros; padding the right
+        # would silently become a different wallet. A missing key
+        # leaves FAUCET_ADDRESS as None and every payout path answers
+        # with a configuration error instead of crashing the import.
         self.FAUCET_PRIVATE_KEY = os.getenv('FAUCET_PRIVATE_KEY')
-        self.FAUCET_PRIVATE_KEY = "0x" + self.FAUCET_PRIVATE_KEY.replace("0x", "")
-        self.FAUCET_PRIVATE_KEY = self.FAUCET_PRIVATE_KEY.ljust(66, '0')
+        if self.FAUCET_PRIVATE_KEY:
+            self.FAUCET_PRIVATE_KEY = "0x" + self.FAUCET_PRIVATE_KEY.replace("0x", "").zfill(64)
 
         try:
             self.FAUCET_ADDRESS = Account.from_key(self.FAUCET_PRIVATE_KEY).address if self.FAUCET_PRIVATE_KEY else None
         except Exception:
             self.FAUCET_ADDRESS = None
 
-        # address (lowercased) -> unix time of its last payout,
-        # used to enforce the cooldown between requests.
+        # (network, address) -> unix time of its last payout, for the
+        # cooldown between requests. Deliberately in-memory: it resets
+        # on restart, and a freshly generated wallet walks around it —
+        # both accepted for a lab faucet paying out testnet coins.
         self.COOLDOWN_PERIOD = 60
         self.last_request = {}
+
+        # Payouts are serialized: the pending-nonce read and the
+        # broadcast must not interleave between two requests, or both
+        # would sign with the same nonce and one broadcast would fail.
+        self.send_lock = threading.Lock()
+
+        # (network, address) -> unix time of the last Etherscan
+        # refresh. get_stored_transactions serves straight from SQLite
+        # while the cache is younger than this window — the graph
+        # frontend sweeps every address every few seconds, which would
+        # otherwise hammer Etherscan into its rate limit.
+        self.ETHERSCAN_REFRESH_INTERVAL = 60
+        self.last_etherscan_fetch = {}
+
+
+
 
 
 
@@ -139,6 +166,9 @@ class EVMFaucet:
 
     def is_supported_network(self, network):
         return network in self.NETWORK_CONFIGS
+
+
+
 
 
 
@@ -166,13 +196,19 @@ class EVMFaucet:
 
 
 
+
+
+
     ############################################################
     # request_eth
     ############################################################
     #
     # The actual payout: validate everything, then broadcast
-    # one chunk-sized value transfer. Returns a (payload,
-    # http_status) tuple; user-facing errors are Lithuanian.
+    # one chunk-sized value transfer. Sends are serialized and
+    # the nonce counts pending transactions, so a whole class
+    # claiming at once can't collide on the same nonce. Returns
+    # a (payload, http_status) tuple; user-facing errors are
+    # Lithuanian.
     #
     # Used by:
     #   - evm_routes.py — GET /api/evm/<network>/request-eth
@@ -181,6 +217,9 @@ class EVMFaucet:
     def request_eth(self, network, to_address, signature, nonce):
         if not self.is_supported_network(network):
             return {"error": f"Nepalaikomas tinklas: {network}"}, 400
+
+        if not self.FAUCET_ADDRESS:
+            return {"error": "Čiaupo adresas nesukonfigūruotas"}, 500
 
         w3 = self.w3_instances[network]
 
@@ -218,7 +257,9 @@ class EVMFaucet:
         if user_balance >= amount_to_send_wei:
             return {"error": f"Jūsų piniginėje jau yra pakankamai {self.NETWORK_CONFIGS[network]['short_name']}."}, 400
 
-        addr_key = to_address.lower()
+        # The cooldown is per (network, address) — claiming on one
+        # chain doesn't lock the same wallet out of the others.
+        addr_key = (network, to_address.lower())
         if addr_key in self.last_request:
             time_since = int(time.time()) - self.last_request[addr_key]
             if time_since < self.COOLDOWN_PERIOD:
@@ -228,21 +269,28 @@ class EVMFaucet:
         if faucet_balance < amount_to_send_wei:
             return {"error": "Čiaupas nebeturi kriptovaliutos. Praneškite dėstytojui."}, 503
 
-        # STEP 4: sign and broadcast. A plain legacy value transfer;
-        # the generous gas limit doesn't cost anything extra, unused
-        # gas is refunded.
-        nonce_tx = w3.eth.get_transaction_count(self.FAUCET_ADDRESS)
-        tx = {
-            'nonce': nonce_tx,
-            'to': to_address,
-            'value': int(amount_to_send_wei),
-            'gas': 210000,
-            'gasPrice': w3.eth.gas_price,
-            'chainId': self.NETWORK_CONFIGS[network]['chain_id']
-        }
+        # STEP 4: sign and broadcast — under the send lock, with the
+        # nonce counting PENDING transactions, so rapid back-to-back
+        # claims each get their own nonce. A plain legacy value
+        # transfer; the generous gas limit doesn't cost anything
+        # extra, unused gas is refunded.
+        try:
+            with self.send_lock:
+                nonce_tx = w3.eth.get_transaction_count(self.FAUCET_ADDRESS, 'pending')
+                tx = {
+                    'nonce': nonce_tx,
+                    'to': to_address,
+                    'value': int(amount_to_send_wei),
+                    'gas': 210000,
+                    'gasPrice': w3.eth.gas_price,
+                    'chainId': self.NETWORK_CONFIGS[network]['chain_id']
+                }
 
-        signed_tx = w3.eth.account.sign_transaction(tx, self.FAUCET_PRIVATE_KEY)
-        tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+                signed_tx = w3.eth.account.sign_transaction(tx, self.FAUCET_PRIVATE_KEY)
+                tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
+        except Exception:
+            logging.exception(f"Failed to broadcast {network} payout")
+            return {"error": "Nepavyko išsiųsti transakcijos. Bandykite dar kartą."}, 500
 
         # The cooldown starts only after a successful broadcast.
         self.last_request[addr_key] = int(time.time())
@@ -252,6 +300,9 @@ class EVMFaucet:
             "transaction_hash": tx_hash.hex(),
             "amount": float(w3.from_wei(amount_to_send_wei, 'ether'))
         }, 200
+
+
+
 
 
 
@@ -303,6 +354,9 @@ class EVMFaucet:
 
 
 
+
+
+
     ############################################################
     # get_networks
     ############################################################
@@ -320,6 +374,9 @@ class EVMFaucet:
             "networks": self.NETWORK_CONFIGS,
             "default_network": self.FAUCET_DEFAULT_NETWORK
         }
+
+
+
 
 
 
@@ -385,6 +442,9 @@ class EVMFaucet:
 
 
 
+
+
+
     ############################################################
     # store_transactions
     ############################################################
@@ -438,6 +498,9 @@ class EVMFaucet:
 
 
 
+
+
+
     ############################################################
     # fetch_and_store_transactions
     ############################################################
@@ -461,15 +524,19 @@ class EVMFaucet:
 
 
 
+
+
+
     ############################################################
     # get_stored_transactions
     ############################################################
     #
     # Data for the frontend's transaction graph: refresh the
-    # cache from Etherscan, then aggregate transfers into
-    # "flows" — one row per (from, to) pair with the summed
-    # value and count, plus the display names and last-seen
-    # timestamps of both endpoints.
+    # cache from Etherscan (at most once a minute per address —
+    # the graph sweeps aggressively), then aggregate transfers
+    # into "flows" — one row per (from, to) pair with the
+    # summed value and count, plus the display names and
+    # last-seen timestamps of both endpoints.
     #
     # Used by:
     #   - evm_routes.py —
@@ -482,13 +549,18 @@ class EVMFaucet:
         if not self.is_supported_network(network):
             return {"error": f"Unsupported network: {network}"}, 400
 
-        # STEP 1: refresh the local cache from Etherscan — the graph
-        # always serves fresh data at the cost of one API round trip.
-        try:
-            self.fetch_and_store_transactions(network, address)
-        except Exception:
-            logging.exception("Error fetching/storing transactions")
-            return {"error": "Failed to refresh transactions"}, 500
+        # STEP 1: refresh the local cache from Etherscan, but at most
+        # once per ETHERSCAN_REFRESH_INTERVAL per address — inside the
+        # window the data comes straight from SQLite, which keeps the
+        # graph's sweeps well under Etherscan's rate limit.
+        fetch_key = (network, address.lower())
+        if int(time.time()) - self.last_etherscan_fetch.get(fetch_key, 0) >= self.ETHERSCAN_REFRESH_INTERVAL:
+            try:
+                self.fetch_and_store_transactions(network, address)
+                self.last_etherscan_fetch[fetch_key] = int(time.time())
+            except Exception:
+                logging.exception("Error fetching/storing transactions")
+                return {"error": "Failed to refresh transactions"}, 500
 
         # STEP 2: aggregate. GetLatestUpdate: when each address was
         # last seen on either side of a transaction. GetFlows: the
@@ -496,7 +568,10 @@ class EVMFaucet:
         # final SELECT can return the whole result as a single JSON
         # array.
         with get_db_connection() as conn:
-            threshold_time = int((datetime.utcnow() - timedelta(hours=hours)).timestamp())
+            # Timezone-aware on purpose: naive utcnow().timestamp()
+            # would shift by the container's TZ offset if it ever ran
+            # outside UTC.
+            threshold_time = int((datetime.now(timezone.utc) - timedelta(hours=hours)).timestamp())
 
             sqlQueryResult = conn.execute('''
                 WITH GetLatestUpdate AS (
@@ -575,6 +650,9 @@ class EVMFaucet:
 
 
 
+
+
+
     ############################################################
     # set_address_name
     ############################################################
@@ -596,3 +674,8 @@ class EVMFaucet:
             conn.execute(''' UPDATE addresses SET name = ? WHERE address = ? ''', [name, address])
 
         return {"status": "OK"}, 200
+
+
+
+
+
