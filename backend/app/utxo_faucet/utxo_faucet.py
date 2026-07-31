@@ -39,6 +39,7 @@ import socket
 import json
 import struct
 import hashlib
+import logging
 
 import bech32
 import ecdsa
@@ -151,11 +152,10 @@ class UTXOFaucet:
         self.default_amount_btc = float(os.getenv('DEFAULT_WALLET_BTC_AMOUNT', '0.001'))
         self.fee_rate_sat_per_byte = int(os.getenv('BTC_FEE_RATE_SATVB', '10'))
         self.cooldown_seconds = int(os.getenv('UTXO_COOLDOWN_SECONDS', '60'))
+        self.app_debug = os.getenv('APP_DEBUG', 'false').lower() == 'true'
 
-        # address (lowercased) -> unix time of its last payout, for
-        # the cooldown between requests. NOTE: keyed by address alone
-        # — one wallet claiming on Litecoin is also locked out of
-        # Bitcoin for the window (the EVM faucet keys per network).
+        # (network, address) -> unix time of its last payout, for the
+        # cooldown between requests (matches the EVM faucet's keying).
         # In-memory on purpose: resets on restart, fresh wallets walk
         # around it — accepted for a lab faucet on testnets.
         self.last_request = {}
@@ -184,8 +184,11 @@ class UTXOFaucet:
     #
     # Both key types are 32-byte secp256k1 scalars, so the same
     # hex material works on both sides — only the encoding
-    # differs. Accepts '0x'-prefixed and bare hex; pads (on the
-    # right) and truncates to 64 chars.
+    # differs. Accepts '0x'-prefixed and bare hex. zfill pads
+    # on the LEFT (a short key means stripped leading zeros) —
+    # the exact same normalization the EVM faucet applies, so
+    # both sides always derive the same identity from the
+    # shared key.
     #
     # Used by:
     #   - _setup_wallet_for_network (below)
@@ -193,7 +196,7 @@ class UTXOFaucet:
 
     def _convert_ethereum_key_to_bitcoin(self, eth_private_key: str) -> bytes:
         hex_key = eth_private_key.replace("0x", "")
-        hex_key = hex_key.ljust(64, '0')
+        hex_key = hex_key.zfill(64)
         hex_key = hex_key[:64]
 
         return bytes.fromhex(hex_key)
@@ -247,10 +250,10 @@ class UTXOFaucet:
     ############################################################
     #
     # Electrum servers index by scripthash, not by address:
-    # SHA256 of the output script, reversed, as hex. NOTE: the
-    # HRP allowlist is hardcoded — a new network with a new
-    # prefix must be added here too, or its addresses will be
-    # rejected as invalid.
+    # SHA256 of the output script, reversed, as hex. The HRP
+    # allowlist is the hardcoded baseline plus every hrp the
+    # network config declares — a new chain only needs its
+    # config entry, not a code change here.
     #
     # Used by:
     #   - _setup_wallet_for_network (below)
@@ -258,7 +261,8 @@ class UTXOFaucet:
 
     def _bech32_address_to_scripthash(self, address: str) -> str:
         hrp, data = bech32.bech32_decode(address)
-        valid_hrps = ('tb', 'bc', 'bcrt', 'tltc', 'ltc', 'rltc', 'knf')
+        configured_hrps = tuple(c.get('hrp') for c in self.network_configs.values() if c.get('hrp'))
+        valid_hrps = ('tb', 'bc', 'bcrt', 'tltc', 'ltc', 'rltc', 'knf') + configured_hrps
         if hrp not in valid_hrps:
             raise ValueError('Invalid Bech32 address')
 
@@ -453,9 +457,8 @@ class UTXOFaucet:
     # One JSON-RPC round-trip over the open socket. Newline-
     # delimited protocol: send one line, read until the first
     # '\n' comes back. Electrum-side errors surface as raised
-    # exceptions, never as return values. NOTE: the timing
-    # print goes to stdout on every single request — handy in
-    # the container logs, noisy under load.
+    # exceptions, never as return values. The timing print
+    # only fires with APP_DEBUG on.
     #
     # Used by:
     #   - _connect_electrum (above) — the handshake
@@ -489,7 +492,8 @@ class UTXOFaucet:
                 break
 
         elapsed_time = time.time() - start_time
-        print(f"[DEBUG] Electrum request '{method}' took {elapsed_time:.3f}s (network: {ctx.network})")
+        if self.app_debug:
+            print(f"[DEBUG] Electrum request '{method}' took {elapsed_time:.3f}s (network: {ctx.network})")
 
         try:
             response = json.loads(response_line.decode('utf-8'))
@@ -548,11 +552,10 @@ class UTXOFaucet:
     ############################################################
     #
     # Greedy coin selection: take UTXOs in the order Electrum
-    # returned them until the target amount is covered. NOTE:
-    # the target does not include the fee — when the selected
-    # total only barely covers the amount, the fee eats into
-    # (or past) the change and the broadcast can fail; with a
-    # comfortably funded faucet this stays theoretical.
+    # returned them until the target amount PLUS the estimated
+    # fee for the inputs selected so far is covered — selecting
+    # for the amount alone could leave nothing for the fee and
+    # push the change negative.
     #
     # Used by:
     #   - _create_and_broadcast_transaction (below)
@@ -563,7 +566,7 @@ class UTXOFaucet:
         total_input = 0
 
         for utxo in utxos:
-            if target_amount_sat and total_input >= target_amount_sat:
+            if target_amount_sat and total_input >= target_amount_sat + self._estimate_fee(len(inputs), 2):
                 break
 
             # Same KNF caveat as in _setup_wallet_for_network: passing a
@@ -633,15 +636,16 @@ class UTXOFaucet:
         if ctx.coin_type == 'knf':
             return self._create_and_broadcast_raw_transaction(ctx, to_address, amount_sat, utxos)
 
-        # STEP 2: pick inputs and make sure they cover the amount.
+        # STEP 2: pick inputs — the selection targets amount + fee, so
+        # the change can never go negative.
         inputs, total_input = self._create_inputs(ctx, utxos, amount_sat)
-        if total_input < amount_sat:
+        fee = self._estimate_fee(len(inputs), 2)
+        if total_input < amount_sat + fee:
             raise ValueError("Insufficient funds")
 
         # STEP 3: outputs — the payout, plus the leftover back to the
         # faucet unless it's dust (then it's cheaper to just leave it
         # as extra fee).
-        fee = self._estimate_fee(len(inputs), 2)
         outputs = [Output(amount_sat, to_address, network=ctx.network)]
 
         change = total_input - amount_sat - fee
@@ -679,20 +683,21 @@ class UTXOFaucet:
     ############################################################
 
     def _create_and_broadcast_raw_transaction(self, ctx: NetworkContext, to_address: str, amount_sat: int, utxos: list) -> str:
-        # STEP 1: greedy coin selection (fee not included in the
-        # target — same caveat as _create_inputs).
+        # STEP 1: greedy coin selection — the target includes the fee
+        # for the inputs selected so far, so the change can never go
+        # negative.
         selected_utxos = []
         total_input = 0
         for utxo in utxos:
             selected_utxos.append(utxo)
             total_input += utxo['value']
-            if total_input >= amount_sat:
+            if total_input >= amount_sat + self._estimate_fee(len(selected_utxos), 2):
                 break
 
-        if total_input < amount_sat:
+        fee = self._estimate_fee(len(selected_utxos), 2)
+        if total_input < amount_sat + fee:
             raise ValueError("Insufficient funds")
 
-        fee = self._estimate_fee(len(selected_utxos), 2)
         change = total_input - amount_sat - fee
 
         # STEP 2: output scripts — recipient and change (faucet)
@@ -847,9 +852,8 @@ class UTXOFaucet:
     #
     # The faucet address and its confirmed / unconfirmed /
     # total balance. Returns (payload, http_status) — the
-    # route just jsonify()s it. NOTE: on failure the raw
-    # exception text goes to the user; acceptable for a lab
-    # tool, would be an information leak anywhere else.
+    # route just jsonify()s it. Failures log the real
+    # exception and answer with a generic Lithuanian error.
     #
     # Used by:
     #   - utxo_routes.py — GET /api/utxo/<network>/faucet-balance
@@ -871,8 +875,9 @@ class UTXOFaucet:
                 "chunk_size": float(ctx.chunk_size_btc or self.default_amount_btc)
             }, 200
 
-        except Exception as e:
-            return {"error": str(e)}, 500
+        except Exception:
+            logging.exception(f"Failed to get UTXO faucet balance for {network_key}")
+            return {"error": "Nepavyko gauti čiaupo informacijos"}, 500
 
         finally:
             if ctx:
@@ -912,9 +917,11 @@ class UTXOFaucet:
             if to_address.lower() == ctx.address.lower():
                 return {"error": "Negalima siųsti į čiaupo adresą"}, 400
 
-            # STEP 2: the cooldown.
+            # STEP 2: the cooldown — per (network, address), so
+            # claiming on one chain doesn't lock the others.
             now = int(time.time())
-            last_request_time = self.last_request.get(to_address.lower())
+            cooldown_key = (network_key, to_address.lower())
+            last_request_time = self.last_request.get(cooldown_key)
 
             if last_request_time and (now - last_request_time) < self.cooldown_seconds:
                 remaining = self.cooldown_seconds - (now - last_request_time)
@@ -940,7 +947,7 @@ class UTXOFaucet:
             amount_sat = int(float(ctx.chunk_size_btc) * 1e8)
             tx_id = self._create_and_broadcast_transaction(ctx, to_address, amount_sat)
 
-            self.last_request[to_address.lower()] = now
+            self.last_request[cooldown_key] = now
 
             return {
                 "message": "Cryptocurrency sent successfully",
