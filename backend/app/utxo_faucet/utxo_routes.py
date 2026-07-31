@@ -1,4 +1,4 @@
-# -----------------------------------------------------------
+############################################################
 #  [*] UTXO Faucet HTTP API
 #
 #  The REST surface for the UTXO side of the faucet (Bitcoin,
@@ -14,7 +14,8 @@
 #
 #  Used by:
 #    - main.py — blueprint registration
-# -----------------------------------------------------------
+############################################################
+
 
 from flask import Blueprint, request, jsonify
 
@@ -33,35 +34,78 @@ utxo_faucet = UTXOFaucet(UTXO_NETWORK_CONFIGS)
 
 
 
-# -----------------------------------------------------------
-# Networks
-# -----------------------------------------------------------
+
+
+
+
+############################################################
+# get_networks
+############################################################
+#
+# GET /api/utxo/networks
+#
+# Network picker data for the frontend: names, chunk sizes
+# and which network to preselect. Shaped like the EVM
+# equivalent so the frontend can treat both alike.
+#
+# Used by:
+#   - Faucet_UTXO/Page.jsx — useFaucetInfo's display names
+#   - components/Navbar.jsx — useNetworksDirectory
+############################################################
 
 @bp_utxo_faucet.route('/api/utxo/networks', methods=['GET'])
 def get_networks():
-    # Network picker data for the frontend: names, chunk sizes
-    # and which network to preselect.
     return jsonify(utxo_faucet.get_networks()), 200
 
 
 
 
-# -----------------------------------------------------------
-# Balance / payout
-# -----------------------------------------------------------
+
+
+
+
+############################################################
+# faucet_balance
+############################################################
+#
+# GET /api/utxo/<network>/faucet-balance
+#
+# The faucet address and its confirmed/unconfirmed balance,
+# so the UI (and the operator) can see whether the faucet
+# needs a top-up.
+#
+# Used by:
+#   - Faucet_UTXO/Page.jsx — useFaucetInfo's 5 s repoll
+############################################################
 
 @bp_utxo_faucet.route('/api/utxo/<network>/faucet-balance', methods=['GET'])
 def faucet_balance(network):
-    # Faucet address and its confirmed/unconfirmed balance, so the UI
-    # (and the operator) can see whether the faucet needs a top-up.
     data, status = utxo_faucet.get_faucet_balance(network)
     return jsonify(data), status
 
 
+
+
+
+
+
+
+############################################################
+# request_btc
+############################################################
+#
+# GET /api/utxo/<network>/request-btc
+#
+# The actual payout: sends one chunk of the network's coin to
+# ?address= — validation, the cooldown and the broadcast live
+# in UTXOFaucet.request_crypto.
+#
+# Used by:
+#   - Faucet_UTXO/Page.jsx — handleRequest
+############################################################
+
 @bp_utxo_faucet.route('/api/utxo/<network>/request-btc', methods=['GET'])
 def request_btc(network):
-    # The actual payout: sends one chunk of the network's coin to
-    # ?address=... — validation and cooldown live in the faucet itself.
     to_address = request.args.get('address')
     data, status = utxo_faucet.request_crypto(network, to_address)
     return jsonify(data), status

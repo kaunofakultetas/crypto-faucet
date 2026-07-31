@@ -1,4 +1,4 @@
-# -----------------------------------------------------------
+############################################################
 #  [*] UTXO Faucet
 #
 #  A minimal faucet for UTXO-based chains (Bitcoin, Litecoin
@@ -29,7 +29,8 @@
 #
 #  Used by:
 #    - utxo_routes.py — the Flask endpoints under /api/utxo/*
-# -----------------------------------------------------------
+############################################################
+
 
 import os
 import time
@@ -58,15 +59,24 @@ DUST_LIMIT_SAT = 546
 
 
 
-# -----------------------------------------------------------
+
+
+
+
+############################################################
 # NetworkContext
-# -----------------------------------------------------------
+############################################################
 #
 # Everything a single faucet request needs to know about the
-# network it operates on: the derived key/address, the Electrum
-# endpoint and the live SSL socket. A fresh instance is built
-# per request, which keeps the faucet thread-safe without locks.
-# -----------------------------------------------------------
+# network it operates on: the derived key/address, the
+# Electrum endpoint and the live SSL socket. A fresh instance
+# is built per request, which keeps the faucet thread-safe
+# without locks.
+#
+# Used by:
+#   - UTXOFaucet (below) — built in
+#     _setup_wallet_for_network, threaded through everything
+############################################################
 
 class NetworkContext:
 
@@ -84,11 +94,51 @@ class NetworkContext:
 
 
 
-# -----------------------------------------------------------
+
+
+
+
+############################################################
 # UTXOFaucet
-# -----------------------------------------------------------
+############################################################
+#
+# One instance serves every configured network; per-request
+# state lives in NetworkContext. Methods in groups:
+#
+#   setup       — __init__
+#   keys        — _hash160, _convert_ethereum_key_to_bitcoin,
+#                 _get_hrp, _create_bech32_address,
+#                 _bech32_address_to_scripthash
+#   resolution  — _get_coin_type_from_key,
+#                 _get_bitcoinlib_network_name,
+#                 _setup_wallet_for_network
+#   electrum    — _connect_electrum, _disconnect_electrum,
+#                 _send_electrum_request
+#   queries     — _get_balance, _get_utxos
+#   building    — _create_inputs, _estimate_fee,
+#                 _create_and_broadcast_transaction,
+#                 _create_and_broadcast_raw_transaction
+#   validation  — _validate_address
+#   public API  — get_networks, get_faucet_balance,
+#                 request_crypto
+#
+# Used by:
+#   - utxo_routes.py — one shared instance for all handlers
+############################################################
 
 class UTXOFaucet:
+
+    ############################################################
+    # __init__
+    ############################################################
+    #
+    # Only configuration and the cooldown table live on the
+    # instance — everything network-specific is derived per
+    # request in _setup_wallet_for_network.
+    #
+    # Used by:
+    #   - utxo_routes.py — at import time, the single instance
+    ############################################################
 
     def __init__(self, network_configs: dict):
         # Per-network settings (electrum_server, hrp, chunk_size, ...)
@@ -102,27 +152,46 @@ class UTXOFaucet:
         self.fee_rate_sat_per_byte = int(os.getenv('BTC_FEE_RATE_SATVB', '10'))
         self.cooldown_seconds = int(os.getenv('UTXO_COOLDOWN_SECONDS', '60'))
 
-        # address (lowercased) -> unix time of its last payout,
-        # used to enforce the cooldown between requests.
+        # address (lowercased) -> unix time of its last payout, for
+        # the cooldown between requests. NOTE: keyed by address alone
+        # — one wallet claiming on Litecoin is also locked out of
+        # Bitcoin for the window (the EVM faucet keys per network).
+        # In-memory on purpose: resets on restart, fresh wallets walk
+        # around it — accepted for a lab faucet on testnets.
         self.last_request = {}
 
 
 
-
-    # -----------------------------------------------------------
-    # Keys & addresses
-    # -----------------------------------------------------------
+    ############################################################
+    # _hash160
+    ############################################################
+    #
+    # Bitcoin's HASH160: RIPEMD160(SHA256(data)).
+    #
+    # Used by:
+    #   - _setup_wallet_for_network (below)
+    ############################################################
 
     def _hash160(self, data: bytes) -> bytes:
-        # Bitcoin's HASH160: RIPEMD160(SHA256(data)).
         sha256_hash = hashlib.sha256(data).digest()
         return hashlib.new('ripemd160', sha256_hash).digest()
 
 
+
+    ############################################################
+    # _convert_ethereum_key_to_bitcoin
+    ############################################################
+    #
+    # Both key types are 32-byte secp256k1 scalars, so the same
+    # hex material works on both sides — only the encoding
+    # differs. Accepts '0x'-prefixed and bare hex; pads (on the
+    # right) and truncates to 64 chars.
+    #
+    # Used by:
+    #   - _setup_wallet_for_network (below)
+    ############################################################
+
     def _convert_ethereum_key_to_bitcoin(self, eth_private_key: str) -> bytes:
-        # Both key types are 32-byte secp256k1 scalars, so the same hex
-        # material works on both sides — only the encoding differs.
-        # Accepts '0x'-prefixed and bare hex; pads/truncates to 64 chars.
         hex_key = eth_private_key.replace("0x", "")
         hex_key = hex_key.ljust(64, '0')
         hex_key = hex_key[:64]
@@ -130,10 +199,22 @@ class UTXOFaucet:
         return bytes.fromhex(hex_key)
 
 
+
+    ############################################################
+    # _get_hrp
+    ############################################################
+    #
+    # The bech32 Human Readable Part ('tb', 'tltc', 'knf', ...)
+    # comes straight from the network config — guessing it from
+    # the coin type would silently produce addresses for the
+    # wrong chain.
+    #
+    # Used by:
+    #   - _create_bech32_address (below)
+    #   - _validate_address (below)
+    ############################################################
+
     def _get_hrp(self, network: str, coin_type: str, network_key: str = None) -> str:
-        # The bech32 Human Readable Part ('tb', 'tltc', 'knf', ...) comes
-        # straight from the network config — guessing it from the coin
-        # type would silently produce addresses for the wrong chain.
         if network_key and network_key in self.network_configs:
             config_hrp = self.network_configs[network_key].get('hrp')
             if config_hrp:
@@ -142,16 +223,40 @@ class UTXOFaucet:
         raise ValueError(f"No HRP configured for network: {network_key}")
 
 
+
+    ############################################################
+    # _create_bech32_address
+    ############################################################
+    #
+    # Native SegWit v0 address: witness version 0 + the 20-byte
+    # pubkey hash, bech32-encoded under the network's HRP.
+    #
+    # Used by:
+    #   - _setup_wallet_for_network (below)
+    ############################################################
+
     def _create_bech32_address(self, pubkey_hash: bytes, network: str, coin_type: str, network_key: str = None) -> str:
-        # Native SegWit v0 address: witness version 0 + 20-byte pubkey hash.
         hrp = self._get_hrp(network, coin_type, network_key)
         converted = bech32.convertbits(pubkey_hash, 8, 5)
         return bech32.bech32_encode(hrp, [0] + converted)
 
 
+
+    ############################################################
+    # _bech32_address_to_scripthash
+    ############################################################
+    #
+    # Electrum servers index by scripthash, not by address:
+    # SHA256 of the output script, reversed, as hex. NOTE: the
+    # HRP allowlist is hardcoded — a new network with a new
+    # prefix must be added here too, or its addresses will be
+    # rejected as invalid.
+    #
+    # Used by:
+    #   - _setup_wallet_for_network (below)
+    ############################################################
+
     def _bech32_address_to_scripthash(self, address: str) -> str:
-        # Electrum servers index by scripthash, not by address:
-        # SHA256 of the output script, reversed, as hex.
         hrp, data = bech32.bech32_decode(address)
         valid_hrps = ('tb', 'bc', 'bcrt', 'tltc', 'ltc', 'rltc', 'knf')
         if hrp not in valid_hrps:
@@ -164,14 +269,19 @@ class UTXOFaucet:
 
 
 
-
-    # -----------------------------------------------------------
-    # Network resolution
-    # -----------------------------------------------------------
+    ############################################################
+    # _get_coin_type_from_key
+    ############################################################
+    #
+    # Network keys are named like 'ltc4', 'knf', 'btc4' — the
+    # coin type is encoded in the name itself; anything that
+    # isn't Litecoin or KNF counts as Bitcoin.
+    #
+    # Used by:
+    #   - _setup_wallet_for_network (below)
+    ############################################################
 
     def _get_coin_type_from_key(self, network_key: str) -> str:
-        # Network keys are named like 'ltc4', 'knf', 'btc4' — the coin
-        # type is encoded in the name itself.
         key_lower = network_key.lower()
 
         if 'ltc' in key_lower:
@@ -182,9 +292,22 @@ class UTXOFaucet:
             return 'bitcoin'
 
 
+
+    ############################################################
+    # _get_bitcoinlib_network_name
+    ############################################################
+    #
+    # Maps our generic 'testnet'/'regtest'/'mainnet' labels
+    # onto the exact network names bitcoinlib expects. KNF is
+    # special: bitcoinlib has no idea what it is, so bitcoin
+    # stands in and KNF transactions are built by hand (see
+    # _create_and_broadcast_raw_transaction).
+    #
+    # Used by:
+    #   - _setup_wallet_for_network (below)
+    ############################################################
+
     def _get_bitcoinlib_network_name(self, generic_network: str, coin_type: str) -> str:
-        # Map our generic 'testnet'/'regtest'/'mainnet' labels onto the
-        # exact network names bitcoinlib expects.
         generic_lower = generic_network.lower()
         coin_lower = coin_type.lower()
 
@@ -197,8 +320,6 @@ class UTXOFaucet:
                 return 'litecoin_testnet'
 
         elif coin_lower == 'knf':
-            # bitcoinlib has no idea what KNF is; use bitcoin as a stand-in
-            # and build KNF transactions by hand (see the raw tx builder).
             return 'bitcoin'
 
         else:  # bitcoin
@@ -210,11 +331,25 @@ class UTXOFaucet:
                 return 'testnet'
 
 
+
+    ############################################################
+    # _setup_wallet_for_network
+    ############################################################
+    #
+    # Builds the per-request NetworkContext: resolves the
+    # network, derives the faucet key/address for it and notes
+    # where its Electrum server is. Does NOT open the socket —
+    # that's _connect_electrum, called only by the paths that
+    # actually talk to the chain.
+    #
+    # Used by:
+    #   - get_faucet_balance / request_crypto (below)
+    ############################################################
+
     def _setup_wallet_for_network(self, network_key: str) -> NetworkContext:
-        # Build the per-request context: resolve the network, derive the
-        # faucet key/address for it and note where its Electrum server is.
         ctx = NetworkContext()
 
+        # STEP 1: resolve the network and coin type from the config.
         config = self.network_configs.get(network_key)
         if not config:
             raise ValueError(f'Unknown UTXO network: {network_key}')
@@ -223,7 +358,8 @@ class UTXOFaucet:
         ctx.coin_type = self._get_coin_type_from_key(network_key)
         ctx.network = self._get_bitcoinlib_network_name(generic_network, ctx.coin_type)
 
-        # Electrum endpoint, 'host:port' with 50002 (SSL) as the default port.
+        # STEP 2: Electrum endpoint, 'host:port' with 50002 (SSL) as
+        # the default port.
         electrum_server = config.get('electrum_server', '')
         if ':' in electrum_server:
             ctx.electrum_host, port_str = electrum_server.split(':', 1)
@@ -232,14 +368,15 @@ class UTXOFaucet:
             ctx.electrum_host = electrum_server
             ctx.electrum_port = 50002
 
+        # STEP 3: derive the key. For KNF don't tell HDKey a network —
+        # bitcoinlib would try to validate against params that don't
+        # match the custom chain.
         if not self.faucet_private_key:
             raise ValueError('Faucet private key not configured')
 
         try:
             btc_private_key = self._convert_ethereum_key_to_bitcoin(self.faucet_private_key)
 
-            # For KNF don't tell HDKey a network — bitcoinlib would try to
-            # validate against params that don't match the custom chain.
             if ctx.coin_type == 'knf':
                 ctx.key = HDKey(import_key=btc_private_key)
             else:
@@ -247,27 +384,35 @@ class UTXOFaucet:
         except Exception as e:
             raise ValueError(f'Invalid private key for network {ctx.network}: {e}')
 
-        # Faucet address + the scripthash Electrum indexes it under.
+        # STEP 4: the faucet address, the scripthash Electrum indexes
+        # it under, and this network's payout size.
         pubkey = ctx.key.public_byte
         pubkey_hash = self._hash160(pubkey)
         ctx.address = self._create_bech32_address(pubkey_hash, ctx.network, ctx.coin_type, network_key)
         ctx.scripthash = self._bech32_address_to_scripthash(ctx.address)
 
-        # Payout size for this network, falling back to the env default.
         ctx.chunk_size_btc = float(config.get('chunk_size', self.default_amount_btc))
 
         return ctx
 
 
 
-
-    # -----------------------------------------------------------
-    # Electrum connection
-    # -----------------------------------------------------------
+    ############################################################
+    # _connect_electrum
+    ############################################################
+    #
+    # Opens an SSL connection to the Electrum server. The
+    # servers run with self-signed certificates, so
+    # verification is disabled. The server.version handshake
+    # goes out immediately — recent ElectrumX versions close
+    # the session ("server.version must be first msg") if any
+    # other request arrives before it.
+    #
+    # Used by:
+    #   - get_faucet_balance / request_crypto (below)
+    ############################################################
 
     def _connect_electrum(self, ctx: NetworkContext):
-        # Open an SSL connection to the Electrum server. The servers run
-        # with self-signed certificates, so verification is disabled.
         if not ctx.electrum_host or not ctx.electrum_port:
             raise ValueError('Electrum server not configured')
 
@@ -277,9 +422,6 @@ class UTXOFaucet:
         context.verify_mode = ssl.CERT_NONE
         ctx.ssock = context.wrap_socket(sock, server_hostname=ctx.electrum_host)
 
-        # Protocol handshake. Recent ElectrumX versions close the session
-        # ("server.version must be first msg") if any other request
-        # arrives before this one.
         self._send_electrum_request(
             ctx,
             "server.version",
@@ -287,15 +429,41 @@ class UTXOFaucet:
         )
 
 
+
+    ############################################################
+    # _disconnect_electrum
+    ############################################################
+    #
+    # Used by:
+    #   - get_faucet_balance / request_crypto (below) — their
+    #     finally blocks, so the socket never leaks
+    ############################################################
+
     def _disconnect_electrum(self, ctx: NetworkContext):
         if ctx.ssock:
             ctx.ssock.close()
             ctx.ssock = None
 
 
+
+    ############################################################
+    # _send_electrum_request
+    ############################################################
+    #
+    # One JSON-RPC round-trip over the open socket. Newline-
+    # delimited protocol: send one line, read until the first
+    # '\n' comes back. Electrum-side errors surface as raised
+    # exceptions, never as return values. NOTE: the timing
+    # print goes to stdout on every single request — handy in
+    # the container logs, noisy under load.
+    #
+    # Used by:
+    #   - _connect_electrum (above) — the handshake
+    #   - _get_balance / _get_utxos (below)
+    #   - both transaction broadcast paths (below)
+    ############################################################
+
     def _send_electrum_request(self, ctx: NetworkContext, method: str, params: list):
-        # One JSON-RPC round-trip over the open socket. Newline-delimited
-        # protocol: send one line, read until the first '\n' comes back.
         if not ctx.ssock:
             raise ConnectionError("Not connected to Electrum server")
 
@@ -338,13 +506,18 @@ class UTXOFaucet:
 
 
 
-
-    # -----------------------------------------------------------
-    # Chain queries
-    # -----------------------------------------------------------
+    ############################################################
+    # _get_balance
+    ############################################################
+    #
+    # Faucet balance in whole coins (Electrum answers in
+    # satoshis), split into confirmed / unconfirmed / total.
+    #
+    # Used by:
+    #   - get_faucet_balance / request_crypto (below)
+    ############################################################
 
     def _get_balance(self, ctx: NetworkContext) -> dict:
-        # Faucet balance in whole coins (Electrum answers in satoshis).
         result = self._send_electrum_request(ctx, "blockchain.scripthash.get_balance", [ctx.scripthash])
         confirmed = result.get("confirmed", 0) / 1e8
         unconfirmed = result.get("unconfirmed", 0) / 1e8
@@ -356,19 +529,36 @@ class UTXOFaucet:
         }
 
 
+
+    ############################################################
+    # _get_utxos
+    ############################################################
+    #
+    # Used by:
+    #   - _create_and_broadcast_transaction (below)
+    ############################################################
+
     def _get_utxos(self, ctx: NetworkContext) -> list:
         return self._send_electrum_request(ctx, "blockchain.scripthash.listunspent", [ctx.scripthash])
 
 
 
-
-    # -----------------------------------------------------------
-    # Transaction building
-    # -----------------------------------------------------------
+    ############################################################
+    # _create_inputs
+    ############################################################
+    #
+    # Greedy coin selection: take UTXOs in the order Electrum
+    # returned them until the target amount is covered. NOTE:
+    # the target does not include the fee — when the selected
+    # total only barely covers the amount, the fee eats into
+    # (or past) the change and the broadcast can fail; with a
+    # comfortably funded faucet this stays theoretical.
+    #
+    # Used by:
+    #   - _create_and_broadcast_transaction (below)
+    ############################################################
 
     def _create_inputs(self, ctx: NetworkContext, utxos: list, target_amount_sat: int = None) -> tuple:
-        # Greedy coin selection: take UTXOs in the order Electrum returned
-        # them until the target amount is covered.
         inputs = []
         total_input = 0
 
@@ -402,16 +592,40 @@ class UTXOFaucet:
         return inputs, total_input
 
 
+
+    ############################################################
+    # _estimate_fee
+    ############################################################
+    #
+    # Conservative vsize estimate for a p2wpkh transaction:
+    # ~91 vbytes per input, ~31 per output, ~10 of overhead,
+    # times the configured sat/vB rate.
+    #
+    # Used by:
+    #   - _create_and_broadcast_transaction (below)
+    #   - _create_and_broadcast_raw_transaction (below)
+    ############################################################
+
     def _estimate_fee(self, num_inputs: int, num_outputs: int) -> int:
-        # Conservative vsize estimate for a p2wpkh transaction:
-        # ~91 vbytes per input, ~31 per output, ~10 of overhead.
         estimated_size = (num_inputs * 91) + (num_outputs * 31) + 10
         return estimated_size * self.fee_rate_sat_per_byte
 
 
+
+    ############################################################
+    # _create_and_broadcast_transaction
+    ############################################################
+    #
+    # Builds, signs and broadcasts a payout. Bitcoin/Litecoin
+    # go through bitcoinlib; KNF takes the manual raw-bytes
+    # path below.
+    #
+    # Used by:
+    #   - request_crypto (below)
+    ############################################################
+
     def _create_and_broadcast_transaction(self, ctx: NetworkContext, to_address: str, amount_sat: int) -> str:
-        # Build, sign and broadcast a payout. Bitcoin/Litecoin go through
-        # bitcoinlib; KNF takes the manual raw-bytes path below.
+        # STEP 1: what can we spend?
         utxos = self._get_utxos(ctx)
         if not utxos:
             raise ValueError("No UTXOs available")
@@ -419,21 +633,24 @@ class UTXOFaucet:
         if ctx.coin_type == 'knf':
             return self._create_and_broadcast_raw_transaction(ctx, to_address, amount_sat, utxos)
 
+        # STEP 2: pick inputs and make sure they cover the amount.
         inputs, total_input = self._create_inputs(ctx, utxos, amount_sat)
         if total_input < amount_sat:
             raise ValueError("Insufficient funds")
 
+        # STEP 3: outputs — the payout, plus the leftover back to the
+        # faucet unless it's dust (then it's cheaper to just leave it
+        # as extra fee).
         fee = self._estimate_fee(len(inputs), 2)
         outputs = [Output(amount_sat, to_address, network=ctx.network)]
 
-        # Send the leftover back to the faucet, unless it's dust —
-        # then it's cheaper to just leave it as extra fee.
         change = total_input - amount_sat - fee
         if change > DUST_LIMIT_SAT:
             outputs.append(Output(change, ctx.address, network=ctx.network))
         else:
             fee += change
 
+        # STEP 4: sign with bitcoinlib and broadcast over Electrum.
         tx = Transaction(
             inputs=inputs,
             outputs=outputs,
@@ -446,12 +663,24 @@ class UTXOFaucet:
         return self._send_electrum_request(ctx, "blockchain.transaction.broadcast", [raw_tx])
 
 
-    def _create_and_broadcast_raw_transaction(self, ctx: NetworkContext, to_address: str, amount_sat: int, utxos: list) -> str:
-        # Hand-rolled SegWit v0 transaction for KNF, where bitcoinlib's
-        # network validation gets in the way. Serializes the BIP-141
-        # format byte by byte and signs each input per BIP-143.
 
-        # --- Coin selection -----------------------------------
+    ############################################################
+    # _create_and_broadcast_raw_transaction
+    ############################################################
+    #
+    # Hand-rolled SegWit v0 transaction for KNF, where
+    # bitcoinlib's network validation gets in the way.
+    # Serializes the BIP-141 format byte by byte and signs
+    # each input per BIP-143.
+    #
+    # Used by:
+    #   - _create_and_broadcast_transaction (above) — the KNF
+    #     branch
+    ############################################################
+
+    def _create_and_broadcast_raw_transaction(self, ctx: NetworkContext, to_address: str, amount_sat: int, utxos: list) -> str:
+        # STEP 1: greedy coin selection (fee not included in the
+        # target — same caveat as _create_inputs).
         selected_utxos = []
         total_input = 0
         for utxo in utxos:
@@ -466,8 +695,8 @@ class UTXOFaucet:
         fee = self._estimate_fee(len(selected_utxos), 2)
         change = total_input - amount_sat - fee
 
-        # --- Output scripts -----------------------------------
-        # Recipient and change (faucet) pubkey hashes from bech32.
+        # STEP 2: output scripts — recipient and change (faucet)
+        # pubkey hashes straight from bech32.
         to_hrp, to_data = bech32.bech32_decode(to_address)
         to_decoded = bech32.convertbits(to_data[1:], 5, 8, False)
         to_pubkey_hash = bytes(to_decoded)
@@ -487,7 +716,7 @@ class UTXOFaucet:
                 'script_pubkey': b'\x00\x14' + from_pubkey_hash
             })
 
-        # --- Serialize the unsigned part ----------------------
+        # STEP 3: serialize the unsigned part of the transaction.
         tx_bytes = struct.pack('<I', 2)   # version
         tx_bytes += b'\x00\x01'           # SegWit marker + flag
 
@@ -504,7 +733,8 @@ class UTXOFaucet:
             tx_bytes += bytes([len(output['script_pubkey'])])
             tx_bytes += output['script_pubkey']
 
-        # --- Witnesses (BIP-143 signature per input) ----------
+        # STEP 4: one BIP-143 signature per input, appended as the
+        # witness stack: <signature + SIGHASH_ALL byte> <pubkey>.
         for i, utxo in enumerate(selected_utxos):
             hash_prevouts = hashlib.sha256(hashlib.sha256(
                 b''.join([bytes.fromhex(u['tx_hash'])[::-1] + struct.pack('<I', u['tx_pos']) for u in selected_utxos])
@@ -540,7 +770,6 @@ class UTXOFaucet:
             sk = ecdsa.SigningKey.from_string(ctx.key.private_byte, curve=ecdsa.SECP256k1)
             signature = sk.sign_digest(sighash, sigencode=ecdsa.util.sigencode_der_canonize)
 
-            # Witness stack: <signature + SIGHASH_ALL byte> <pubkey>
             tx_bytes += b'\x02'
             sig_with_hashtype = signature + b'\x01'
             tx_bytes += bytes([len(sig_with_hashtype)]) + sig_with_hashtype
@@ -549,21 +778,26 @@ class UTXOFaucet:
 
         tx_bytes += struct.pack('<I', 0)  # locktime
 
-        # --- Broadcast ----------------------------------------
+        # STEP 5: broadcast over the same Electrum connection.
         raw_tx = tx_bytes.hex()
         return self._send_electrum_request(ctx, "blockchain.transaction.broadcast", [raw_tx])
 
 
 
-
-    # -----------------------------------------------------------
-    # Validation
-    # -----------------------------------------------------------
+    ############################################################
+    # _validate_address
+    ############################################################
+    #
+    # Cheap sanity check: the address must carry this network's
+    # HRP ('tb1...', 'tltc1...', 'knf1...'). Full checksum
+    # validation happens implicitly when the transaction is
+    # built.
+    #
+    # Used by:
+    #   - request_crypto (below)
+    ############################################################
 
     def _validate_address(self, ctx: NetworkContext, address: str, network_key: str = None) -> bool:
-        # Cheap sanity check: the address must carry this network's HRP
-        # ('tb1...', 'tltc1...', 'knf1...'). Full checksum validation
-        # happens implicitly when the transaction is built.
         if not address:
             return False
 
@@ -574,13 +808,19 @@ class UTXOFaucet:
 
 
 
-
-    # -----------------------------------------------------------
-    # Public API (called from utxo_routes.py)
-    # -----------------------------------------------------------
+    ############################################################
+    # get_networks
+    ############################################################
+    #
+    # Everything the frontend needs to render the network
+    # picker. chain_id is always 0 — the field only exists so
+    # the payload shape matches the EVM faucet's.
+    #
+    # Used by:
+    #   - utxo_routes.py — GET /api/utxo/networks
+    ############################################################
 
     def get_networks(self) -> dict:
-        # Everything the frontend needs to render the network picker.
         default_key = os.getenv('UTXO_DEFAULT_NETWORK', 'btc4')
 
         networks = {}
@@ -600,8 +840,22 @@ class UTXOFaucet:
         }
 
 
+
+    ############################################################
+    # get_faucet_balance
+    ############################################################
+    #
+    # The faucet address and its confirmed / unconfirmed /
+    # total balance. Returns (payload, http_status) — the
+    # route just jsonify()s it. NOTE: on failure the raw
+    # exception text goes to the user; acceptable for a lab
+    # tool, would be an information leak anywhere else.
+    #
+    # Used by:
+    #   - utxo_routes.py — GET /api/utxo/<network>/faucet-balance
+    ############################################################
+
     def get_faucet_balance(self, network_key: str) -> tuple:
-        # Returns (payload, http_status) — the route just jsonify()s it.
         ctx = None
         try:
             ctx = self._setup_wallet_for_network(network_key)
@@ -625,15 +879,28 @@ class UTXOFaucet:
                 self._disconnect_electrum(ctx)
 
 
+
+    ############################################################
+    # request_crypto
+    ############################################################
+    #
+    # The actual payout: validate the address, enforce the
+    # cooldown, check the faucet balance and broadcast one
+    # chunk to the student. Returns (payload, http_status);
+    # user-facing errors in Lithuanian, with the raw exception
+    # in 'details' for debugging.
+    #
+    # Used by:
+    #   - utxo_routes.py — GET /api/utxo/<network>/request-btc
+    ############################################################
+
     def request_crypto(self, network_key: str, to_address: str) -> tuple:
-        # The actual payout: validate the address, enforce the cooldown,
-        # check the faucet balance and broadcast one chunk to the student.
-        # Returns (payload, http_status); user-facing errors in Lithuanian.
         ctx = None
         try:
             ctx = self._setup_wallet_for_network(network_key)
 
-            # --- Input validation -----------------------------
+            # STEP 1: input validation — address present, right HRP for
+            # this network, and not the faucet paying itself.
             if not to_address:
                 return {"error": "Trūksta reikalingų parametrų"}, 400
 
@@ -645,7 +912,7 @@ class UTXOFaucet:
             if to_address.lower() == ctx.address.lower():
                 return {"error": "Negalima siųsti į čiaupo adresą"}, 400
 
-            # --- Cooldown --------------------------------------
+            # STEP 2: the cooldown.
             now = int(time.time())
             last_request_time = self.last_request.get(to_address.lower())
 
@@ -658,7 +925,9 @@ class UTXOFaucet:
             if not ctx.chunk_size_btc or ctx.chunk_size_btc <= 0:
                 return {"error": "chunk_size must be > 0 for this network"}, 500
 
-            # --- Balance check ---------------------------------
+            # STEP 3: does the faucet have the coins? Only confirmed
+            # balance counts — unconfirmed change can't be re-spent on
+            # every chain config.
             self._connect_electrum(ctx)
 
             balance_info = self._get_balance(ctx)
@@ -666,11 +935,11 @@ class UTXOFaucet:
             if current_balance < ctx.chunk_size_btc:
                 return {"error": "Čiaupas nebeturi kriptovaliutos. Praneškite dėstytojui."}, 503
 
-            # --- Send ------------------------------------------
+            # STEP 4: build, sign and broadcast; the cooldown starts
+            # only after a successful broadcast.
             amount_sat = int(float(ctx.chunk_size_btc) * 1e8)
             tx_id = self._create_and_broadcast_transaction(ctx, to_address, amount_sat)
 
-            # Start the cooldown only after a successful broadcast.
             self.last_request[to_address.lower()] = now
 
             return {
