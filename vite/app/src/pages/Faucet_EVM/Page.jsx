@@ -49,6 +49,9 @@ import InstallDesktopIcon from '@mui/icons-material/InstallDesktop';
 import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
 
 
+
+
+
 // How often the faucet balance repolls
 const FAUCET_REFRESH_MS = 3000;
 
@@ -62,8 +65,23 @@ const ALERT_VISIBLE_MS = 8000;
 const ALERT_FADE_MS = 500;
 
 
-// The stepper's connector line — grey until reached, brand
-// gradient once active/completed
+
+
+
+
+
+// -----------------------------------------------------------
+// ColorlibConnector
+// -----------------------------------------------------------
+//
+// The stepper's connector line: a thin grey bar that switches
+// to the brand orange→pink→purple gradient once the step it
+// leads to is active or completed.
+//
+// Used by:
+//   - ProgressStepper (below)
+// -----------------------------------------------------------
+
 const ColorlibConnector = styled(StepConnector)(({ theme }) => ({
   [`&.${stepConnectorClasses.alternativeLabel}`]: {
     top: 22,
@@ -90,8 +108,23 @@ const ColorlibConnector = styled(StepConnector)(({ theme }) => ({
 }));
 
 
-// One round step bubble — grey until reached, brand gradient
-// once active/completed
+
+
+
+
+
+// -----------------------------------------------------------
+// ColorlibStepIconRoot
+// -----------------------------------------------------------
+//
+// One round step bubble: grey until reached, the brand
+// gradient (plus a drop shadow while active) once the step is
+// active or completed — ownerState carries the two flags in.
+//
+// Used by:
+//   - ColorlibStepIcon (below)
+// -----------------------------------------------------------
+
 const ColorlibStepIconRoot = styled('div')(({ theme, ownerState }) => ({
   backgroundColor: theme.palette.mode === 'dark' ? theme.palette.grey[700] : '#ccc',
   zIndex: 1,
