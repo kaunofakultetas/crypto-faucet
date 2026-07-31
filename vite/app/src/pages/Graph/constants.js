@@ -1,99 +1,225 @@
-/**
- * Constants for the Graph visualization system
- * Centralized configuration for vis-network graph behavior and styling
- */
+// -----------------------------------------------------------
+//  [*] Graph — constants
+//
+//  Every tuning knob of the transaction graph in one place:
+//  zoom limits, layout spacing, refresh timing, node/edge
+//  styling, storage keys and icon paths.
+//
+//  Used by:
+//    - CryptoFlowGraph.jsx (incl. its zoom controls, dialog
+//      and position hook)
+// -----------------------------------------------------------
 
-// ===== ZOOM CONFIGURATION =====
+
+
+
+
+
+
+// -----------------------------------------------------------
+// ZOOM_CONFIG
+// -----------------------------------------------------------
+//
+// Zoom limits and sensitivity — the graph clamps every zoom
+// path (wheel, slider, buttons) to MIN_SCALE..MAX_SCALE.
+//
+// Used by:
+//   - CryptoFlowGraph.jsx — the zoom listener, setZoom and
+//     the ZoomControls props
+// -----------------------------------------------------------
+
 export const ZOOM_CONFIG = {
-  /** Minimum zoom scale allowed in the graph */
   MIN_SCALE: 0.2,
-  /** Maximum zoom scale allowed in the graph */
   MAX_SCALE: 2.0,
-  /** Step size for zoom buttons (+/-) */
-  BUTTON_STEP: 0.1,
-  /** Zoom sensitivity for scroll wheel (0-1, lower = less sensitive) */
-  SCROLL_SENSITIVITY: 0.75,
-  /** Precision step for zoom slider */
+  BUTTON_STEP: 0.1,         // one press of the +/- buttons
+  SCROLL_SENSITIVITY: 0.75, // wheel speed (vis zoomSpeed, 0-1)
   SLIDER_STEP: 0.01,
-}
+};
 
-// ===== LAYOUT CONFIGURATION =====
+
+
+
+
+
+
+// -----------------------------------------------------------
+// LAYOUT_CONFIG
+// -----------------------------------------------------------
+//
+// Manual layout geometry, all in px — the vis layout engine
+// is disabled, the graph computes positions itself.
+//
+// Used by:
+//   - CryptoFlowGraph.jsx — syncDataSets (Y = level ×
+//     LEVEL_SEPARATION) and useNodePositions (X slot width)
+// -----------------------------------------------------------
+
 export const LAYOUT_CONFIG = {
-  /** Vertical separation between hierarchy levels (px) */
-  LEVEL_SEPARATION: 275,
-  /** Horizontal spacing between nodes at same level (px) */
-  NODE_SPACING: 200,
-  /** Spacing between different tree branches (px) */
-  TREE_SPACING: 300,
-  /** Horizontal spacing increment for nodes at same level (px) */
-  NODE_HORIZONTAL_INCREMENT: 150,
-  /** Default Y offset multiplier per level */
-  LEVEL_Y_MULTIPLIER: 200,
-}
+  LEVEL_SEPARATION: 275,          // vertical distance between levels
+  NODE_HORIZONTAL_INCREMENT: 150, // X slot width dealt to new nodes
+};
 
-// ===== TIMING CONFIGURATION =====
+
+
+
+
+
+
+// -----------------------------------------------------------
+// TIMING_CONFIG
+// -----------------------------------------------------------
+//
+// Sweep pacing: how often the graph refreshes, how fast the
+// boot warm-up runs and how deep one sweep may follow newly
+// discovered addresses.
+//
+// Used by:
+//   - CryptoFlowGraph.jsx — useTransactionGraph's sweep loop
+// -----------------------------------------------------------
+
 export const TIMING_CONFIG = {
-  /** Interval for automatic graph updates (ms) */
-  UPDATE_INTERVAL: 15000, // 15 seconds
-  /** Delay for graph stabilization between updates (ms) */
-  STABILIZATION_DELAY: 750,
-  /** Number of stabilization cycles during initialization */
-  STABILIZATION_CYCLES: 3,
-  /** Delay before position restoration after name changes (ms) */
-  POSITION_RESTORE_DELAY: 50,
-}
+  UPDATE_INTERVAL: 15000,    // ms from the end of one sweep to the next
+  BOOT_SWEEPS: 5,            // quick warm-up sweeps right after load
+  BOOT_SWEEP_INTERVAL: 1000, // ms between the warm-up sweeps
+  DISCOVERY_MAX_DEPTH: 5,    // BFS hops a single sweep may follow
+};
 
-// ===== NODE CONFIGURATION =====
+
+
+
+
+
+
+// -----------------------------------------------------------
+// NODE_CONFIG
+// -----------------------------------------------------------
+//
+// Node styling — the faucet root renders larger than the
+// user/contract nodes.
+//
+// Used by:
+//   - CryptoFlowGraph.jsx — NODE_PRESENTATION and
+//     VIS_OPTIONS (label font)
+// -----------------------------------------------------------
+
 export const NODE_CONFIG = {
-  /** Default node size for user addresses */
   USER_SIZE: 20,
-  /** Size for the faucet node */
   FAUCET_SIZE: 30,
-  /** Font configuration for node labels */
   FONT: { size: 14, face: 'Tahoma' },
-}
+};
 
-// ===== EDGE CONFIGURATION =====
+
+
+
+
+
+
+// -----------------------------------------------------------
+// EDGE_CONFIG
+// -----------------------------------------------------------
+//
+// Edge styling — one gentle clockwise curve per edge, grey in
+// every interaction state.
+//
+// Used by:
+//   - CryptoFlowGraph.jsx — VIS_OPTIONS and syncDataSets
+//     (edge label font)
+// -----------------------------------------------------------
+
 export const EDGE_CONFIG = {
-  /** Edge line width */
   WIDTH: 2,
-  /** Edge smoothing configuration */
   SMOOTH: {
     type: 'curvedCW',
     roundness: 0.2,
   },
-  /** Font configuration for edge labels */
   FONT: { size: 12, align: 'middle', multi: 'html' },
-  /** Edge color (normal, highlight, hover) */
   COLOR: { color: '#848484', highlight: '#848484', hover: '#848484' },
-}
+};
 
-// ===== GRAPH DIMENSIONS =====
+
+
+
+
+
+
+// -----------------------------------------------------------
+// DIMENSIONS
+// -----------------------------------------------------------
+//
+// Container sizing.
+//
+// Used by:
+//   - CryptoFlowGraph.jsx — the graph canvas div and the
+//     ZoomControls slider
+// -----------------------------------------------------------
+
 export const DIMENSIONS = {
-  /** Height calculation for graph container (CSS calc) */
-  GRAPH_HEIGHT: 'calc(100dvh - 150px)',
-  /** Height for zoom control slider */
-  ZOOM_SLIDER_HEIGHT: 180,
-}
+  GRAPH_HEIGHT: 'calc(100dvh - 150px)', // graph canvas height
+  ZOOM_SLIDER_HEIGHT: 180,              // vertical slider, px
+};
 
-// ===== STORAGE KEYS =====
+
+
+
+
+
+
+// -----------------------------------------------------------
+// STORAGE_KEYS
+// -----------------------------------------------------------
+//
+// localStorage key prefixes — the network name is appended,
+// so each network keeps its own saved node positions.
+//
+// Used by:
+//   - CryptoFlowGraph.jsx — useNodePositions
+// -----------------------------------------------------------
+
 export const STORAGE_KEYS = {
-  /** Prefix for localStorage keys storing node positions */
   NODE_POSITIONS_PREFIX: 'graphNodePositions:',
-}
+};
 
-// ===== IMAGE PATHS =====
+
+
+
+
+
+
+// -----------------------------------------------------------
+// IMAGES
+// -----------------------------------------------------------
+//
+// Node icons — pure presentation; the user/contract/faucet
+// distinction itself lives in the model's kind field.
+//
+// Used by:
+//   - CryptoFlowGraph.jsx — NODE_PRESENTATION
+// -----------------------------------------------------------
+
 export const IMAGES = {
-  /** Icon for user address nodes */
   USER: '/img/user.png',
-  /** Icon for smart contract nodes */
   CONTRACT: '/img/contract.png',
-  /** Icon for faucet node */
   FAUCET: '/img/faucet.png',
-}
+};
 
-// ===== DEFAULT TIMESCALES =====
+
+
+
+
+
+
+// -----------------------------------------------------------
+// TIMESCALES
+// -----------------------------------------------------------
+//
+// Transaction age filter, in hours — only DEFAULT exists and
+// nothing changes it yet (no timescale control is rendered).
+//
+// Used by:
+//   - CryptoFlowGraph.jsx — the timescale prop it passes to
+//     useTransactionGraph
+// -----------------------------------------------------------
+
 export const TIMESCALES = {
-  /** Default timescale filter in hours */
   DEFAULT: 24,
-}
+};

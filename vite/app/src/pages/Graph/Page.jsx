@@ -1,76 +1,75 @@
-import React, { useEffect, useState } from 'react'
-import axios from 'axios'
-import { useParams } from 'react-router-dom'
+// -----------------------------------------------------------
+//  [*] Pages — Transaction Graph (route /graph/:network)
+//
+//  Entry point of the transaction-flow visualization: resolves
+//  the network's faucet address (the graph's root node) via
+//  GET /api/evm/<network>/faucet-balance, then mounts
+//  CryptoFlowGraph. Until then: Lithuanian loading / error /
+//  empty states.
+//
+//  Used by:
+//    - main.jsx — route /graph/:network (imported as GraphPage)
+// -----------------------------------------------------------
 
-import { CryptoFlowGraph } from './components'
+import { useEffect, useState } from 'react';
+import axios from 'axios';
+import { useParams } from 'react-router-dom';
+
+import CryptoFlowGraph from './CryptoFlowGraph';
 
 
+export default function GraphPage() {
 
-/**
- * GraphPage - Main page component for the transaction flow visualization
- * 
- * Responsible for:
- * - Extracting network parameter from URL
- * - Fetching the faucet address for the selected network
- * - Handling loading and error states
- * - Rendering the CryptoFlowGraph component with proper data
- * 
- * @returns {React.Component} The graph page with loading/error handling
- */
-const GraphPage = () => {
-  // Extract network identifier from URL parameters
-  const { network } = useParams()
-  
-  // State management for faucet address loading
-  const [address, setAddress] = useState(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
+  const { network } = useParams();
 
-  // Load faucet address for the selected network
+  const [address, setAddress] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+
+  // Resolve the faucet address whenever the network changes;
+  // the ignore flag drops late responses after an unmount or
+  // a mid-flight network switch. The error is cleared on every
+  // attempt so one failed network doesn't stick to the next.
   useEffect(() => {
-    if (!network) return
-    
-    let ignore = false // Prevent state updates if component unmounts
-    
+    if (!network) return;
+
+    let ignore = false;
+
     const loadFaucetAddress = async () => {
       try {
-        setLoading(true)
-        const { data } = await axios.get(`/api/evm/${network}/faucet-balance`)
-        if (!ignore) setAddress(data.address)
+        setLoading(true);
+        setError(null);
+        const { data } = await axios.get(`/api/evm/${network}/faucet-balance`);
+        if (!ignore) setAddress(data.address);
       } catch (error) {
-        console.error('Failed to fetch faucet address:', error)
-        if (!ignore) setError('Nepavyko gauti čiaupo adreso')
+        console.error('Failed to fetch faucet address:', error);
+        if (!ignore) setError('Nepavyko gauti čiaupo adreso');
       } finally {
-        if (!ignore) setLoading(false)
+        if (!ignore) setLoading(false);
       }
-    }
-    
-    loadFaucetAddress()
-    return () => { ignore = true }
-  }, [network])
+    };
 
-  // Render loading state
+    loadFaucetAddress();
+    return () => { ignore = true; };
+  }, [network]);
+
+
   if (loading) {
-    return <div className="p-4 text-center">Kraunama…</div>
+    return <div className="p-4 text-center">Kraunama…</div>;
   }
-  
-  // Render error state
+
   if (error) {
-    return <div className="p-4 text-center text-red-600">{error}</div>
+    return <div className="p-4 text-center text-red-600">{error}</div>;
   }
-  
-  // Render empty state
+
   if (!address) {
-    return <div className="p-4 text-center">Adresas nerastas</div>
+    return <div className="p-4 text-center">Adresas nerastas</div>;
   }
 
   return (
     <div className="p-4">
       <CryptoFlowGraph faucetAddress={address} network={network} />
     </div>
-  )
+  );
 }
-
-export default GraphPage
-
-
