@@ -23,8 +23,9 @@
 //                         export)
 // -----------------------------------------------------------
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import QRCode from 'react-qr-code';
 
@@ -51,14 +52,16 @@ const DEFAULT_NET_META = { short_name: 'BTC', full_name: 'Bitcoin' };
 //   const { netMeta, faucetInfo, loadingInfo, initialLoad,
 //           refresh } = useFaucetInfo(network)
 //
-// Everything the page knows about the faucet: the network's
-// display names and the live faucet info ({ balance, address,
-// chunk_size } or { error }), repolled silently every 5 s.
-// initialLoad separates the first fetch (skeletons) from the
-// background repolls (no flicker). A request sequence number
-// discards late responses after a network switch or unmount,
-// so a slow answer from the previous chain can never
-// overwrite the current one.
+// Everything the page knows about the faucet, as two TanStack
+// queries: the network's display names (cache shared with the
+// navbar's UTXO catalog) and the live faucet info
+// ({ balance, address, chunk_size } or { error }), repolled
+// silently every 5 s. initialLoad separates the first fetch
+// (skeletons) from the background repolls (no flicker); a
+// network switch changes the query key, so a slow answer from
+// the previous chain can never overwrite the current one.
+// refresh() (after a payout) invalidates the balance for an
+// immediate refetch.
 //
 // Used by:
 //   - FaucetUTXO (below)
@@ -66,76 +69,38 @@ const DEFAULT_NET_META = { short_name: 'BTC', full_name: 'Bitcoin' };
 
 function useFaucetInfo(network) {
 
-  const [netMeta, setNetMeta] = useState(DEFAULT_NET_META);
-  const [faucetInfo, setFaucetInfo] = useState(null);
-  const [loadingInfo, setLoadingInfo] = useState(true);
-  const [initialLoad, setInitialLoad] = useState(true);
+  const queryClient = useQueryClient();
 
-  // Bumped on every fetch and on cleanup — only the response
-  // matching the newest sequence number may write state
-  const requestSeqRef = useRef(0);
+  // Display names; failures keep the BTC defaults
+  const { data: networksData } = useQuery({
+    queryKey: ['utxo-networks'],
+    queryFn: async () => (await axios.get('/api/utxo/networks')).data,
+    staleTime: 5 * 60 * 1000,
+  });
+  const info = networksData?.networks?.[network];
+  const netMeta = info
+    ? { short_name: info.short_name || 'BTC', full_name: info.full_name || 'Bitcoin' }
+    : DEFAULT_NET_META;
 
+  const balanceQuery = useQuery({
+    queryKey: ['utxo-faucet-balance', network],
+    queryFn: async () => (await axios.get(`/api/utxo/${network}/faucet-balance`)).data,
+    refetchInterval: BALANCE_REFRESH_MS,
+  });
 
-  // silent = a background repoll: the data updates but the
-  // loading flag stays down, so nothing flickers
-  const loadFaucetInfo = async (silent = false) => {
-    const seq = ++requestSeqRef.current;
+  // The exact shape the page always consumed: a failed fetch
+  // becomes an { error } payload the render branches on
+  const faucetInfo = balanceQuery.isError
+    ? { error: 'Nepavyko gauti čiaupo informacijos' }
+    : (balanceQuery.data ?? null);
 
-    try {
-      if (!silent) setLoadingInfo(true);
-      const { data } = await axios.get(`/api/utxo/${network}/faucet-balance`);
-      if (seq === requestSeqRef.current) setFaucetInfo(data);
-    } catch (_) {
-      if (seq === requestSeqRef.current) {
-        setFaucetInfo({ error: 'Nepavyko gauti čiaupo informacijos' });
-      }
-    } finally {
-      if (seq === requestSeqRef.current) {
-        setLoadingInfo(false);
-        setInitialLoad(false);
-      }
-    }
+  return {
+    netMeta,
+    faucetInfo,
+    loadingInfo: balanceQuery.isFetching,
+    initialLoad: balanceQuery.isPending,
+    refresh: () => queryClient.invalidateQueries({ queryKey: ['utxo-faucet-balance', network] }),
   };
-
-
-  // Display names once per network; failures keep the defaults
-  useEffect(() => {
-    let ignore = false;
-
-    const loadMeta = async () => {
-      try {
-        const { data } = await axios.get('/api/utxo/networks');
-        const info = data?.networks?.[network];
-        if (!ignore && info) {
-          setNetMeta({ short_name: info.short_name || 'BTC', full_name: info.full_name || 'Bitcoin' });
-        }
-      } catch (_) {
-        /* keep defaults */
-      }
-    };
-
-    loadMeta();
-    return () => { ignore = true; };
-  }, [network]);
-
-
-  // Reset, first load and the 5 s repoll — all per network
-  useEffect(() => {
-    setFaucetInfo(null);
-    setLoadingInfo(true);
-    setInitialLoad(true);
-
-    loadFaucetInfo(false);
-    const id = setInterval(() => loadFaucetInfo(true), BALANCE_REFRESH_MS);
-
-    return () => {
-      clearInterval(id);
-      requestSeqRef.current++;
-    };
-  }, [network]);
-
-
-  return { netMeta, faucetInfo, loadingInfo, initialLoad, refresh: loadFaucetInfo };
 }
 
 

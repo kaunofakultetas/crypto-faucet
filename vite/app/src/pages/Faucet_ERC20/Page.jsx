@@ -57,8 +57,9 @@
 //    FaucetERC20       — page state + layout (default export)
 // -----------------------------------------------------------
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import QRCode from 'react-qr-code';
 
@@ -90,15 +91,15 @@ const TOKEN_REFRESH_MS = 15000;
 //   const { data, error, reload } = useToken(symbol, account)
 //   data → { token, faucet_address, deployments: [...] }
 //
-// The whole page in one payload, repolled every 15 s and
-// reset when the student picks another token. With a
-// connected account the request carries ?address= and every
-// deployment comes back with that wallet's native balance
-// (wallet_native_wei) — the gas gate's input. error holds the
-// backend's message for an unknown token, so the page can say
-// so instead of spinning forever. reload() (after a claim)
-// re-arms the poll for a fresh fetch without dropping what is
-// already on screen.
+// The whole page as ONE TanStack query, repolled every 15 s.
+// With a connected account the request carries ?address= and
+// every deployment comes back with that wallet's native
+// balance (wallet_native_wei) — the gas gate's input. A token
+// switch changes the key and shows skeletons; an account
+// change keeps the current rows on screen while the refresh
+// lands (placeholderData, same-symbol only). error holds the
+// backend's message for an unknown token; reload() (after a
+// claim) invalidates the query for an immediate refetch.
 //
 // Used by:
 //   - FaucetERC20 (below)
@@ -106,48 +107,26 @@ const TOKEN_REFRESH_MS = 15000;
 
 function useToken(symbol, account) {
 
-  const [data, setData] = useState(null);
-  const [error, setError] = useState(null);
-  const [reloadTick, setReloadTick] = useState(0);
+  const queryClient = useQueryClient();
 
+  const { data = null, error: queryError } = useQuery({
+    queryKey: ['erc20-token', symbol, account ?? null],
+    refetchInterval: TOKEN_REFRESH_MS,
+    queryFn: async () => {
+      const suffix = account ? `?address=${account}` : '';
+      return (await axios.get(`/api/erc20/token/${symbol}${suffix}`)).data;
+    },
+    // Keep the previous payload only across an ACCOUNT change —
+    // a different token must show skeletons, never stale rows
+    placeholderData: (previousData, previousQuery) =>
+      previousQuery?.queryKey?.[1] === symbol ? previousData : undefined,
+  });
 
-  // A token switch drops the previous payload immediately —
-  // skeletons, never another token's rows
-  useEffect(() => {
-    setData(null);
-    setError(null);
-  }, [symbol]);
+  const error = queryError
+    ? (queryError.response?.data?.error || 'Nepavyko gauti žetono informacijos')
+    : null;
 
-
-  // The poll itself. `ignore` swallows responses that land
-  // after a token switch, an account change, a reload or
-  // unmount — without it a slow request for the OLD token
-  // could overwrite the new one's data.
-  useEffect(() => {
-    let ignore = false;
-
-    const load = async () => {
-      try {
-        const suffix = account ? `?address=${account}` : '';
-        const res = await axios.get(`/api/erc20/token/${symbol}${suffix}`);
-        if (ignore) return;
-        setData(res.data);
-        setError(null);
-      } catch (err) {
-        if (!ignore) setError(err.response?.data?.error || 'Nepavyko gauti žetono informacijos');
-      }
-    };
-
-    load();
-    const id = setInterval(load, TOKEN_REFRESH_MS);
-    return () => {
-      ignore = true;
-      clearInterval(id);
-    };
-  }, [symbol, account, reloadTick]);
-
-
-  const reload = () => setReloadTick((t) => t + 1);
+  const reload = () => queryClient.invalidateQueries({ queryKey: ['erc20-token', symbol] });
 
   return { data, error, reload };
 }

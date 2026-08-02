@@ -33,6 +33,7 @@
 
 import { useEffect, useState } from 'react';
 import axios from 'axios';
+import { useQueries } from '@tanstack/react-query';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 import { Box, Button, Menu, MenuItem, ToggleButton, ToggleButtonGroup } from '@mui/material';
@@ -65,6 +66,9 @@ const WHITE_OUTLINED_SX = {
 //   label     — segmented switch caption
 //   pickLabel — dropdown placeholder ("networks" vs "tokens")
 //   api       — the catalog endpoint
+//   queryKey  — the TanStack Query cache key; shared with the
+//               pages that fetch the same endpoint, so the
+//               catalog and the page cost ONE request
 //   itemsOf   — turns that payload into picker items
 //               ({ key, primary, secondary }), which is where
 //               EVM/UTXO (networks) and ERC-20 (tokens) part
@@ -81,6 +85,7 @@ const FAUCET_TYPES = [
     label: 'EVM',
     pickLabel: 'Pasirinkti tinklą',
     api: '/api/evm/networks',
+    queryKey: ['evm-networks'],
     fallback: 'sepolia',
     defaultOf: (data) => data.default_network ?? null,
     itemsOf: (data) => Object.entries(data.networks ?? {})
@@ -96,6 +101,7 @@ const FAUCET_TYPES = [
     label: 'ERC-20',
     pickLabel: 'Pasirinkti žetoną',
     api: '/api/erc20/tokens',
+    queryKey: ['erc20-tokens'],
     fallback: null,
     defaultOf: (data) => data.default_token ?? null,
     itemsOf: (data) => Object.entries(data.tokens ?? {})
@@ -110,6 +116,7 @@ const FAUCET_TYPES = [
     label: 'UTXO',
     pickLabel: 'Pasirinkti tinklą',
     api: '/api/utxo/networks',
+    queryKey: ['utxo-networks'],
     fallback: 'btc4',
     defaultOf: (data) => data.default_network ?? null,
     itemsOf: (data) => Object.entries(data.networks ?? {})
@@ -136,11 +143,13 @@ const FAUCET_TYPES = [
 //   catalogs.evm / .erc20 / .utxo
 //     → { items, defaultKey, loading }
 //
-// Loads all three catalogs once on mount, driven by the
+// All three catalogs as TanStack queries, driven by the
 // FAUCET_TYPES table — each entry's own itemsOf turns its
-// payload into ready picker items. A catalog that fails to
-// load just ends up empty (the stack may run without UTXO or
-// with no tokens configured) — the navbar still works.
+// payload into ready picker items. The cache keys are shared
+// with the pages, so a catalog the page already fetched is
+// free. A catalog that fails to load just ends up empty (the
+// stack may run without UTXO or with no tokens configured) —
+// the navbar still works.
 //
 // Used by:
 //   - Navbar (below)
@@ -148,40 +157,19 @@ const FAUCET_TYPES = [
 
 function useFaucetCatalogs() {
 
-  const [catalogs, setCatalogs] = useState(() =>
-    Object.fromEntries(FAUCET_TYPES.map((t) => [t.key, { items: [], defaultKey: null, loading: true }]))
-  );
+  const results = useQueries({
+    queries: FAUCET_TYPES.map((type) => ({
+      queryKey: type.queryKey,
+      queryFn: async () => (await axios.get(type.api)).data,
+      staleTime: 5 * 60 * 1000,
+    })),
+  });
 
-  useEffect(() => {
-    let ignore = false;
-
-    FAUCET_TYPES.forEach((type) => {
-      axios.get(type.api)
-        .then(({ data }) => {
-          if (ignore) return;
-          setCatalogs((prev) => ({
-            ...prev,
-            [type.key]: {
-              items: type.itemsOf(data),
-              defaultKey: type.defaultOf(data),
-              loading: false,
-            },
-          }));
-        })
-        .catch((e) => {
-          console.warn(`Faucet catalog not available for ${type.key}`, e);
-          if (ignore) return;
-          setCatalogs((prev) => ({
-            ...prev,
-            [type.key]: { ...prev[type.key], loading: false },
-          }));
-        });
-    });
-
-    return () => { ignore = true; };
-  }, []);
-
-  return catalogs;
+  return Object.fromEntries(FAUCET_TYPES.map((type, i) => [type.key, {
+    items: results[i].data ? type.itemsOf(results[i].data) : [],
+    defaultKey: results[i].data ? type.defaultOf(results[i].data) : null,
+    loading: results[i].isPending,
+  }]));
 }
 
 

@@ -26,8 +26,9 @@
 //    FaucetEVM         — page state + layout (default export)
 // -----------------------------------------------------------
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import QRCode from 'react-qr-code';
 import axios from 'axios';
 
@@ -53,13 +54,14 @@ const FAUCET_REFRESH_MS = 3000;
 //
 //   const { networkInfo, faucetInfo } = useFaucetInfo(network)
 //
-// The backend side of the page: the network's metadata
-// (chain id, names, RPC urls — from /api/evm/networks) and
-// the faucet info ({ address, balance, chunk_size }), which
-// starts polling every 3 s once the metadata is in. Both
-// reset on a network switch, so the previous chain's numbers
-// never linger. Failures only log — the page keeps its
-// skeletons until data arrives.
+// The backend side of the page as two TanStack queries: the
+// network's metadata (chain id, names, RPC urls — from
+// /api/evm/networks, cache shared with the navbar and the
+// "/" redirect) and the faucet info ({ address, balance,
+// chunk_size }), polling every 3 s once the metadata is in.
+// A network switch changes the query keys, so the previous
+// chain's numbers never linger. Failures leave the data
+// empty — the page keeps its skeletons.
 //
 // Used by:
 //   - FaucetEVM (below)
@@ -67,49 +69,19 @@ const FAUCET_REFRESH_MS = 3000;
 
 function useFaucetInfo(network) {
 
-  const [networkInfo, setNetworkInfo] = useState(null);
-  const [faucetInfo, setFaucetInfo] = useState(null);
+  const { data: networksData } = useQuery({
+    queryKey: ['evm-networks'],
+    queryFn: async () => (await axios.get('/api/evm/networks')).data,
+    staleTime: 5 * 60 * 1000,
+  });
+  const networkInfo = networksData?.networks?.[network] ?? null;
 
-
-  useEffect(() => {
-    let ignore = false;
-
-    setNetworkInfo(null);
-    setFaucetInfo(null);
-
-    axios.get('/api/evm/networks')
-      .then(({ data }) => {
-        if (!ignore) setNetworkInfo(data.networks?.[network]);
-      })
-      .catch((err) => console.error('Unable to load network list', err));
-
-    return () => { ignore = true; };
-  }, [network]);
-
-
-  // Faucet info + 3 s repoll, once we know the network exists
-  useEffect(() => {
-    if (!networkInfo) return;
-
-    let ignore = false;
-
-    const load = async () => {
-      try {
-        const { data } = await axios.get(`/api/evm/${network}/faucet-balance`);
-        if (!ignore) setFaucetInfo(data);
-      } catch (err) {
-        console.error('Unable to load faucet info', err);
-      }
-    };
-
-    load();
-    const id = setInterval(load, FAUCET_REFRESH_MS);
-    return () => {
-      ignore = true;
-      clearInterval(id);
-    };
-  }, [networkInfo, network]);
-
+  const { data: faucetInfo = null } = useQuery({
+    queryKey: ['evm-faucet-balance', network],
+    queryFn: async () => (await axios.get(`/api/evm/${network}/faucet-balance`)).data,
+    enabled: Boolean(networkInfo),
+    refetchInterval: FAUCET_REFRESH_MS,
+  });
 
   return { networkInfo, faucetInfo };
 }
@@ -190,12 +162,16 @@ export default function FaucetEVM() {
   const { networkInfo, faucetInfo } = useFaucetInfo(network);
   const wallet = useWallet(networkInfo?.chain_id);
   const { alerts, addAlert } = useAlerts();
+  const queryClient = useQueryClient();
 
   const [claiming, setClaiming] = useState(false);
 
 
   // Sign the ownership message and let the backend verify it
-  // before paying out — no transaction on the student's side
+  // before paying out — no transaction on the student's side.
+  // A successful claim invalidates the balance query, so the
+  // faucet's number drops immediately instead of on the next
+  // poll.
   const claimNative = async () => {
     setClaiming(true);
     try {
@@ -209,6 +185,7 @@ export default function FaucetEVM() {
       if (!res.ok) throw new Error(data.error || `Nepavyko išsiųsti ${network} ETH`);
 
       addAlert('success', `${networkInfo.full_name} išsiųstas į jūsų piniginę.`);
+      queryClient.invalidateQueries({ queryKey: ['evm-faucet-balance', network] });
     } catch (e) {
       addAlert('error', e.message || 'Nepavyko išsiųsti kriptovaliutos.');
     } finally {

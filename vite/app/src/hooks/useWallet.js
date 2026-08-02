@@ -23,6 +23,7 @@
 // -----------------------------------------------------------
 
 import { useEffect, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import Web3 from 'web3';
 
 
@@ -63,7 +64,6 @@ export default function useWallet(expectedChainId) {
   const [installed, setInstalled] = useState(false);
   const [account, setAccount] = useState(null);
   const [chainId, setChainId] = useState(null);
-  const [balance, setBalance] = useState(null);
 
 
   // Detect MetaMask once; the listeners keep account/chain in
@@ -91,39 +91,22 @@ export default function useWallet(expectedChainId) {
   }, []);
 
 
-  // Balance repoll — re-checks the chain on every tick because
-  // the student can switch networks in MetaMask at any moment
-  useEffect(() => {
-    if (!web3 || !account || !expectedChainId) {
-      setBalance(null);
-      return;
-    }
-
-    let cancelled = false;
-
-    const load = async () => {
-      try {
-        const currentId = await web3.eth.getChainId();
-        if (cancelled) return;
-        if (Number(currentId) !== Number(expectedChainId)) {
-          setBalance(null);
-          return;
-        }
-        const bal = await web3.eth.getBalance(account);
-        if (!cancelled) setBalance(bal);
-      } catch (err) {
-        console.error('Unable to fetch user balance', err);
-        if (!cancelled) setBalance(null);
-      }
-    };
-
-    load();
-    const id = setInterval(load, WALLET_REFRESH_MS);
-    return () => {
-      cancelled = true;
-      clearInterval(id);
-    };
-  }, [web3, account, expectedChainId]);
+  // Balance repoll — TanStack Query owns the timer and the
+  // stale-response handling. The chain is re-checked on every
+  // tick because the student can switch networks in MetaMask
+  // at any moment; a wrong-chain wallet reports null so pages
+  // never show a number from somewhere else.
+  const { data: balance = null } = useQuery({
+    queryKey: ['wallet-balance', account, expectedChainId],
+    enabled: Boolean(web3 && account && expectedChainId),
+    refetchInterval: WALLET_REFRESH_MS,
+    retry: false,
+    queryFn: async () => {
+      const currentId = await web3.eth.getChainId();
+      if (Number(currentId) !== Number(expectedChainId)) return null;
+      return await web3.eth.getBalance(account);
+    },
+  });
 
 
   const connect = () =>

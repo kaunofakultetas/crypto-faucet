@@ -19,8 +19,8 @@
 //                             (default export)
 // -----------------------------------------------------------
 
-import { useEffect, useState } from 'react';
 import { BrowserRouter as Router, Route, Routes, Navigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import axios from 'axios';
 
 import { ThemeProvider, CssBaseline, Box } from '@mui/material';
@@ -53,7 +53,9 @@ import VideosPage from './pages/Videos/Page';
 // Sends "/" to the native EVM faucet: the network the student
 // used last (lastPick:evm — the key FaucetPicker saves), then
 // the backend's default_network, then sepolia when even that
-// fails. Renders nothing while deciding.
+// fails. Renders nothing while deciding. The networks query
+// shares its cache key with the navbar's EVM catalog — one
+// fetch serves both.
 //
 // Used by:
 //   - App (below) — the index route
@@ -61,32 +63,22 @@ import VideosPage from './pages/Videos/Page';
 
 function DynamicDefaultRedirect() {
 
-  const [target, setTarget] = useState(null);
+  let saved = null;
+  try {
+    saved = localStorage.getItem('lastPick:evm');
+  } catch (_) {}
 
-  useEffect(() => {
-    let ignore = false;
+  const { data, isError } = useQuery({
+    queryKey: ['evm-networks'],
+    queryFn: async () => (await axios.get('/api/evm/networks')).data,
+    staleTime: 5 * 60 * 1000,
+    enabled: !saved,
+  });
 
-    const load = async () => {
-      try {
-        const saved = localStorage.getItem('lastPick:evm');
-        if (!ignore && saved) {
-          setTarget(`/faucet/evm/${saved}`);
-          return;
-        }
-        const { data } = await axios.get('/api/evm/networks');
-        const def = data?.default_network;
-        if (!ignore && def) setTarget(`/faucet/evm/${def}`);
-      } catch (_) {
-        if (!ignore) setTarget('/faucet/evm/sepolia');
-      }
-    };
-
-    load();
-    return () => { ignore = true; };
-  }, []);
-
-  if (!target) return null;
-  return <Navigate to={target} />;
+  if (saved) return <Navigate to={`/faucet/evm/${saved}`} />;
+  if (isError) return <Navigate to="/faucet/evm/sepolia" />;
+  if (data) return <Navigate to={`/faucet/evm/${data.default_network || 'sepolia'}`} />;
+  return null;
 }
 
 
