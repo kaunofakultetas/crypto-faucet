@@ -34,7 +34,9 @@
 // -----------------------------------------------------------
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Typography, TextField, Button, Box, MenuItem, Select, InputLabel, FormControl, Grid } from '@mui/material';
+import { Typography, TextField, Button, Box, MenuItem, Select, InputLabel, FormControl } from '@mui/material';
+import { useMutation } from '@tanstack/react-query';
+import axios from 'axios';
 import crypto from 'crypto-js';
 
 import { RoundedBox } from './components/RoundedBox';
@@ -150,11 +152,12 @@ const createFirstBlock = (genesisBlock) => {
 //     difficulty,            — required leading hash zeros
 //     setDifficulty,         — 1-5 from the selector
 //     isValidHash,           — does a hash meet difficulty?
-//     modifyBlockData,       — (index, event) data edit
-//     modifyBlockNonce,      — (index, event) nonce edit
+//     modifyBlockField,      — (index, 'data'|'nonce', event)
 //     mineBlock,             — (index) brute-force the nonce
 //     addBlock,              — append an unmined block
 //     loadExampleBlockchain, — replace chain from the backend
+//     exampleLoading,        — that request is in flight
+//     exampleError,          — it failed (chain untouched)
 //   } = useBlockchain()
 //
 // Used by:
@@ -198,22 +201,13 @@ function useBlockchain() {
   };
 
 
-  // Transakcijos field edit — re-hash the edited block and
-  // everything after it on every keystroke
-  const modifyBlockData = (blockIndex, event) => {
+  // One handler for both editable fields ('data' and 'nonce') —
+  // re-hash the edited block and everything after it on every
+  // keystroke. A typed nonce stays a raw string (no parseInt),
+  // which hashes the same as a number; see calculateHash
+  const modifyBlockField = (blockIndex, field, event) => {
     const updatedBlocks = [...blocks];
-    updatedBlocks[blockIndex] = { ...updatedBlocks[blockIndex], data: event.target.value };
-    recalculateFromIndex(updatedBlocks, blockIndex);
-    setBlocks(updatedBlocks);
-  };
-
-
-  // Nonce field edit — the value stays a raw string (no
-  // parseInt), which hashes the same as a number; see
-  // calculateHash
-  const modifyBlockNonce = (blockIndex, event) => {
-    const updatedBlocks = [...blocks];
-    updatedBlocks[blockIndex] = { ...updatedBlocks[blockIndex], nonce: event.target.value };
+    updatedBlocks[blockIndex] = { ...updatedBlocks[blockIndex], [field]: event.target.value };
     recalculateFromIndex(updatedBlocks, blockIndex);
     setBlocks(updatedBlocks);
   };
@@ -260,18 +254,14 @@ function useBlockchain() {
 
 
   // Replaces the WHOLE chain with the pre-mined example from
-  // the backend; on failure it only logs — the current chain
-  // stays untouched
-  const loadExampleBlockchain = () => {
-    fetch(`/api/get-example-blockchain`)
-      .then(response => response.json())
-      .then(data => {
-        setBlocks(data);
-      })
-      .catch(error => {
-        console.error('Error fetching example blockchain:', error);
-      });
-  };
+  // the backend. A mutation, not a query: the student decides
+  // when their edits are thrown away, and on failure the
+  // current chain stays untouched while the control panel
+  // shows the error.
+  const exampleChain = useMutation({
+    mutationFn: async () => (await axios.get('/api/get-example-blockchain')).data,
+    onSuccess: (data) => setBlocks(data),
+  });
 
 
   return {
@@ -279,11 +269,12 @@ function useBlockchain() {
     difficulty,
     setDifficulty,
     isValidHash,
-    modifyBlockData,
-    modifyBlockNonce,
+    modifyBlockField,
     mineBlock,
     addBlock,
-    loadExampleBlockchain,
+    loadExampleBlockchain: exampleChain.mutate,
+    exampleLoading: exampleChain.isPending,
+    exampleError: exampleChain.isError,
   };
 }
 
@@ -339,14 +330,16 @@ function CopiedToast({ copiedMessage }) {
 //
 // The difficulty selector (how many leading zeros a hash
 // needs) plus the tool buttons: load the pre-mined example
-// chain from the backend, or open the external SHA256 tool
-// students use to verify copied block text.
+// chain from the backend (disabled while the request runs,
+// with the failure reported right under it), or open the
+// external SHA256 tool students use to verify copied block
+// text.
 //
 // Used by:
 //   - BlockchainSimulator (below)
 // -----------------------------------------------------------
 
-function ControlPanel({ difficulty, onDifficultyChange, onLoadExample }) {
+function ControlPanel({ difficulty, onDifficultyChange, onLoadExample, exampleLoading, exampleError }) {
   return (
     <RoundedBox className="w-full max-w-6xl p-6" sx={{ width: 1000, maxWidth: '95vw' }}>
 
@@ -366,14 +359,20 @@ function ControlPanel({ difficulty, onDifficultyChange, onLoadExample }) {
       </FormControl>
 
       <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-        <Button variant="contained" color="primary" onClick={onLoadExample}>
-          Užkrauti pavyzdinę blokų grandinę
+        <Button variant="contained" color="primary" onClick={onLoadExample} disabled={exampleLoading}>
+          {exampleLoading ? 'Kraunama…' : 'Užkrauti pavyzdinę blokų grandinę'}
         </Button>
 
         <Button variant="contained" color="primary" onClick={() => window.open('https://emn178.github.io/online-tools/sha256.html', '_blank')}>
           SHA256 Online Įrankis
         </Button>
       </Box>
+
+      {exampleError && (
+        <Typography color="error" sx={{ marginTop: 2 }}>
+          Nepavyko užkrauti pavyzdinės blokų grandinės. Bandykite dar kartą.
+        </Typography>
+      )}
 
     </RoundedBox>
   );
@@ -609,58 +608,55 @@ export default function BlockchainSimulator() {
 
   const {
     blocks, difficulty, setDifficulty, isValidHash,
-    modifyBlockData, modifyBlockNonce, mineBlock,
-    addBlock, loadExampleBlockchain,
+    modifyBlockField, mineBlock, addBlock,
+    loadExampleBlockchain, exampleLoading, exampleError,
   } = useBlockchain();
 
 
   return (
-    <Grid container spacing={2} className="max-w-7xl mx-auto">
+    // A single centered column — the minimap doesn't need a
+    // column of its own, it floats position:fixed at the
+    // page's top-right regardless of where it is rendered
+    <div className="mx-auto flex max-w-7xl flex-col items-center">
 
-      {/* Left column — the chain itself */}
-      <Grid item xs={9}>
+      {/* Title */}
+      <div className="mx-auto p-4 min-w-80 max-w-2xl w-full">
+        <Typography
+          className="text-[#78003F] text-center"
+          sx={{ fontSize: 45, fontWeight: 600, marginBottom: 3 }}
+        >
+          Blokų Grandinės <br /> Simuliatorius
+        </Typography>
+      </div>
 
-        {/* Title */}
-        <div className="mx-auto p-4 min-w-80 max-w-2xl w-full">
-          <Typography
-            className="text-[#78003F] text-center"
-            sx={{ fontSize: 45, fontWeight: 600, marginBottom: 3 }}
-          >
-            Blokų Grandinės <br /> Simuliatorius
-          </Typography>
-        </div>
+      <ControlPanel
+        difficulty={difficulty}
+        onDifficultyChange={setDifficulty}
+        onLoadExample={loadExampleBlockchain}
+        exampleLoading={exampleLoading}
+        exampleError={exampleError}
+      />
 
-        <ControlPanel
-          difficulty={difficulty}
-          onDifficultyChange={setDifficulty}
-          onLoadExample={loadExampleBlockchain}
-        />
+      {/* One card per block — green when the hash meets the
+          difficulty, red once the chain is broken */}
+      <Box>
+        {blocks.map((block, index) => (
+          <BlockCard
+            key={index}
+            block={block}
+            index={index}
+            isValid={isValidHash(block.hash)}
+            onNonceChange={(event) => modifyBlockField(index, 'nonce', event)}
+            onDataChange={(event) => modifyBlockField(index, 'data', event)}
+            onMine={() => mineBlock(index)}
+          />
+        ))}
+      </Box>
 
-        {/* One card per block — green when the hash meets the
-            difficulty, red once the chain is broken */}
-        <Box>
-          {blocks.map((block, index) => (
-            <BlockCard
-              key={index}
-              block={block}
-              index={index}
-              isValid={isValidHash(block.hash)}
-              onNonceChange={(event) => modifyBlockNonce(index, event)}
-              onDataChange={(event) => modifyBlockData(index, event)}
-              onMine={() => mineBlock(index)}
-            />
-          ))}
-        </Box>
+      <AddBlockButton onClick={addBlock} />
 
-        <AddBlockButton onClick={addBlock} />
+      <Minimap blocks={blocks} isValidHash={isValidHash} />
 
-      </Grid>
-
-      {/* Right column — fixed minimap */}
-      <Grid item xs={3}>
-        <Minimap blocks={blocks} isValidHash={isValidHash} />
-      </Grid>
-
-    </Grid>
+    </div>
   );
 }
