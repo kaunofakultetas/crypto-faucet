@@ -49,7 +49,7 @@ def init_db_tables():
 
         ######################## Faucet graph tables ########################
         conn.execute('''
-            CREATE TABLE IF NOT EXISTS [transactions] ( 
+            CREATE TABLE IF NOT EXISTS [transactions] (
                 [id] INTEGER AUTO_INCREMENT NULL,
                 [network] TEXT NULL,
                 [from_address] TEXT NULL,
@@ -61,6 +61,12 @@ def init_db_tables():
                 PRIMARY KEY ([id]),
                 CONSTRAINT [sqlite_autoindex_transactions_1] UNIQUE ([network], [hash])
             );
+        ''')
+        # The graph's date slider filters by a [from, to) unix range —
+        # this index keeps those day-window queries instant as the
+        # table grows.
+        conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_transactions_network_timestamp ON transactions(network, timestamp)
         ''')
         #####################################################################
 
@@ -133,4 +139,8 @@ def init_default_data():
                 VALUES (?, ?, ?, ?, ?) 
             ''', 
                 [block['Height'], block['BlockHash'], block['PrevBlock'], block['Nonce'], block['Transactions']])
+
+
+
+
 

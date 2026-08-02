@@ -8,13 +8,18 @@
 //  refreshes all known addresses in parallel and follows
 //  newly discovered ones breadth-first; double-click expands
 //  an address on demand, right-click renames it, and dragged
-//  X positions persist per network in localStorage.
+//  X positions persist in localStorage per network AND per
+//  viewed day — each day is a different graph, so each keeps
+//  its own arrangement.
 //
-//  Only transactions younger than the 24 h default timescale
-//  enter the initial build — a control for the timescale was
-//  never wired in. A :network route change reuses this
+//  Every fetch carries the page's picked-day window
+//  (dateRange, a [from, to) unix pair) — the backend filters,
+//  nothing is filtered client-side. When the page views a
+//  past day (live=false) the recurring sweeps don't run:
+//  history is frozen, one discovery pass is enough. A
+//  :network route change OR a new day window reuses this
 //  component instance; the boot effect's cleanup wipes the
-//  model, the DataSets and the Network, so every network
+//  model, the DataSets and the Network, so every rebuild
 //  starts from a clean canvas.
 //
 //  Split into (root component last):
@@ -50,7 +55,6 @@ import CloseIcon from '@mui/icons-material/Close';
 
 import {
   timeSince,
-  filterTransactionsByTime,
   parseTimestamp,
   formatAddress,
   formatTransactionLabel,
@@ -66,7 +70,6 @@ import {
   DIMENSIONS,
   STORAGE_KEYS,
   IMAGES,
-  TIMESCALES,
 } from './constants';
 
 
@@ -108,7 +111,12 @@ const VIS_OPTIONS = {
     hover: true,
     zoomView: true,
     zoomSpeed: ZOOM_CONFIG.SCROLL_SENSITIVITY,
-    keyboard: true,
+    // bindToWindow MUST stay false: vis's default window-wide
+    // key handler eats "-", "+" and the arrows everywhere on
+    // the page — it made "-" untypable in the date search box.
+    // Bound to the canvas, the shortcuts work when the graph
+    // itself has focus.
+    keyboard: { enabled: true, bindToWindow: false },
   },
   edges: {
     width: EDGE_CONFIG.WIDTH,
@@ -134,11 +142,13 @@ const VIS_OPTIONS = {
 // -----------------------------------------------------------
 //
 //   const { positionsRef, save, setLevelNextX } =
-//     useNodePositions(networkKey)
+//     useNodePositions(scopeKey)
 //
 // Persistence for dragged nodes: an address → X map, saved
-// under graphNodePositions:<network> in localStorage and
-// loaded once on mount. Only X survives — Y always comes from
+// under graphNodePositions:<network>:<day> in localStorage
+// and reloaded whenever the scope changes — every viewed day
+// is a different graph, so every (network, day) pair keeps
+// its own arrangement. Only X survives — Y always comes from
 // the hierarchical layout. setLevelNextX deals X slots left
 // to right per hierarchy level so new nodes never stack.
 //
@@ -146,14 +156,14 @@ const VIS_OPTIONS = {
 //   - useTransactionGraph (below)
 // -----------------------------------------------------------
 
-function useNodePositions(networkKey) {
+function useNodePositions(scopeKey) {
 
   // address → x for placed nodes; level → last dealt x for
   // spacing the next newcomer at that level
   const positionsRef = useRef(new Map());
   const levelsRef = useRef(new Map());
 
-  const storageKey = `${STORAGE_KEYS.NODE_POSITIONS_PREFIX}${networkKey}`;
+  const storageKey = `${STORAGE_KEYS.NODE_POSITIONS_PREFIX}${scopeKey}`;
 
 
   const save = () => {
@@ -214,7 +224,8 @@ function useNodePositions(networkKey) {
 //
 //   const { containerRef, scale, setZoom, zoomIn, zoomOut,
 //           renameNode } = useTransactionGraph({
-//     faucetAddress, network, timescale, onNodeRightClick })
+//     faucetAddress, network, dateRange, live,
+//     onNodeRightClick })
 //
 // The whole vis-network machine behind the graph. The source
 // of truth is a plain model — address → { name, kind, level,
@@ -235,12 +246,14 @@ function useNodePositions(networkKey) {
 // a slow backend can never stack sweeps. The first BOOT_SWEEPS
 // sweeps run at a quick warm-up cadence — right after load the
 // backend is often still indexing, so the graph fills fast.
+// Recurring sweeps run only while live (viewing today); a past
+// day gets its one boot discovery pass and then stands still.
 //
 // Used by:
 //   - CryptoFlowGraph (below)
 // -----------------------------------------------------------
 
-function useTransactionGraph({ faucetAddress, network, timescale, onNodeRightClick }) {
+function useTransactionGraph({ faucetAddress, network, dateRange, live, day, onNodeRightClick }) {
 
   const containerRef = useRef(null);
   const networkRef = useRef(null);
@@ -253,7 +266,9 @@ function useTransactionGraph({ faucetAddress, network, timescale, onNodeRightCli
   const modelRef = useRef(new Map());
   const edgeModelRef = useRef(new Map());
 
-  const { positionsRef: nodePositions, save: savePositions, setLevelNextX } = useNodePositions(network);
+  // Positions are scoped per (network, day) — each day is a
+  // different graph with its own hand-arranged layout
+  const { positionsRef: nodePositions, save: savePositions, setLevelNextX } = useNodePositions(`${network}:${day}`);
 
   // Zoom scale mirrored into React for the ZoomControls slider
   const [scale, setScale] = useState(1);
@@ -264,11 +279,15 @@ function useTransactionGraph({ faucetAddress, network, timescale, onNodeRightCli
   onNodeRightClickRef.current = onNodeRightClick;
 
 
-  // The backend's stored-transactions endpoint; an address
-  // with no history (or a failed request) just yields []
+  // The backend's stored-transactions endpoint, always scoped
+  // to the picked day's [from, to) window; an address with no
+  // history that day (or a failed request) just yields []
   const fetchTransactions = async (address) => {
     try {
-      const response = await fetch(`/api/evm/${network}/get-stored-transactions?address=${address}`);
+      const response = await fetch(
+        `/api/evm/${network}/get-stored-transactions`
+        + `?address=${address}&from=${dateRange.from}&to=${dateRange.to}`
+      );
       if (!response.ok) {
         throw new Error('Failed to fetch transactions');
       }
@@ -457,14 +476,16 @@ function useTransactionGraph({ faucetAddress, network, timescale, onNodeRightCli
 
 
   // Boot + steady state. Boot seeds the faucet root, builds
-  // the Network from the initial (timescale-filtered — the
-  // only filtered fetch, as before) transactions and runs one
-  // sweep immediately so the deeper hops appear without
-  // waiting; the next BOOT_SWEEPS sweeps come at the quick
-  // warm-up cadence before settling into UPDATE_INTERVAL.
-  // Each sweep re-schedules the next only once it finished.
-  // Cleanup wipes model, DataSets and Network, so a :network
-  // switch rebuilds from scratch.
+  // the Network from the day's transactions (the backend
+  // filters by the window — nothing is filtered client-side)
+  // and runs one sweep immediately so the deeper hops appear
+  // without waiting. Recurring sweeps are scheduled only when
+  // LIVE (viewing today): the next BOOT_SWEEPS come at the
+  // quick warm-up cadence before settling into
+  // UPDATE_INTERVAL, and each sweep re-schedules the next
+  // only once it finished. Cleanup wipes model, DataSets and
+  // Network, so a :network switch or a new day window
+  // rebuilds from scratch.
   useEffect(() => {
     let cancelled = false;
     let timerId = null;
@@ -525,7 +546,7 @@ function useTransactionGraph({ faucetAddress, network, timescale, onNodeRightCli
       });
       nodePositions.current.set(faucetAddress, 0);
 
-      filterTransactionsByTime(transactions, timescale).forEach((tx) => mergeTransaction(tx, 0));
+      transactions.forEach((tx) => mergeTransaction(tx, 0));
       syncDataSets();
 
       networkRef.current = new Network(containerRef.current, { nodes, edges }, VIS_OPTIONS);
@@ -535,7 +556,7 @@ function useTransactionGraph({ faucetAddress, network, timescale, onNodeRightCli
       setupEventListeners();
 
       await sweep();
-      scheduleNextSweep();
+      if (live) scheduleNextSweep();
     };
 
     boot();
@@ -550,7 +571,7 @@ function useTransactionGraph({ faucetAddress, network, timescale, onNodeRightCli
       modelRef.current.clear();
       edgeModelRef.current.clear();
     };
-  }, [faucetAddress, network, timescale]);
+  }, [faucetAddress, network, dateRange.from, dateRange.to, live]);
 
 
   // Single entry for zoom changes — slider, buttons and the
@@ -735,7 +756,7 @@ function AddressDialog({ open, onClose, name, setName, address, onSave }) {
 //   - Page.jsx
 // -----------------------------------------------------------
 
-export default function CryptoFlowGraph({ faucetAddress, network }) {
+export default function CryptoFlowGraph({ faucetAddress, network, dateRange, live, day }) {
 
   // Right-click dialog: which address, and the name draft
   const [nameDialogOpen, setNameDialogOpen] = useState(false);
@@ -745,7 +766,9 @@ export default function CryptoFlowGraph({ faucetAddress, network }) {
   const { containerRef, scale, setZoom, zoomIn, zoomOut, renameNode } = useTransactionGraph({
     faucetAddress,
     network,
-    timescale: TIMESCALES.DEFAULT,
+    dateRange,
+    live,
+    day,
     onNodeRightClick: (address, currentName) => {
       setSelectedAddress(address);
       setTempName(currentName);
@@ -761,12 +784,15 @@ export default function CryptoFlowGraph({ faucetAddress, network }) {
 
 
   return (
-    <div>
+    // flex-1 + min-h-0: the canvas fills whatever height the
+    // page's flex column has left after the date bar — sizing
+    // lives in the parent, not in a hardcoded calc here
+    <div className="min-h-0 flex-1">
       {/* The graph canvas with the zoom panel floating on top */}
-      <Box sx={{ position: 'relative' }}>
+      <Box sx={{ position: 'relative', height: '100%' }}>
         <div
           ref={containerRef}
-          style={{ height: DIMENSIONS.GRAPH_HEIGHT, width: '100%', border: '1px solid #ddd' }}
+          style={{ height: '100%', width: '100%', border: '1px solid #ddd' }}
         />
 
         <ZoomControls

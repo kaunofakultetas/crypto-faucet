@@ -146,16 +146,16 @@ export const EDGE_CONFIG = {
 // DIMENSIONS
 // -----------------------------------------------------------
 //
-// Container sizing.
+// Container sizing. The graph canvas itself has no height
+// constant anymore — it fills whatever the page's flex column
+// leaves after the date bar.
 //
 // Used by:
-//   - CryptoFlowGraph.jsx — the graph canvas div and the
-//     ZoomControls slider
+//   - CryptoFlowGraph.jsx — the ZoomControls slider
 // -----------------------------------------------------------
 
 export const DIMENSIONS = {
-  GRAPH_HEIGHT: 'calc(100dvh - 150px)', // graph canvas height
-  ZOOM_SLIDER_HEIGHT: 180,              // vertical slider, px
+  ZOOM_SLIDER_HEIGHT: 180, // vertical slider, px
 };
 
 
@@ -200,26 +200,4 @@ export const IMAGES = {
   USER: '/img/user.png',
   CONTRACT: '/img/contract.png',
   FAUCET: '/img/faucet.png',
-};
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// TIMESCALES
-// -----------------------------------------------------------
-//
-// Transaction age filter, in hours — only DEFAULT exists and
-// nothing changes it yet (no timescale control is rendered).
-//
-// Used by:
-//   - CryptoFlowGraph.jsx — the timescale prop it passes to
-//     useTransactionGraph
-// -----------------------------------------------------------
-
-export const TIMESCALES = {
-  DEFAULT: 24,
 };

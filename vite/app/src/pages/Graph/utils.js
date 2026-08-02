@@ -64,34 +64,6 @@ export const timeSince = (date) => {
 
 
 // -----------------------------------------------------------
-// filterTransactionsByTime
-// -----------------------------------------------------------
-//
-// Keep only transactions whose receive time (to_timestamp)
-// falls within the last `timescale` hours.
-//
-// Used by:
-//   - CryptoFlowGraph.jsx — the boot fetch (the only
-//     timescale-filtered one)
-// -----------------------------------------------------------
-
-export const filterTransactionsByTime = (transactions, timescale) => {
-  const now = new Date();
-  const thresholdTime = new Date(now.getTime() - timescale * 60 * 60 * 1000);
-
-  return transactions.filter(tx => {
-    const txTime = new Date(tx.to_timestamp);
-    return txTime >= thresholdTime;
-  });
-};
-
-
-
-
-
-
-
-// -----------------------------------------------------------
 // parseTimestamp
 // -----------------------------------------------------------
 //

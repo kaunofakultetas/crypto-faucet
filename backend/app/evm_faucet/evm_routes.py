@@ -9,7 +9,9 @@
 #    GET /api/evm/<network>/request                 — send one chunk
 #                                                     (?address, ?signature, ?nonce)
 #    GET /api/evm/<network>/get-stored-transactions — flows for the tx graph
-#                                                     (?address, ?hours)
+#                                                     (?address, ?from, ?to)
+#    GET /api/evm/<network>/transaction-days        — days the root address
+#                                                     transacted (?address, ?tz_offset)
 #    GET /api/evm/set-address-name                  — label an address
 #                                                     (?address, ?name)
 #
@@ -144,8 +146,9 @@ def get_networks():
 #
 # Aggregated transfer "flows" around ?address= for the graph
 # view — refreshes the local cache from Etherscan (via the
-# explorer, not the faucet). ?hours narrows the window
-# (default 24).
+# explorer, not the faucet). ?from and ?to (unix seconds,
+# half-open [from, to) window) select the day the page's date
+# slider picked; both are required.
 #
 # Used by:
 #   - Graph/CryptoFlowGraph.jsx — useTransactionGraph's
@@ -155,8 +158,40 @@ def get_networks():
 @bp_evm_faucet.route('/api/evm/<network>/get-stored-transactions', methods=['GET'])
 def get_stored_transactions(network):
     address = request.args.get('address')
-    hours = request.args.get('hours', default=24, type=int)
-    data, status = evm_explorer.get_stored_transactions(network, address, hours)
+    from_ts = request.args.get('from', type=int)
+    to_ts = request.args.get('to', type=int)
+    data, status = evm_explorer.get_stored_transactions(network, address, from_ts, to_ts)
+    return jsonify(data), status
+
+
+
+
+
+
+
+
+############################################################
+# get_transaction_days
+############################################################
+#
+# GET /api/evm/<network>/transaction-days
+#
+# The days ?address= itself transacted on, with per-day
+# counts — what the graph page's date slider offers (days
+# with no root activity would render a lone faucet node, so
+# they're not listed). ?tz_offset (browser's UTC offset in
+# seconds) aligns the day buckets to the student's local
+# days.
+#
+# Used by:
+#   - Graph/Page.jsx — the date slider's day list
+############################################################
+
+@bp_evm_faucet.route('/api/evm/<network>/transaction-days', methods=['GET'])
+def get_transaction_days(network):
+    tz_offset = request.args.get('tz_offset', default=0, type=int)
+    address = request.args.get('address')
+    data, status = evm_explorer.get_transaction_days(network, tz_offset, address)
     return jsonify(data), status
 
 
@@ -186,3 +221,8 @@ def set_address_name():
     name = request.args.get('name')
     data, status = evm_explorer.set_address_name(address, name)
     return jsonify(data), status
+
+
+
+
+

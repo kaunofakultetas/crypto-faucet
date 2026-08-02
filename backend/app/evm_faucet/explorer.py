@@ -24,7 +24,6 @@ import os
 import time
 import json
 import logging
-from datetime import datetime, timedelta, timezone
 
 import requests
 
@@ -48,7 +47,8 @@ from ..database.db import get_db_connection
 #   fetch — fetch_all_transactions_from_etherscan,
 #           fetch_and_store_transactions
 #   store — store_transactions
-#   serve — get_stored_transactions, set_address_name
+#   serve — get_stored_transactions, get_transaction_days,
+#           set_address_name
 #
 # Used by:
 #   - evm_routes.py — one shared instance for the graph
@@ -263,30 +263,55 @@ class EtherscanExplorer:
     #
     # Data for the frontend's transaction graph: refresh the
     # cache from Etherscan (at most once a minute per address —
-    # the graph sweeps aggressively), then aggregate transfers
-    # into "flows" — one row per (from, to) pair with the
-    # summed value and count, plus the display names and
-    # last-seen timestamps of both endpoints.
+    # the graph sweeps aggressively), then aggregate the
+    # transfers inside the [from_ts, to_ts) unix window into
+    # "flows" — one row per (from, to) pair with the summed
+    # value and count, plus the display names and last-seen
+    # timestamps of both endpoints. The window comes from the
+    # page's date slider; its boundaries are computed in the
+    # student's BROWSER, so "today" means their local midnight,
+    # not the server's.
     #
     # Used by:
     #   - evm_routes.py —
     #     GET /api/evm/<network>/get-stored-transactions
     ############################################################
 
-    def get_stored_transactions(self, network, address, hours=24):
+    def get_stored_transactions(self, network, address, from_ts, to_ts):
         if not address:
             return {"error": "Address is required"}, 400
         if not self.is_supported_network(network):
             return {"error": f"Unsupported network: {network}"}, 400
+        if from_ts is None or to_ts is None or from_ts >= to_ts:
+            return {"error": "A valid from/to unix range is required"}, 400
 
 
-        # STEP 1: refresh the local cache from Etherscan, but at most
-        # once per ETHERSCAN_REFRESH_INTERVAL per address — inside the
-        # window the data comes straight from SQLite, which keeps the
-        # graph's sweeps well under Etherscan's rate limit.
-        # ============================================================
+        # STEP 1: refresh from Etherscan — but only when it can
+        # matter. A LIVE window (touching the last hour) refreshes as
+        # before, throttled to once per ETHERSCAN_REFRESH_INTERVAL
+        # per address. A HISTORICAL window serves straight from
+        # SQLite: the full-history scrape captured old days long ago
+        # and they cannot change — unless this address was NEVER
+        # scraped at all, in which case one fetch fills in its past.
+        # Browsing history is therefore instant and costs zero
+        # Etherscan quota.
+        # =============================================================
         fetch_key = (network, address.lower())
-        if int(time.time()) - self.last_etherscan_fetch.get(fetch_key, 0) >= self.ETHERSCAN_REFRESH_INTERVAL:
+        is_live_window = to_ts > int(time.time()) - 3600
+
+        needs_first_fetch = False
+        if not is_live_window:
+            with get_db_connection() as conn:
+                seen = conn.execute('''
+                    SELECT 1 FROM transactions
+                    WHERE LOWER(network) = ?
+                      AND (LOWER(from_address) = ? OR LOWER(to_address) = ?)
+                    LIMIT 1
+                ''', [network.lower(), address.lower(), address.lower()]).fetchone()
+            needs_first_fetch = seen is None
+
+        should_refresh = is_live_window or needs_first_fetch
+        if should_refresh and int(time.time()) - self.last_etherscan_fetch.get(fetch_key, 0) >= self.ETHERSCAN_REFRESH_INTERVAL:
             try:
                 self.fetch_and_store_transactions(network, address)
                 self.last_etherscan_fetch[fetch_key] = int(time.time())
@@ -295,18 +320,15 @@ class EtherscanExplorer:
                 return {"error": "Failed to refresh transactions"}, 500
 
 
-        # STEP 2: aggregate. GetLatestUpdate: when each address was
-        # last seen on either side of a transaction. GetFlows: the
-        # aggregated transfers, already packed as JSON objects so the
-        # final SELECT can return the whole result as a single JSON
-        # array.
-        # ===========================================================
+        # STEP 2: aggregate the window. GetLatestUpdate: when each
+        # address was last seen on either side of a transaction.
+        # GetFlows: the aggregated transfers, already packed as JSON
+        # objects so the final SELECT can return the whole result as
+        # a single JSON array. The range predicate rides on the
+        # (network, timestamp) index — no date column needed, the
+        # timestamp already IS the date.
+        # ============================================================
         with get_db_connection() as conn:
-            # Timezone-aware on purpose: naive utcnow().timestamp()
-            # would shift by the container's TZ offset if it ever ran
-            # outside UTC.
-            threshold_time = int((datetime.now(timezone.utc) - timedelta(hours=hours)).timestamp())
-
             sqlQueryResult = conn.execute('''
                 WITH GetLatestUpdate AS (
                     SELECT
@@ -363,7 +385,8 @@ class EtherscanExplorer:
                     WHERE
                         LOWER(network) = ? AND
                         (LOWER(from_address) = ? OR LOWER(to_address) = ?) AND
-                        transactions.timestamp >= ?
+                        transactions.timestamp >= ? AND
+                        transactions.timestamp < ?
                     GROUP BY transactions.from_address, transactions.to_address
                 )
 
@@ -375,7 +398,7 @@ class EtherscanExplorer:
                     )
                 FROM
                     GetFlows
-            ''', [network.lower(), address.lower(), address.lower(), threshold_time])
+            ''', [network.lower(), address.lower(), address.lower(), from_ts, to_ts])
 
             result = sqlQueryResult.fetchone()
             transactions_json = result[0] if result else '[]'
@@ -383,6 +406,52 @@ class EtherscanExplorer:
             return {"transactions": json.loads(transactions_json)}, 200
 
 
+
+
+
+
+    ############################################################
+    # get_transaction_days
+    ############################################################
+    #
+    # Every day (as 'YYYY-MM-DD') on which the given ROOT
+    # address itself transacted, with that day's transaction
+    # count — the page's date slider lists exactly these. Days
+    # where only unrelated addresses moved are deliberately
+    # absent: the graph grows breadth-first from the root, so
+    # such a day would render one lonely faucet node. tz_offset
+    # is the BROWSER'S offset from UTC in seconds, so the day
+    # buckets match the student's local days; it's clamped to
+    # the real-world ±14 h range. (A day spanning a DST switch
+    # can bucket an hour off — accepted, the graph is a
+    # teaching aid, not an accounting ledger.)
+    #
+    # Used by:
+    #   - evm_routes.py —
+    #     GET /api/evm/<network>/transaction-days
+    ############################################################
+
+    def get_transaction_days(self, network, tz_offset, address):
+        if not self.is_supported_network(network):
+            return {"error": f"Unsupported network: {network}"}, 400
+        if not address:
+            return {"error": "Address is required"}, 400
+
+        offset = int(tz_offset or 0)
+        if abs(offset) > 14 * 3600:
+            offset = 0
+
+        with get_db_connection() as conn:
+            rows = conn.execute('''
+                SELECT date(timestamp + ?, 'unixepoch') AS day, COUNT(*) AS tx_count
+                FROM transactions
+                WHERE LOWER(network) = ?
+                  AND (LOWER(from_address) = ? OR LOWER(to_address) = ?)
+                GROUP BY day
+                ORDER BY day
+            ''', [offset, network.lower(), address.lower(), address.lower()]).fetchall()
+
+        return {"days": [{"day": row[0], "count": row[1]} for row in rows]}, 200
 
 
 
@@ -408,3 +477,8 @@ class EtherscanExplorer:
             conn.execute(''' UPDATE addresses SET name = ? WHERE address = ? ''', [name, address])
 
         return {"status": "OK"}, 200
+
+
+
+
+

@@ -16,6 +16,7 @@
 
 import os
 import json
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -77,10 +78,31 @@ class LiveSmokeTests(unittest.TestCase):
         balance = get('/api/utxo/btc4/faucet-balance')
         self.assertTrue(balance['address'].startswith('tb1'))
 
-    def test_graph_flows(self):
+    def test_graph_flows_in_day_window(self):
+        # the date slider's contract: a [from, to) unix window
         address = get('/api/evm/sepolia/faucet-balance')['address']
-        data = get(f'/api/evm/sepolia/get-stored-transactions?address={address}')
+        now = int(time.time())
+        data = get(f'/api/evm/sepolia/get-stored-transactions'
+                   f'?address={address}&from={now - 86400}&to={now + 3600}')
         self.assertIsInstance(data['transactions'], list)
+
+    def test_graph_transaction_days(self):
+        # the slider's day list: the root address's days, each
+        # with a positive count, sorted ascending
+        address = get('/api/evm/sepolia/faucet-balance')['address']
+        data = get(f'/api/evm/sepolia/transaction-days?address={address}&tz_offset=10800')
+        self.assertIsInstance(data['days'], list)
+        for entry in data['days']:
+            self.assertRegex(entry['day'], r'^\d{4}-\d{2}-\d{2}$')
+            self.assertGreater(entry['count'], 0)
+        days = [entry['day'] for entry in data['days']]
+        self.assertEqual(days, sorted(days))
+
+    def test_graph_flows_require_a_range(self):
+        address = get('/api/evm/sepolia/faucet-balance')['address']
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            get(f'/api/evm/sepolia/get-stored-transactions?address={address}')
+        self.assertEqual(caught.exception.code, 400)
 
 
 if __name__ == '__main__':
