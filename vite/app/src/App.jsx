@@ -3,7 +3,10 @@
 //
 //  The root of the React app: the MUI style/theme stack, the
 //  Navbar/Footer shell and every route. Route groups:
-//    - faucets  — /faucet/evm/:network, /faucet/utxo/:network
+//    - faucets  — /faucet/evm/:network (native coins),
+//                 /faucet/erc20/:token (tokens, one page per
+//                 token across every chain it lives on),
+//                 /faucet/utxo/:network
 //    - graph    — /graph/:network (transaction flow)
 //    - teaching — /sha256 (simulator), /reorgattack, /videos
 //    - dapps    — /dapps-server launcher
@@ -29,6 +32,7 @@ import Footer from './components/Footer';
 
 // Pages
 import FaucetEVM from './pages/Faucet_EVM/Page';
+import FaucetERC20 from './pages/Faucet_ERC20/Page';
 import FaucetUTXO from './pages/Faucet_UTXO/Page';
 import GraphPage from './pages/Graph/Page';
 import BlockchainSimulatorPage from './pages/BlockchainSimulator/Page';
@@ -46,8 +50,8 @@ import VideosPage from './pages/Videos/Page';
 // DynamicDefaultRedirect
 // -----------------------------------------------------------
 //
-// Sends "/" to an EVM faucet: the network the student used
-// last (lastNetwork:evm — the key NetworkPicker saves), then
+// Sends "/" to the native EVM faucet: the network the student
+// used last (lastPick:evm — the key FaucetPicker saves), then
 // the backend's default_network, then sepolia when even that
 // fails. Renders nothing while deciding.
 //
@@ -64,7 +68,7 @@ function DynamicDefaultRedirect() {
 
     const load = async () => {
       try {
-        const saved = localStorage.getItem('lastNetwork:evm');
+        const saved = localStorage.getItem('lastPick:evm');
         if (!ignore && saved) {
           setTarget(`/faucet/evm/${saved}`);
           return;
@@ -117,10 +121,14 @@ export default function App() {
               {/* "/" → the default EVM faucet */}
               <Route index element={<DynamicDefaultRedirect />} />
 
-              {/* Faucets */}
+              {/* Faucets — native EVM coins, ERC-20 tokens, UTXO chains */}
               <Route path="faucet">
                 <Route path="evm">
                   <Route path=":network" element={<FaucetEVM />} />
+                </Route>
+                {/* keyed by TOKEN — the token spans many chains */}
+                <Route path="erc20">
+                  <Route path=":token" element={<FaucetERC20 />} />
                 </Route>
                 <Route path="utxo">
                   <Route path=":network" element={<FaucetUTXO />} />
