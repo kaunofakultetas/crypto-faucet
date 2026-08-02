@@ -13,8 +13,10 @@
 #    2. The faucet checks the address doesn't already hold a
 #       full chunk, that the cooldown has passed, and that the
 #       faucet wallet itself still has coins.
-#    3. A plain value transfer is signed with the faucet key
-#       (shared with the UTXO faucet) and broadcast.
+#    3. A plain value transfer is handed to web3's sign-and-
+#       send middleware, which fills the pending nonce and
+#       chain id, signs with the faucet key (shared with the
+#       UTXO faucet) and broadcasts.
 #
 #  On top of the faucet itself, this class also feeds the
 #  transaction explorer: it pulls an address' history from
@@ -39,6 +41,14 @@ import requests
 from web3 import Web3
 from eth_account import Account
 from eth_account.messages import encode_defunct
+
+# web3 v7 renamed this middleware — accept either name so an
+# image upgrade doesn't break payouts
+try:
+    from web3.middleware import construct_sign_and_send_raw_middleware
+except ImportError:
+    from web3.middleware import SignAndSendRawMiddlewareBuilder
+    construct_sign_and_send_raw_middleware = SignAndSendRawMiddlewareBuilder.build
 
 from ..database.db import get_db_connection
 
@@ -79,12 +89,13 @@ class EVMFaucet:
     ############################################################
     #
     # Wires one faucet for every configured network: a Web3
-    # instance per network from the config's faucet.rpc_url,
-    # the shared faucet key normalized to 0x + 64 hex
-    # characters, and the in-memory cooldown table.
-    # network_configs is main.py's EVM_NETWORK_CONFIGS —
-    # sectioned into top-level identity plus 'faucet',
-    # 'metamask' and 'explorer' parts.
+    # instance per network from the config's faucet.rpc_url —
+    # each carrying the sign-and-send middleware, so a payout
+    # is one w3.eth.send_transaction call — the shared faucet
+    # key normalized to 0x + 64 hex characters, and the
+    # in-memory cooldown table. network_configs is main.py's
+    # EVM_NETWORK_CONFIGS — sectioned into top-level identity
+    # plus 'faucet', 'metamask' and 'explorer' parts.
     #
     # Used by:
     #   - evm_routes.py — at import time, the single instance
@@ -97,10 +108,31 @@ class EVMFaucet:
 
         self.NETWORK_CONFIGS = network_configs
 
+        # Same private key as the UTXO faucet, so one funded identity
+        # covers every chain the site offers. Normalize to a 0x-prefixed,
+        # 66-character hex string — zfill pads on the LEFT, because a
+        # short key means stripped leading zeros; padding the right
+        # would silently become a different wallet. A missing key
+        # leaves the account as None and every payout path answers
+        # with a configuration error instead of crashing the import.
+        self.FAUCET_PRIVATE_KEY = os.getenv('FAUCET_PRIVATE_KEY')
+        if self.FAUCET_PRIVATE_KEY:
+            self.FAUCET_PRIVATE_KEY = "0x" + self.FAUCET_PRIVATE_KEY.replace("0x", "").zfill(64)
+
+        try:
+            self.FAUCET_ACCOUNT = Account.from_key(self.FAUCET_PRIVATE_KEY) if self.FAUCET_PRIVATE_KEY else None
+        except Exception:
+            self.FAUCET_ACCOUNT = None
+        self.FAUCET_ADDRESS = self.FAUCET_ACCOUNT.address if self.FAUCET_ACCOUNT else None
+
         # One Web3 instance per network, created up front from the
         # config's faucet.rpc_url. <NAME> placeholders in the URL are
         # environment variable references, resolved here and only
         # here — the config file itself never holds the Infura key.
+        # The sign-and-send middleware turns every
+        # eth_sendTransaction from the faucet address into: fill the
+        # PENDING nonce and chain id, sign locally, broadcast raw —
+        # no payout path builds or signs transactions by hand.
         self.w3_instances = {}
         for network in self.NETWORK_CONFIGS:
             rpc_url_template = self.NETWORK_CONFIGS[network]['faucet']['rpc_url']
@@ -111,23 +143,10 @@ class EVMFaucet:
             request_kwargs = {
                 'timeout': 10
             }
-            self.w3_instances[network] = Web3(Web3.HTTPProvider(rpc_url, request_kwargs=request_kwargs))
-
-        # Same private key as the UTXO faucet, so one funded identity
-        # covers every chain the site offers. Normalize to a 0x-prefixed,
-        # 66-character hex string — zfill pads on the LEFT, because a
-        # short key means stripped leading zeros; padding the right
-        # would silently become a different wallet. A missing key
-        # leaves FAUCET_ADDRESS as None and every payout path answers
-        # with a configuration error instead of crashing the import.
-        self.FAUCET_PRIVATE_KEY = os.getenv('FAUCET_PRIVATE_KEY')
-        if self.FAUCET_PRIVATE_KEY:
-            self.FAUCET_PRIVATE_KEY = "0x" + self.FAUCET_PRIVATE_KEY.replace("0x", "").zfill(64)
-
-        try:
-            self.FAUCET_ADDRESS = Account.from_key(self.FAUCET_PRIVATE_KEY).address if self.FAUCET_PRIVATE_KEY else None
-        except Exception:
-            self.FAUCET_ADDRESS = None
+            w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs=request_kwargs))
+            if self.FAUCET_ACCOUNT:
+                w3.middleware_onion.add(construct_sign_and_send_raw_middleware(self.FAUCET_ACCOUNT))
+            self.w3_instances[network] = w3
 
         # (network, address) -> unix time of its last payout, for the
         # cooldown between requests. Deliberately in-memory: it resets
@@ -269,30 +288,23 @@ class EVMFaucet:
         if faucet_balance < amount_to_send_wei:
             return {"error": "Čiaupas nebeturi kriptovaliutos. Praneškite dėstytojui."}, 503
 
-        # STEP 4: sign and broadcast — under the send lock, with the
-        # nonce counting PENDING transactions, so rapid back-to-back
-        # claims each get their own nonce. A plain legacy value
-        # transfer; the generous gas limit doesn't cost anything
-        # extra, unused gas is refunded.
+        # STEP 4: broadcast — under the send lock, so two concurrent
+        # claims can't get filled with the same pending nonce. The
+        # sign-and-send middleware (attached in __init__) fills the
+        # nonce and chain id, signs and broadcasts. gasPrice is
+        # passed explicitly to force a LEGACY transaction — several
+        # of the configured testnets have spotty EIP-1559 support.
+        # The generous gas limit costs nothing, unused gas is
+        # refunded.
         try:
             with self.send_lock:
-                nonce_tx = w3.eth.get_transaction_count(self.FAUCET_ADDRESS, 'pending')
-                tx = {
-                    'nonce': nonce_tx,
+                tx_hash = w3.eth.send_transaction({
+                    'from': self.FAUCET_ADDRESS,
                     'to': to_address,
                     'value': int(amount_to_send_wei),
                     'gas': 210000,
                     'gasPrice': w3.eth.gas_price,
-                    'chainId': self.NETWORK_CONFIGS[network]['chain_id']
-                }
-
-                signed_tx = w3.eth.account.sign_transaction(tx, self.FAUCET_PRIVATE_KEY)
-
-                # web3 v7 renamed rawTransaction -> raw_transaction;
-                # the image ships 6.20.1, which only has the OLD name
-                # — accept either so an upgrade doesn't break payouts
-                raw_tx = getattr(signed_tx, 'raw_transaction', None) or signed_tx.rawTransaction
-                tx_hash = w3.eth.send_raw_transaction(raw_tx)
+                })
         except Exception:
             logging.exception(f"Failed to broadcast {network} payout")
             return {"error": "Nepavyko išsiųsti transakcijos. Bandykite dar kartą."}, 500
