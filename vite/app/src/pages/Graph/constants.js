@@ -6,8 +6,8 @@
 //  styling, storage keys and icon paths.
 //
 //  Used by:
-//    - CryptoFlowGraph.jsx (incl. its zoom controls, dialog
-//      and position hook)
+//    - useTransactionGraph.js, useNodePositions.js
+//    - CryptoFlowGraph.jsx, ZoomControls.jsx
 // -----------------------------------------------------------
 
 
@@ -24,8 +24,8 @@
 // path (wheel, slider, buttons) to MIN_SCALE..MAX_SCALE.
 //
 // Used by:
-//   - CryptoFlowGraph.jsx — the zoom listener, setZoom and
-//     the ZoomControls props
+//   - useTransactionGraph.js — the zoom listener and setZoom
+//   - CryptoFlowGraph.jsx — the ZoomControls props
 // -----------------------------------------------------------
 
 export const ZOOM_CONFIG = {
@@ -50,8 +50,9 @@ export const ZOOM_CONFIG = {
 // is disabled, the graph computes positions itself.
 //
 // Used by:
-//   - CryptoFlowGraph.jsx — syncDataSets (Y = level ×
-//     LEVEL_SEPARATION) and useNodePositions (X slot width)
+//   - useTransactionGraph.js — syncDataSets (Y = level ×
+//     LEVEL_SEPARATION)
+//   - useNodePositions.js — X slot width
 // -----------------------------------------------------------
 
 export const LAYOUT_CONFIG = {
@@ -74,7 +75,7 @@ export const LAYOUT_CONFIG = {
 // discovered addresses.
 //
 // Used by:
-//   - CryptoFlowGraph.jsx — useTransactionGraph's sweep loop
+//   - useTransactionGraph.js — the sweep loop
 // -----------------------------------------------------------
 
 export const TIMING_CONFIG = {
@@ -98,7 +99,7 @@ export const TIMING_CONFIG = {
 // user/contract nodes.
 //
 // Used by:
-//   - CryptoFlowGraph.jsx — NODE_PRESENTATION and
+//   - useTransactionGraph.js — NODE_PRESENTATION and
 //     VIS_OPTIONS (label font)
 // -----------------------------------------------------------
 
@@ -122,7 +123,7 @@ export const NODE_CONFIG = {
 // every interaction state.
 //
 // Used by:
-//   - CryptoFlowGraph.jsx — VIS_OPTIONS and syncDataSets
+//   - useTransactionGraph.js — VIS_OPTIONS and syncDataSets
 //     (edge label font)
 // -----------------------------------------------------------
 
@@ -151,7 +152,7 @@ export const EDGE_CONFIG = {
 // leaves after the date bar.
 //
 // Used by:
-//   - CryptoFlowGraph.jsx — the ZoomControls slider
+//   - ZoomControls.jsx — the vertical slider
 // -----------------------------------------------------------
 
 export const DIMENSIONS = {
@@ -172,7 +173,7 @@ export const DIMENSIONS = {
 // so each network keeps its own saved node positions.
 //
 // Used by:
-//   - CryptoFlowGraph.jsx — useNodePositions
+//   - useNodePositions.js
 // -----------------------------------------------------------
 
 export const STORAGE_KEYS = {
@@ -193,7 +194,7 @@ export const STORAGE_KEYS = {
 // distinction itself lives in the model's kind field.
 //
 // Used by:
-//   - CryptoFlowGraph.jsx — NODE_PRESENTATION
+//   - useTransactionGraph.js — NODE_PRESENTATION
 // -----------------------------------------------------------
 
 export const IMAGES = {

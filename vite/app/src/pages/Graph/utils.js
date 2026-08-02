@@ -9,7 +9,8 @@
 //  labels in abbreviated Lithuanian ("prieš 5 min.").
 //
 //  Used by:
-//    - CryptoFlowGraph.jsx
+//    - useTransactionGraph.js
+//    - AddressDialog.jsx — copyToClipboard
 // -----------------------------------------------------------
 
 
@@ -27,7 +28,7 @@
 // Lithuanian declension entirely.
 //
 // Used by:
-//   - CryptoFlowGraph.jsx — nodeLabel, for the
+//   - useTransactionGraph.js — nodeLabel, for the
 //     "Atnaujinta: …" line
 // -----------------------------------------------------------
 
@@ -72,7 +73,7 @@ export const timeSince = (date) => {
 // falls back to "now" (and is logged).
 //
 // Used by:
-//   - CryptoFlowGraph.jsx — mergeTransaction
+//   - useTransactionGraph.js — mergeTransaction
 // -----------------------------------------------------------
 
 export const parseTimestamp = (timestamp) => {
@@ -100,7 +101,7 @@ export const parseTimestamp = (timestamp) => {
 // values pass through untouched.
 //
 // Used by:
-//   - CryptoFlowGraph.jsx — nodeLabel
+//   - useTransactionGraph.js — nodeLabel
 // -----------------------------------------------------------
 
 export const formatAddress = (address) => {
@@ -119,14 +120,17 @@ export const formatAddress = (address) => {
 // -----------------------------------------------------------
 //
 // Edge label: the summed value plus how many transactions it
-// stands for, e.g. "0.5000 ETH\n(3 txs)".
+// stands for, e.g. "0.5000 ETH\n(3 txs)". The symbol is the
+// viewed network's native currency from the config — every
+// chain configured today uses ETH, but that's the config's
+// call, not this file's.
 //
 // Used by:
-//   - CryptoFlowGraph.jsx — syncDataSets (edge labels)
+//   - useTransactionGraph.js — syncDataSets (edge labels)
 // -----------------------------------------------------------
 
-export const formatTransactionLabel = (value, count) => {
-  return `${value.toFixed(4)} ETH\n(${count} tx${count > 1 ? 's' : ''})`;
+export const formatTransactionLabel = (value, count, symbol = 'ETH') => {
+  return `${value.toFixed(4)} ${symbol}\n(${count} tx${count > 1 ? 's' : ''})`;
 };
 
 
@@ -140,7 +144,7 @@ export const formatTransactionLabel = (value, count) => {
 // -----------------------------------------------------------
 //
 // Used by:
-//   - CryptoFlowGraph.jsx — the zoom listener and setZoom
+//   - useTransactionGraph.js — the zoom listener and setZoom
 // -----------------------------------------------------------
 
 export const clamp = (value, min, max) => {
@@ -161,7 +165,7 @@ export const clamp = (value, min, max) => {
 // callers show the "Nukopijuota" hint only when it worked.
 //
 // Used by:
-//   - CryptoFlowGraph.jsx — AddressDialog's copy button
+//   - AddressDialog.jsx — the copy button
 // -----------------------------------------------------------
 
 export const copyToClipboard = async (text) => {

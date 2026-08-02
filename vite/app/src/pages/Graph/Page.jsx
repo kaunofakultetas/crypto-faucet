@@ -244,6 +244,16 @@ export default function GraphPage() {
   });
   const address = data?.address ?? null;
 
+  // The viewed network's native currency symbol for the graph's
+  // edge labels — same cache entry the navbar and the "/"
+  // redirect already share
+  const { data: networksData } = useQuery({
+    queryKey: ['evm-networks'],
+    queryFn: async () => (await axios.get('/api/evm/networks')).data,
+    staleTime: 5 * 60 * 1000,
+  });
+  const currencySymbol = networksData?.networks?.[network]?.native_currency?.symbol ?? 'ETH';
+
   // The root address's used days (+ per-day counts), bucketed
   // with the browser's UTC offset so backend days == local days
   const tzOffset = -new Date().getTimezoneOffset() * 60;
@@ -295,6 +305,7 @@ export default function GraphPage() {
         dateRange={range}
         live={selectedDay === todayString()}
         day={selectedDay}
+        currencySymbol={currencySymbol}
       />
     </div>
   );

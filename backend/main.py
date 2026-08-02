@@ -31,8 +31,6 @@
 
 
 import os
-import json
-import sqlite3
 from flask import Flask, Response
 
 from app.database.db import get_db_connection

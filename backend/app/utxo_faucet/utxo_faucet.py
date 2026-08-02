@@ -56,6 +56,7 @@ from embit import bech32 as embit_bech32
 from embit.transaction import Transaction, TransactionInput, TransactionOutput, Witness, SIGHASH
 
 from .electrum_client import ElectrumClient
+from ..cooldown import CooldownTable
 
 
 # Outputs below this value (in satoshis) are considered dust and
@@ -169,14 +170,13 @@ class UTXOFaucet:
         self.faucet_private_key = os.getenv('FAUCET_PRIVATE_KEY')
         self.default_amount_btc = float(os.getenv('DEFAULT_WALLET_BTC_AMOUNT', '0.001'))
         self.fee_rate_sat_per_byte = int(os.getenv('BTC_FEE_RATE_SATVB', '10'))
-        self.cooldown_seconds = int(os.getenv('UTXO_COOLDOWN_SECONDS', '60'))
         self.app_debug = os.getenv('APP_DEBUG', 'false').lower() == 'true'
 
-        # (network, address) -> unix time of its last payout, for the
-        # cooldown between requests (matches the EVM faucet's keying).
-        # In-memory on purpose: resets on restart, fresh wallets walk
-        # around it — accepted for a lab faucet on testnets.
-        self.last_request = {}
+        # Per-(network, address) cooldown between payouts (matches
+        # the EVM faucet's keying) — the slot is claimed atomically
+        # before the payout work and released on failure (see
+        # app/cooldown.py for the in-memory trade-offs).
+        self.cooldowns = CooldownTable(int(os.getenv('UTXO_COOLDOWN_SECONDS', '60')))
 
         # The faucet identity is the same on every chain (same key,
         # same p2wpkh script, same scripthash — only the address HRP
@@ -662,45 +662,53 @@ class UTXOFaucet:
 
 
             # STEP 2: the cooldown — per (network, address), so
-            # claiming on one chain doesn't lock the others.
-            # =================================================
-            now = int(time.time())
-            cooldown_key = (network_key, to_address.lower())
-            last_request_time = self.last_request.get(cooldown_key)
+            # claiming on one chain doesn't lock the others. The
+            # slot is check-and-CLAIMED atomically before the payout
+            # work — two parallel requests from the same address
+            # would otherwise both pass a bare check, serialize
+            # politely on the send lock and get paid twice. Every
+            # failure path below releases the slot.
+            # ======================================================
+            if not ctx.chunk_size_btc or ctx.chunk_size_btc <= 0:
+                return {"error": "chunk_size must be > 0 for this network"}, 500
 
-            if last_request_time and (now - last_request_time) < self.cooldown_seconds:
-                remaining = self.cooldown_seconds - (now - last_request_time)
+            cooldown_key = (network_key, to_address.lower())
+            remaining = self.cooldowns.claim(cooldown_key)
+            if remaining:
                 return {
                     "error": f"Kriptovaliuta jums jau išsiųsta. Daugiau galėsite pasiimti už {remaining} sek."
                 }, 429
-
-            if not ctx.chunk_size_btc or ctx.chunk_size_btc <= 0:
-                return {"error": "chunk_size must be > 0 for this network"}, 500
 
 
             # STEP 3: does the faucet have the coins? Only confirmed
             # balance counts — unconfirmed change can't be re-spent on
             # every chain config. The cached balance is fine here: the
-            # UTXO selection inside the payout checks for real.
+            # UTXO selection inside the payout checks for real. From
+            # here on every failure — balance shortage, Electrum
+            # trouble, a failed broadcast — releases the cooldown
+            # slot claimed in STEP 2 before the error propagates.
             # ========================================================
-            balance_info = self._faucet_balance(ctx)
-            current_balance = balance_info["confirmed"]  # only spend confirmed coins
-            if current_balance < ctx.chunk_size_btc:
-                return {"error": "Čiaupas nebeturi kriptovaliutos. Praneškite dėstytojui."}, 503
+            try:
+                balance_info = self._faucet_balance(ctx)
+                current_balance = balance_info["confirmed"]  # only spend confirmed coins
+                if current_balance < ctx.chunk_size_btc:
+                    self.cooldowns.release(cooldown_key)
+                    return {"error": "Čiaupas nebeturi kriptovaliutos. Praneškite dėstytojui."}, 503
 
 
-            # STEP 4: build, sign and broadcast — serialized per
-            # network, or two simultaneous claims would select the
-            # same UTXOs and race to double-spend them. The cooldown
-            # starts only after a successful broadcast, and the
-            # cached balance is dropped so the page shows the payout
-            # on its next poll.
-            # ======================================================
-            amount_sat = int(float(ctx.chunk_size_btc) * 1e8)
-            with self._send_locks.setdefault(network_key, threading.Lock()):
-                tx_id = self._create_and_broadcast_transaction(ctx, to_address, amount_sat)
+                # STEP 4: build, sign and broadcast — serialized per
+                # network, or two simultaneous claims would select the
+                # same UTXOs and race to double-spend them. On success
+                # the cached balance is dropped so the page shows the
+                # payout on its next poll.
+                # ======================================================
+                amount_sat = int(float(ctx.chunk_size_btc) * 1e8)
+                with self._send_locks.setdefault(network_key, threading.Lock()):
+                    tx_id = self._create_and_broadcast_transaction(ctx, to_address, amount_sat)
+            except Exception:
+                self.cooldowns.release(cooldown_key)
+                raise
 
-            self.last_request[cooldown_key] = now
             self._balance_cache.pop(network_key, None)
 
             return {

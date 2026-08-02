@@ -14,9 +14,22 @@
 #  the chain itself. A network without an 'explorer' section
 #  simply has no graph.
 #
+#  Refreshes are INCREMENTAL — each one resumes from the last
+#  block already stored for that address instead of re-pulling
+#  the whole history — and an Etherscan outage degrades to
+#  serving the SQLite cache instead of blanking the graph.
+#
+#  CONTRACTS and PUBLIC HUBS are never scraped: the moment one
+#  class wallet touches a token contract or a community faucet,
+#  that address' GLOBAL history would otherwise flood the cache
+#  with thousands of unrelated strangers. Contracts are spotted
+#  by calldata, hubs by counterparty count — both are flagged
+#  in the addresses table and served from cache only.
+#
 #  Used by:
 #    - evm_routes.py — the graph endpoints
-#      (get-stored-transactions, set-address-name)
+#      (get-stored-transactions, transaction-days,
+#      set-address-name)
 ############################################################
 
 
@@ -28,6 +41,23 @@ import logging
 import requests
 
 from ..database.db import get_db_connection
+
+
+# How many blocks an incremental refresh re-fetches BELOW the
+# last stored block — a small overlap so a testnet reorg near
+# the tip can't leave a stale row behind (the upsert makes
+# re-fetching harmless).
+REORG_OVERLAP_BLOCKS = 10
+
+
+# An address whose history involves MORE distinct counterparties
+# than this is a PUBLIC HUB (a community faucet, a donation
+# collector, a token contract everyone on the testnet touches),
+# not a class wallet — storing its history would flood the cache
+# with thousands of strangers' transfers. Class wallets have a
+# handful of counterparties; the real hubs found in the wild had
+# 1900+.
+HUB_COUNTERPARTY_THRESHOLD = 200
 
 
 
@@ -45,7 +75,7 @@ from ..database.db import get_db_connection
 #
 #   setup — __init__, is_supported_network
 #   fetch — fetch_all_transactions_from_etherscan,
-#           fetch_and_store_transactions
+#           _refresh_address
 #   store — store_transactions
 #   serve — get_stored_transactions, get_transaction_days,
 #           set_address_name
@@ -68,15 +98,19 @@ class EtherscanExplorer:
     #
     # network_configs is main.py's EVM_NETWORK_CONFIGS — this
     # class only reads each entry's chain_id and 'explorer'
-    # section.
+    # section. trusted_addresses (the faucet's own address) are
+    # exempt from the public-hub detection: the faucet IS a
+    # high-degree hub by design, yet it's the graph's root and
+    # must always be scrapable.
     #
     # Used by:
     #   - evm_routes.py — at import time, the single instance
     ############################################################
 
-    def __init__(self, network_configs):
+    def __init__(self, network_configs, trusted_addresses=None):
         self.NETWORK_CONFIGS = network_configs
         self.ETHERSCAN_API_KEY = os.getenv('ETHERSCAN_API_KEY', '')
+        self.TRUSTED_ADDRESSES = {a.lower() for a in (trusted_addresses or []) if a}
 
         # (network, address) -> unix time of the last Etherscan
         # refresh. get_stored_transactions serves straight from SQLite
@@ -112,17 +146,17 @@ class EtherscanExplorer:
     # fetch_all_transactions_from_etherscan
     ############################################################
     #
-    # Pulls the full transaction history of an address from
-    # the Etherscan API, 1000 records per page, until a short
-    # page signals the end. An unknown API answer dumps the
-    # raw response into the container log (rate limits and bad
-    # API keys are the usual suspects) and raises.
+    # Pulls an address' transactions from the Etherscan API
+    # starting at start_block, 1000 records per page, until a
+    # short page signals the end. An unknown API answer logs
+    # the raw response (rate limits and bad API keys are the
+    # usual suspects) and raises.
     #
     # Used by:
-    #   - fetch_and_store_transactions (below)
+    #   - _refresh_address (below)
     ############################################################
 
-    def fetch_all_transactions_from_etherscan(self, address, network):
+    def fetch_all_transactions_from_etherscan(self, address, network, start_block=0):
         if not self.is_supported_network(network):
             raise ValueError(f"Unsupported network: {network}")
 
@@ -137,7 +171,7 @@ class EtherscanExplorer:
                 'module': 'account',
                 'action': 'txlist',
                 'address': address,
-                'startblock': 0,
+                'startblock': start_block,
                 'endblock': 99999999,
                 'page': page,
                 'offset': 1000,
@@ -163,9 +197,7 @@ class EtherscanExplorer:
                 break
 
             else:
-                print("+----------------------------------------+")
-                print(json.dumps(result, indent=4))
-                print("+----------------------------------------+")
+                logging.error(f"Unexpected Etherscan answer for {address} on {network}: {json.dumps(result)[:500]}")
                 raise Exception(f"Etherscan API error: {result.get('message', 'Unknown error')}")
 
         return all_transactions
@@ -180,51 +212,69 @@ class EtherscanExplorer:
     ############################################################
     #
     # Caches Etherscan transactions in the local SQLite
-    # database. INSERT OR IGNORE + UPDATE keeps the whole
-    # thing idempotent: re-fetching the same history never
-    # duplicates rows and refreshes what's already there.
-    # Both endpoints of every transfer are also seeded into
-    # the addresses table, where the user can name them later.
+    # database with ONE upsert per row (ON CONFLICT of the
+    # (network, hash) unique key refreshes the row in place),
+    # batched through executemany — idempotent, so re-fetching
+    # overlapping history never duplicates or drifts. Both
+    # endpoints of every transfer are also seeded into the
+    # addresses table, where the user can name them later.
     #
     # Used by:
-    #   - fetch_and_store_transactions (below)
+    #   - _refresh_address (above)
     ############################################################
 
     def store_transactions(self, transactions, network):
+        if not transactions:
+            return
+
+        tx_rows = []
+        address_rows = set()
+
+        for tx in transactions:
+            # Contract deployments have no 'to' — the recipient is
+            # the freshly created contract address. A recipient that
+            # receives CALLDATA is a contract too (token transfers,
+            # approvals, …) — without this, a token contract like
+            # LINK gets seeded as a "user", the graph sweeps it like
+            # a wallet, and its GLOBAL history drags every stranger
+            # on the testnet into our cache.
+            recipient = tx.get('to', '')
+            if recipient == '' or recipient == None:
+                is_contract = 1
+                recipient = tx.get('contractAddress', '')
+            else:
+                calldata = tx.get('input') or '0x'
+                is_contract = 1 if calldata not in ('', '0x') else 0
+
+            tx_rows.append((
+                network.lower(), tx['from'].lower(), recipient.lower(),
+                float(tx['value']) / 10**18, tx['hash'],
+                int(tx['blockNumber']), int(tx['timeStamp']),
+            ))
+            address_rows.add((tx['from'].lower(), "", 0))
+            address_rows.add((recipient.lower(), "", is_contract))
+
         with get_db_connection() as conn:
+            conn.executemany('''
+                INSERT INTO transactions (network, from_address, to_address, value, hash, block_number, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(network, hash) DO UPDATE SET
+                    from_address = excluded.from_address,
+                    to_address = excluded.to_address,
+                    value = excluded.value,
+                    block_number = excluded.block_number,
+                    timestamp = excluded.timestamp
+            ''', tx_rows)
 
-            for tx in transactions:
-                # Contract deployments have no 'to' — the recipient is
-                # the freshly created contract address.
-                is_contract = 0
-                recipient = tx.get('to', '')
-                if recipient == '' or recipient == None:
-                    is_contract = 1
-                    recipient = tx.get('contractAddress', '')
-
-                conn.execute('''
-                    INSERT OR IGNORE INTO transactions (network, from_address, to_address, value, hash, block_number, timestamp)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                (network.lower(), tx['from'].lower(), recipient.lower(), float(tx['value']) / 10**18, tx['hash'],
-                    int(tx['blockNumber']), int(tx['timeStamp'])
-                ))
-
-                conn.execute('''
-                    UPDATE transactions SET from_address = ?, to_address = ?, value = ?, block_number = ?, timestamp = ?
-                        WHERE LOWER(network) = ? AND hash = ?''',
-                (tx['from'].lower(), recipient.lower(), float(tx['value']) / 10**18, int(tx['blockNumber']),
-                    int(tx['timeStamp']), network.lower(), tx['hash']
-                ))
-
-                conn.execute('''
-                    INSERT OR IGNORE INTO addresses (address, name, is_contract)
-                    VALUES (?, ?, ?) ''',
-                    (tx['from'].lower(), "", 0))
-
-                conn.execute('''
-                    INSERT OR IGNORE INTO addresses (address, name, is_contract)
-                    VALUES (?, ?, ?) ''',
-                    (recipient.lower(), "", is_contract))
+            # Escalation-only upsert: an address once recognized as a
+            # contract STAYS a contract, even if it was first seen as
+            # a plain recipient — never the other way around.
+            conn.executemany('''
+                INSERT INTO addresses (address, name, is_contract)
+                VALUES (?, ?, ?)
+                ON CONFLICT(address) DO UPDATE SET
+                    is_contract = MAX(COALESCE(addresses.is_contract, 0), excluded.is_contract)
+            ''', sorted(address_rows))
 
 
 
@@ -232,25 +282,63 @@ class EtherscanExplorer:
 
 
     ############################################################
-    # fetch_and_store_transactions
+    # _refresh_address
     ############################################################
     #
-    # Etherscan -> SQLite in one call. The summary payload it
-    # returns is ignored by its only caller today.
+    # One INCREMENTAL Etherscan -> SQLite refresh: resume from
+    # the last block already stored for this address (minus the
+    # small reorg overlap) instead of re-pulling the entire
+    # history — the common live refresh fetches zero or a
+    # handful of rows instead of thousands. A never-seen
+    # address naturally starts from block 0 and gets its full
+    # past.
+    #
+    # A fetched history that turns out to belong to a PUBLIC
+    # HUB (more distinct counterparties than
+    # HUB_COUNTERPARTY_THRESHOLD) is thrown away instead of
+    # stored, and the address is flagged is_hub so it is never
+    # scraped again — one class wallet donating to a community
+    # faucet must not drag 2000 strangers into the graph.
     #
     # Used by:
     #   - get_stored_transactions (below)
     ############################################################
 
-    def fetch_and_store_transactions(self, network, address):
-        transactions = self.fetch_all_transactions_from_etherscan(address, network)
+    def _refresh_address(self, network, address):
+        with get_db_connection() as conn:
+            row = conn.execute('''
+                SELECT MAX(block_number) FROM transactions
+                WHERE network = ?
+                  AND (from_address = ? OR to_address = ?)
+            ''', [network.lower(), address.lower(), address.lower()]).fetchone()
+
+        last_block = row[0] if row and row[0] else 0
+        start_block = max(0, last_block - REORG_OVERLAP_BLOCKS)
+
+        transactions = self.fetch_all_transactions_from_etherscan(address, network, start_block)
+
+        if address.lower() not in self.TRUSTED_ADDRESSES:
+            counterparties = set()
+            for tx in transactions:
+                counterparties.add(tx['from'].lower())
+                counterparties.add((tx.get('to') or '').lower())
+            counterparties.discard(address.lower())
+            counterparties.discard('')
+
+            if len(counterparties) > HUB_COUNTERPARTY_THRESHOLD:
+                logging.warning(
+                    f"{address} on {network} looks like a public hub "
+                    f"({len(counterparties)} counterparties) — flagged as is_hub, history not stored"
+                )
+                with get_db_connection() as conn:
+                    conn.execute('''
+                        INSERT INTO addresses (address, name, is_contract, is_hub)
+                        VALUES (?, '', 0, 1)
+                        ON CONFLICT(address) DO UPDATE SET is_hub = 1
+                    ''', [address.lower()])
+                return
+
         self.store_transactions(transactions, network)
-        return {
-            "address": address,
-            "network": network,
-            "total_transactions": len(transactions),
-            "message": "Transactions fetched and stored successfully"
-        }
 
 
 
@@ -293,40 +381,52 @@ class EtherscanExplorer:
         # SQLite: the full-history scrape captured old days long ago
         # and they cannot change — unless this address was NEVER
         # scraped at all, in which case one fetch fills in its past.
-        # Browsing history is therefore instant and costs zero
-        # Etherscan quota.
+        # A known CONTRACT or PUBLIC HUB is never scraped at
+        # all: a global contract's history (a token like LINK)
+        # or a community faucet's is the whole testnet's
+        # traffic, not this graph's neighborhood — its cached
+        # faucet-related rows are served, nothing more.
         # =============================================================
         fetch_key = (network, address.lower())
         is_live_window = to_ts > int(time.time()) - 3600
 
-        needs_first_fetch = False
-        if not is_live_window:
-            with get_db_connection() as conn:
+        with get_db_connection() as conn:
+            row = conn.execute(
+                'SELECT is_contract, is_hub FROM addresses WHERE address = ?', [address.lower()]
+            ).fetchone()
+            never_scrape = bool(row and (row[0] or row[1]))
+
+            needs_first_fetch = False
+            if not is_live_window:
                 seen = conn.execute('''
                     SELECT 1 FROM transactions
-                    WHERE LOWER(network) = ?
-                      AND (LOWER(from_address) = ? OR LOWER(to_address) = ?)
+                    WHERE network = ?
+                      AND (from_address = ? OR to_address = ?)
                     LIMIT 1
                 ''', [network.lower(), address.lower(), address.lower()]).fetchone()
-            needs_first_fetch = seen is None
+                needs_first_fetch = seen is None
 
-        should_refresh = is_live_window or needs_first_fetch
+        should_refresh = (is_live_window or needs_first_fetch) and not never_scrape
         if should_refresh and int(time.time()) - self.last_etherscan_fetch.get(fetch_key, 0) >= self.ETHERSCAN_REFRESH_INTERVAL:
             try:
-                self.fetch_and_store_transactions(network, address)
+                self._refresh_address(network, address)
                 self.last_etherscan_fetch[fetch_key] = int(time.time())
             except Exception:
-                logging.exception("Error fetching/storing transactions")
-                return {"error": "Failed to refresh transactions"}, 500
+                # Etherscan being down must not blank the graph — log
+                # it and serve whatever SQLite already has; the next
+                # sweep retries anyway.
+                logging.exception(f"Etherscan refresh failed for {address} on {network}; serving cached data")
 
 
         # STEP 2: aggregate the window. GetLatestUpdate: when each
-        # address was last seen on either side of a transaction.
-        # GetFlows: the aggregated transfers, already packed as JSON
-        # objects so the final SELECT can return the whole result as
-        # a single JSON array. The range predicate rides on the
-        # (network, timestamp) index — no date column needed, the
-        # timestamp already IS the date.
+        # address was last seen on either side of a transaction —
+        # scoped to THIS network, so the cost never grows with the
+        # other networks' history. GetFlows: the aggregated
+        # transfers, already packed as JSON objects so the final
+        # SELECT can return the whole result as a single JSON array.
+        # The range predicate rides on the (network, timestamp)
+        # index — no date column needed, the timestamp already IS
+        # the date.
         # ============================================================
         with get_db_connection() as conn:
             sqlQueryResult = conn.execute('''
@@ -341,6 +441,7 @@ class EtherscanExplorer:
                             MAX(timestamp) as timestamp
                         FROM
                             transactions
+                        WHERE network = ?
                         GROUP BY from_address
 
                         UNION ALL
@@ -349,6 +450,7 @@ class EtherscanExplorer:
                             MAX(timestamp)
                         FROM
                             transactions
+                        WHERE network = ?
                         GROUP BY to_address
                     )
                     GROUP BY address
@@ -365,6 +467,8 @@ class EtherscanExplorer:
                             'to_name',              addr_to.name,
                             'to_timestamp',         latest_update_to.timestamp,
                             'to_addr_contract',     addr_to.is_contract,
+                            'from_addr_hub',        addr_from.is_hub,
+                            'to_addr_hub',          addr_to.is_hub,
 
                             'value',                SUM(transactions.value),
                             'count',                COUNT(*)
@@ -383,8 +487,8 @@ class EtherscanExplorer:
                         ON latest_update_to.address = transactions.to_address
 
                     WHERE
-                        LOWER(network) = ? AND
-                        (LOWER(from_address) = ? OR LOWER(to_address) = ?) AND
+                        network = ? AND
+                        (from_address = ? OR to_address = ?) AND
                         transactions.timestamp >= ? AND
                         transactions.timestamp < ?
                     GROUP BY transactions.from_address, transactions.to_address
@@ -398,7 +502,7 @@ class EtherscanExplorer:
                     )
                 FROM
                     GetFlows
-            ''', [network.lower(), address.lower(), address.lower(), from_ts, to_ts])
+            ''', [network.lower(), network.lower(), network.lower(), address.lower(), address.lower(), from_ts, to_ts])
 
             result = sqlQueryResult.fetchone()
             transactions_json = result[0] if result else '[]'
@@ -445,8 +549,8 @@ class EtherscanExplorer:
             rows = conn.execute('''
                 SELECT date(timestamp + ?, 'unixepoch') AS day, COUNT(*) AS tx_count
                 FROM transactions
-                WHERE LOWER(network) = ?
-                  AND (LOWER(from_address) = ? OR LOWER(to_address) = ?)
+                WHERE network = ?
+                  AND (from_address = ? OR to_address = ?)
                 GROUP BY day
                 ORDER BY day
             ''', [offset, network.lower(), address.lower(), address.lower()]).fetchall()
@@ -456,14 +560,18 @@ class EtherscanExplorer:
 
 
 
+
+
+
     ############################################################
     # set_address_name
     ############################################################
     #
     # Lets the user label an address shown in the transaction
-    # graph. Matches the address exactly as sent — the graph
-    # always sends lowercase, which is how store_transactions
-    # writes the rows.
+    # graph. An upsert, not an UPDATE: naming an address the
+    # cache hasn't seen yet must create the row, not silently
+    # do nothing — the label then survives until the address
+    # shows up in a transaction.
     #
     # Used by:
     #   - evm_routes.py — GET /api/evm/set-address-name
@@ -474,7 +582,11 @@ class EtherscanExplorer:
             return {"error": "Address is required"}, 400
 
         with get_db_connection() as conn:
-            conn.execute(''' UPDATE addresses SET name = ? WHERE address = ? ''', [name, address])
+            conn.execute('''
+                INSERT INTO addresses (address, name, is_contract)
+                VALUES (?, ?, 0)
+                ON CONFLICT(address) DO UPDATE SET name = excluded.name
+            ''', [address.lower(), name or ''])
 
         return {"status": "OK"}, 200
 

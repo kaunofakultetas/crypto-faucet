@@ -39,10 +39,12 @@ bp_evm_faucet = Blueprint('evm_faucet', __name__)
 # Two single instances, shared by every request handler below:
 # the faucet (payouts, balances) and the Etherscan explorer
 # behind the transaction graph — separate features, separate
-# classes.
+# classes. The faucet's own address is passed as trusted: it is
+# a high-degree hub by design (hundreds of student payouts) and
+# must not trip the explorer's public-hub protection.
 FAUCET_DEFAULT_NETWORK = os.getenv('FAUCET_DEFAULT_NETWORK', 'sepolia')
 evm_faucet = EVMFaucet(EVM_NETWORK_CONFIGS, FAUCET_DEFAULT_NETWORK)
-evm_explorer = EtherscanExplorer(EVM_NETWORK_CONFIGS)
+evm_explorer = EtherscanExplorer(EVM_NETWORK_CONFIGS, trusted_addresses=[evm_faucet.FAUCET_ADDRESS])
 
 
 

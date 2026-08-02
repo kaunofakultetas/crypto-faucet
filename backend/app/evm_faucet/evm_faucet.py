@@ -47,6 +47,8 @@ from web3 import Web3
 from eth_account import Account
 from eth_account.messages import encode_defunct
 
+from ..cooldown import CooldownTable
+
 # web3 v7 renamed this middleware — accept either name so an
 # image upgrade doesn't break payouts
 try:
@@ -160,12 +162,11 @@ class EVMFaucet:
                 w3.middleware_onion.add(construct_sign_and_send_raw_middleware(self.FAUCET_ACCOUNT))
             self.w3_instances[network] = w3
 
-        # (network, address) -> unix time of its last payout, for the
-        # cooldown between requests. Deliberately in-memory: it resets
-        # on restart, and a freshly generated wallet walks around it —
-        # both accepted for a lab faucet paying out testnet coins.
-        self.COOLDOWN_PERIOD = 60
-        self.last_request = {}
+        # Per-(network, address) cooldown between payouts — the slot
+        # is claimed atomically before the payout work and released
+        # on failure (see app/cooldown.py for the in-memory
+        # trade-offs).
+        self.cooldowns = CooldownTable(seconds=60)
 
         # network -> the lock serializing that chain's payouts, native
         # AND ERC-20 (same wallet, same per-chain nonce sequence — see
@@ -391,8 +392,8 @@ class EVMFaucet:
 
 
         # STEP 3: eligibility — no top-up if the wallet already holds
-        # a full chunk, the per-address cooldown has to be over, and
-        # the faucet itself must still have coins.
+        # a full chunk, the per-address cooldown slot must be free,
+        # and the faucet itself must still have coins.
         # ===========================================================
         try:
             user_balance = w3.eth.get_balance(to_address)
@@ -402,16 +403,24 @@ class EVMFaucet:
         if user_balance >= amount_to_send_wei:
             return {"error": f"Jūsų piniginėje jau yra pakankamai {self.NETWORK_CONFIGS[network]['faucet']['short_name']}."}, 400
 
-        # The cooldown is per (network, address) — claiming on one
-        # chain doesn't lock the same wallet out of the others.
-        addr_key = (network, to_address.lower())
-        if addr_key in self.last_request:
-            time_since = int(time.time()) - self.last_request[addr_key]
-            if time_since < self.COOLDOWN_PERIOD:
-                return {"error": f"Kriptovaliuta jums jau išsiųsta. Daugiau galėsite pasiimti už {self.COOLDOWN_PERIOD - time_since} sek."}, 429
+        # The cooldown slot is check-and-CLAIMED atomically, per
+        # (network, address) — claiming on one chain doesn't lock the
+        # same wallet out of the others, and two parallel requests
+        # from the same address can't both pass the check and get
+        # paid twice. Every failure path below releases the slot.
+        cooldown_key = (network, to_address.lower())
+        remaining = self.cooldowns.claim(cooldown_key)
+        if remaining:
+            return {"error": f"Kriptovaliuta jums jau išsiųsta. Daugiau galėsite pasiimti už {remaining} sek."}, 429
 
-        faucet_balance = w3.eth.get_balance(self.FAUCET_ADDRESS)
+        try:
+            faucet_balance = w3.eth.get_balance(self.FAUCET_ADDRESS)
+        except Exception:
+            self.cooldowns.release(cooldown_key)
+            return {"error": "Nepavyko gauti čiaupo balanso"}, 500
+
         if faucet_balance < amount_to_send_wei:
+            self.cooldowns.release(cooldown_key)
             return {"error": "Čiaupas nebeturi kriptovaliutos. Praneškite dėstytojui."}, 503
 
 
@@ -435,12 +444,12 @@ class EVMFaucet:
                 })
         except Exception:
             logging.exception(f"Failed to broadcast {network} payout")
+            self.cooldowns.release(cooldown_key)
             return {"error": "Nepavyko išsiųsti transakcijos. Bandykite dar kartą."}, 500
 
-        # The cooldown starts only after a successful broadcast; the
+        # Success — the cooldown slot claimed above stays, and the
         # cached balance is dropped so the page shows the payout on
         # its next poll.
-        self.last_request[addr_key] = int(time.time())
         self._balance_cache.pop(network, None)
 
         return {

@@ -6,6 +6,8 @@
 ############################################################
 
 
+import sqlite3
+
 from .db import get_db_connection
 
 
@@ -36,10 +38,11 @@ def init_db_tables():
             );
         ''')
         conn.execute('''
-            CREATE TABLE IF NOT EXISTS [addresses] ( 
+            CREATE TABLE IF NOT EXISTS [addresses] (
                 [address] TEXT NULL,
                 [name] TEXT NULL,
                 [is_contract] INTEGER NULL,
+                [is_hub] INTEGER NULL,
                 CONSTRAINT [sqlite_autoindex_addresses_1] UNIQUE ([address])
             );
         ''')
@@ -64,7 +67,10 @@ def init_db_tables():
         ''')
         # The graph's date slider filters by a [from, to) unix range —
         # this index keeps those day-window queries instant as the
-        # table grows.
+        # table grows. The explorer's queries compare lowercase
+        # values against these columns DIRECTLY (no LOWER() on the
+        # column, which would bypass the index) — everything is
+        # stored lowercase by store_transactions.
         conn.execute('''
             CREATE INDEX IF NOT EXISTS idx_transactions_network_timestamp ON transactions(network, timestamp)
         ''')

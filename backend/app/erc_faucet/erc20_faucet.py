@@ -39,6 +39,7 @@ import logging
 import threading
 
 from .token_contracts import get_erc20_contract
+from ..cooldown import CooldownTable
 
 
 
@@ -87,16 +88,11 @@ class ERC20Faucet:
         self.evm_faucet = evm_faucet
         self.TOKEN_CONFIGS = token_configs or {}
 
-        # (network, token, address) -> unix time of the last payout
-        # ATTEMPT — the slot is claimed atomically under cooldown_lock
-        # before the slow RPC work, so two parallel requests from the
-        # same address can't both pass the check; a failed attempt
-        # releases the slot again. Same in-memory trade-offs as the
-        # other faucets: resets on restart, fresh wallets walk around
-        # it — accepted for a lab faucet handing out test tokens.
-        self.COOLDOWN_PERIOD = 60
-        self.last_request = {}
-        self.cooldown_lock = threading.Lock()
+        # Per-(network, token, address) cooldown between payouts —
+        # the slot is claimed atomically before the slow RPC work and
+        # released on failure (see app/cooldown.py for the in-memory
+        # trade-offs).
+        self.cooldowns = CooldownTable(seconds=60)
 
         # (token, network) -> (unix time, balance). One token page
         # asks for the faucet's balance on EVERY chain the token
@@ -465,25 +461,19 @@ class ERC20Faucet:
         # same address would otherwise both pass a bare check and
         # get paid twice. Every failure path below releases the
         # slot, so a failed attempt never locks the student out.
-        # (Its own tiny lock, not the send lock: no RPC happens
-        # while holding it.)
         cooldown_key = (network, token_symbol, to_address.lower())
-        with self.cooldown_lock:
-            last_attempt = self.last_request.get(cooldown_key)
-            if last_attempt is not None:
-                time_since = int(time.time()) - last_attempt
-                if time_since < self.COOLDOWN_PERIOD:
-                    return {"error": f"Žetonai jums jau išsiųsti. Daugiau galėsite pasiimti už {self.COOLDOWN_PERIOD - time_since} sek."}, 429
-            self.last_request[cooldown_key] = int(time.time())
+        remaining = self.cooldowns.claim(cooldown_key)
+        if remaining:
+            return {"error": f"Žetonai jums jau išsiųsti. Daugiau galėsite pasiimti už {remaining} sek."}, 429
 
         try:
             faucet_token_balance = contract.functions.balanceOf(self.evm_faucet.FAUCET_ADDRESS).call()
         except Exception:
-            self.last_request.pop(cooldown_key, None)
+            self.cooldowns.release(cooldown_key)
             return {"error": "Nepavyko gauti čiaupo balanso"}, 500
 
         if faucet_token_balance < amount_to_send:
-            self.last_request.pop(cooldown_key, None)
+            self.cooldowns.release(cooldown_key)
             return {"error": "Čiaupas nebeturi žetonų. Praneškite dėstytojui."}, 503
 
 
@@ -513,7 +503,7 @@ class ERC20Faucet:
                 })
         except Exception:
             logging.exception(f"Failed to broadcast {token_symbol} payout on {network}")
-            self.last_request.pop(cooldown_key, None)
+            self.cooldowns.release(cooldown_key)
             return {"error": "Nepavyko išsiųsti transakcijos. Bandykite dar kartą."}, 500
 
         # Success — the cooldown slot claimed in STEP 3 stays, and
