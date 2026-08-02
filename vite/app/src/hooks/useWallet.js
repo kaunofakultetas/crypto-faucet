@@ -155,7 +155,10 @@ export default function useWallet(expectedChainId) {
         method: 'wallet_addEthereumChain',
         params: [{
           chainId: chainIdHex,
-          chainName: networkInfo.full_name,
+          // chain_name is the config's metamask-section name —
+          // the one the wallet STORES; full_name is only the
+          // faucet UI's display name
+          chainName: networkInfo.chain_name || networkInfo.full_name,
           nativeCurrency: networkInfo.native_currency,
           rpcUrls: networkInfo.rpc_urls,
           blockExplorerUrls: networkInfo.block_explorer_urls,

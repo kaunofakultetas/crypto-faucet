@@ -142,7 +142,9 @@ class UTXOFaucet:
     ############################################################
 
     def __init__(self, network_configs: dict):
-        # Per-network settings (electrum_server, hrp, chunk_size, ...)
+        # Per-network settings from main.py's UTXO_NETWORK_CONFIGS —
+        # identity at the top level, payout/connection settings under
+        # each entry's 'faucet' section
         # coming from main.py / environment.
         self.network_configs = network_configs or {}
 
@@ -219,7 +221,7 @@ class UTXOFaucet:
 
     def _get_hrp(self, network: str, coin_type: str, network_key: str = None) -> str:
         if network_key and network_key in self.network_configs:
-            config_hrp = self.network_configs[network_key].get('hrp')
+            config_hrp = self.network_configs[network_key].get('faucet', {}).get('hrp')
             if config_hrp:
                 return config_hrp
 
@@ -261,7 +263,11 @@ class UTXOFaucet:
 
     def _bech32_address_to_scripthash(self, address: str) -> str:
         hrp, data = bech32.bech32_decode(address)
-        configured_hrps = tuple(c.get('hrp') for c in self.network_configs.values() if c.get('hrp'))
+        configured_hrps = tuple(
+            c.get('faucet', {}).get('hrp')
+            for c in self.network_configs.values()
+            if c.get('faucet', {}).get('hrp')
+        )
         valid_hrps = ('tb', 'bc', 'bcrt', 'tltc', 'ltc', 'rltc', 'knf') + configured_hrps
         if hrp not in valid_hrps:
             raise ValueError('Invalid Bech32 address')
@@ -353,18 +359,20 @@ class UTXOFaucet:
     def _setup_wallet_for_network(self, network_key: str) -> NetworkContext:
         ctx = NetworkContext()
 
-        # STEP 1: resolve the network and coin type from the config.
+        # STEP 1: resolve the network and coin type from the config's
+        # faucet section (payout + connection settings live there).
         config = self.network_configs.get(network_key)
         if not config:
             raise ValueError(f'Unknown UTXO network: {network_key}')
+        faucet_config = config.get('faucet', {})
 
-        generic_network = config.get('network', 'testnet')
+        generic_network = faucet_config.get('network', 'testnet')
         ctx.coin_type = self._get_coin_type_from_key(network_key)
         ctx.network = self._get_bitcoinlib_network_name(generic_network, ctx.coin_type)
 
         # STEP 2: Electrum endpoint, 'host:port' with 50002 (SSL) as
         # the default port.
-        electrum_server = config.get('electrum_server', '')
+        electrum_server = faucet_config.get('electrum_server', '')
         if ':' in electrum_server:
             ctx.electrum_host, port_str = electrum_server.split(':', 1)
             ctx.electrum_port = int(port_str)
@@ -395,7 +403,7 @@ class UTXOFaucet:
         ctx.address = self._create_bech32_address(pubkey_hash, ctx.network, ctx.coin_type, network_key)
         ctx.scripthash = self._bech32_address_to_scripthash(ctx.address)
 
-        ctx.chunk_size_btc = float(config.get('chunk_size', self.default_amount_btc))
+        ctx.chunk_size_btc = float(faucet_config.get('chunk_size', self.default_amount_btc))
 
         return ctx
 
@@ -830,13 +838,14 @@ class UTXOFaucet:
 
         networks = {}
         for key, config in self.network_configs.items():
+            faucet_config = config.get('faucet', {})
             networks[key] = {
                 'id': config.get('id', 0),
                 'short_name': config.get('short_name', 'BTC'),
                 'full_name': config.get('full_name', key),
                 'chain_id': 0,  # not applicable for UTXO chains
-                'chain': config.get('network', 'testnet'),
-                'chunk_size': float(config.get('chunk_size')) if config.get('chunk_size') is not None else float(self.default_amount_btc),
+                'chain': faucet_config.get('network', 'testnet'),
+                'chunk_size': float(faucet_config.get('chunk_size')) if faucet_config.get('chunk_size') is not None else float(self.default_amount_btc),
             }
 
         return {

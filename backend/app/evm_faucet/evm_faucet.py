@@ -28,6 +28,7 @@
 
 
 import os
+import re
 import time
 import json
 import logging
@@ -78,10 +79,12 @@ class EVMFaucet:
     ############################################################
     #
     # Wires one faucet for every configured network: a Web3
-    # instance per network (Infura name or raw RPC URL), the
-    # shared faucet key normalized to 0x + 64 hex characters,
-    # and the in-memory cooldown table. network_configs is
-    # main.py's EVM_NETWORK_CONFIGS.
+    # instance per network from the config's faucet.rpc_url,
+    # the shared faucet key normalized to 0x + 64 hex
+    # characters, and the in-memory cooldown table.
+    # network_configs is main.py's EVM_NETWORK_CONFIGS —
+    # sectioned into top-level identity plus 'faucet',
+    # 'metamask' and 'explorer' parts.
     #
     # Used by:
     #   - evm_routes.py — at import time, the single instance
@@ -92,26 +95,23 @@ class EVMFaucet:
         self.FAUCET_DEFAULT_NETWORK = default_network or os.getenv('FAUCET_DEFAULT_NETWORK', 'sepolia')
         self.ETHERSCAN_API_KEY = os.getenv('ETHERSCAN_API_KEY', '')
 
-        # Per-network settings (infura_network, chain_id, chunk_size,
-        # etherscan_api_url, ...) coming from main.py.
         self.NETWORK_CONFIGS = network_configs
 
-        # One Web3 instance per network, created up front. The config
-        # value is either an Infura network name ('sepolia') or a full
-        # RPC URL — anything containing 'http' is used as-is.
+        # One Web3 instance per network, created up front from the
+        # config's faucet.rpc_url. <NAME> placeholders in the URL are
+        # environment variable references, resolved here and only
+        # here — the config file itself never holds the Infura key.
         self.w3_instances = {}
         for network in self.NETWORK_CONFIGS:
-            if 'http' not in self.NETWORK_CONFIGS[network]['infura_network']:
-                infura_url = f"https://{self.NETWORK_CONFIGS[network]['infura_network']}.infura.io/v3/{os.getenv('INFURA_PROJECT_ID')}"
-            else:
-                infura_url = self.NETWORK_CONFIGS[network]['infura_network']
+            rpc_url_template = self.NETWORK_CONFIGS[network]['faucet']['rpc_url']
+            rpc_url = re.sub(r'<(\w+)>', lambda m: os.getenv(m.group(1), ''), rpc_url_template)
 
             # 10s timeout so a dead RPC endpoint fails the request
             # instead of hanging the Flask worker.
             request_kwargs = {
                 'timeout': 10
             }
-            self.w3_instances[network] = Web3(Web3.HTTPProvider(infura_url, request_kwargs=request_kwargs))
+            self.w3_instances[network] = Web3(Web3.HTTPProvider(rpc_url, request_kwargs=request_kwargs))
 
         # Same private key as the UTXO faucet, so one funded identity
         # covers every chain the site offers. Normalize to a 0x-prefixed,
@@ -211,7 +211,7 @@ class EVMFaucet:
     # Lithuanian.
     #
     # Used by:
-    #   - evm_routes.py — GET /api/evm/<network>/request-eth
+    #   - evm_routes.py — GET /api/evm/<network>/request
     ############################################################
 
     def request_eth(self, network, to_address, signature, nonce):
@@ -223,7 +223,7 @@ class EVMFaucet:
 
         w3 = self.w3_instances[network]
 
-        amount_to_send = self.NETWORK_CONFIGS[network]['chunk_size']
+        amount_to_send = self.NETWORK_CONFIGS[network]['faucet']['chunk_size']
         amount_to_send_wei = Web3.to_wei(float(amount_to_send), 'ether')
 
         # STEP 1: input validation — all parameters present and the
@@ -255,7 +255,7 @@ class EVMFaucet:
             return {"error": "Nepavyko gauti naudotojo balanso"}, 500
 
         if user_balance >= amount_to_send_wei:
-            return {"error": f"Jūsų piniginėje jau yra pakankamai {self.NETWORK_CONFIGS[network]['short_name']}."}, 400
+            return {"error": f"Jūsų piniginėje jau yra pakankamai {self.NETWORK_CONFIGS[network]['faucet']['short_name']}."}, 400
 
         # The cooldown is per (network, address) — claiming on one
         # chain doesn't lock the same wallet out of the others.
@@ -354,7 +354,7 @@ class EVMFaucet:
         return {
             "balance": balance_eth,
             "address": self.FAUCET_ADDRESS.lower(),
-            "chunk_size": float(self.NETWORK_CONFIGS[network]['chunk_size'])
+            "chunk_size": float(self.NETWORK_CONFIGS[network]['faucet']['chunk_size'])
         }, 200
 
 
@@ -367,16 +367,36 @@ class EVMFaucet:
     ############################################################
     #
     # Everything the frontend needs to render the network
-    # picker: the full config map and which network to
-    # preselect.
+    # picker and feed MetaMask's wallet_addEthereumChain, plus
+    # which network to preselect. Deliberately COMPOSED, not a
+    # raw config dump: the backend-only sections (faucet RPC
+    # template, explorer API) stay out of the public payload.
     #
     # Used by:
     #   - evm_routes.py — GET /api/evm/networks
     ############################################################
 
     def get_networks(self):
+        networks = {}
+        for key, config in self.NETWORK_CONFIGS.items():
+            faucet = config.get('faucet', {})
+            metamask = config.get('metamask', {})
+            networks[key] = {
+                'id': config.get('id', 0),
+                'chain_id': config.get('chain_id'),
+                # The UI's names (faucet section) and the name
+                # MetaMask stores (metamask section) travel
+                # separately — editing one never changes the other
+                'short_name': faucet.get('short_name', ''),
+                'full_name': faucet.get('full_name', key),
+                'chain_name': metamask.get('chain_name', faucet.get('full_name', key)),
+                'native_currency': metamask.get('native_currency'),
+                'rpc_urls': metamask.get('rpc_urls', []),
+                'block_explorer_urls': metamask.get('block_explorer_urls', []),
+            }
+
         return {
-            "networks": self.NETWORK_CONFIGS,
+            "networks": networks,
             "default_network": self.FAUCET_DEFAULT_NETWORK
         }
 
@@ -403,7 +423,9 @@ class EVMFaucet:
         if not self.is_supported_network(network):
             raise ValueError(f"Unsupported network: {network}")
 
-        url = self.NETWORK_CONFIGS[network]['etherscan_api_url']
+        url = self.NETWORK_CONFIGS[network].get('explorer', {}).get('etherscan_api_url')
+        if not url:
+            raise ValueError(f"No explorer API configured for network: {network}")
         all_transactions = []
         page = 1
 

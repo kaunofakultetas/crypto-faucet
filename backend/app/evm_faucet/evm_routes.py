@@ -6,7 +6,7 @@
 #
 #    GET /api/evm/networks                          — available networks
 #    GET /api/evm/<network>/faucet-balance          — faucet address + balance
-#    GET /api/evm/<network>/request-eth             — send one chunk
+#    GET /api/evm/<network>/request                 — send one chunk
 #                                                     (?address, ?signature, ?nonce)
 #    GET /api/evm/<network>/get-stored-transactions — flows for the tx graph
 #                                                     (?address, ?hours)
@@ -48,18 +48,20 @@ evm_faucet = EVMFaucet(EVM_NETWORK_CONFIGS, FAUCET_DEFAULT_NETWORK)
 # request_eth
 ############################################################
 #
-# GET /api/evm/<network>/request-eth
+# GET /api/evm/<network>/request
 #
-# The actual payout: sends one chunk to ?address= — the
+# The actual payout: sends one chunk of the NATIVE coin to
+# ?address= — the route says "request", not "request-eth",
+# because not every chain's native currency is ETH. The
 # signature (of the fixed message + nonce, made in MetaMask)
 # proves the caller controls that wallet. Validation, the
 # cooldown and the broadcast itself live in EVMFaucet.
 #
 # Used by:
-#   - Faucet_EVM/Page.jsx — ClaimButton's claim flow
+#   - Faucet_EVM/Page.jsx — the page's claim flow
 ############################################################
 
-@bp_evm_faucet.route('/api/evm/<network>/request-eth', methods=['GET'])
+@bp_evm_faucet.route('/api/evm/<network>/request', methods=['GET'])
 def request_eth(network):
     to_address = request.args.get('address')
     signature = request.args.get('signature')
@@ -106,10 +108,11 @@ def faucet_balance(network):
 #
 # GET /api/evm/networks
 #
-# Network picker data for the frontend: names, chain ids,
-# chunk sizes and which network to preselect. The same
-# payload feeds MetaMask's wallet_addEthereumChain when the
-# chain is missing there.
+# Network picker data for the frontend: names, chain ids and
+# which network to preselect. The same payload feeds
+# MetaMask's wallet_addEthereumChain when the chain is
+# missing there. Composed in EVMFaucet.get_networks — the
+# config's backend-only sections never reach the browser.
 #
 # Used by:
 #   - Faucet_EVM/Page.jsx — useFaucetInfo

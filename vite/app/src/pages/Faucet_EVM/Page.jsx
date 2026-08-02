@@ -8,7 +8,7 @@
 //  The four-step MetaMask flow (install → connect → switch
 //  network → claim) is driven by the shared useWallet hook;
 //  claiming signs a nonce message the backend verifies before
-//  sending (GET /api/evm/<network>/request-eth). The faucet's
+//  sending (GET /api/evm/<network>/request). The faucet's
 //  return address renders as text + QR, with a shortcut to
 //  the transaction graph (/graph/<network>).
 //
@@ -202,7 +202,7 @@ export default function FaucetEVM() {
       const { nonce, signature } = await wallet.signMessage();
 
       const params = new URLSearchParams({ address: wallet.account, signature, nonce });
-      const res = await fetch(`/api/evm/${network}/request-eth?${params.toString()}`, {
+      const res = await fetch(`/api/evm/${network}/request?${params.toString()}`, {
         headers: { Accept: 'application/json' },
       });
       const data = await res.json();

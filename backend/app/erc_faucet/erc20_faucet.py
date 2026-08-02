@@ -246,6 +246,8 @@ class ERC20Faucet:
         deployments = []
         for network, contract_address in self.deployments_of(token_symbol):
             network_config = self.evm_faucet.NETWORK_CONFIGS[network]
+            faucet_config = network_config.get('faucet', {})
+            metamask_config = network_config.get('metamask', {})
             w3 = self.evm_faucet.w3_instances[network]
 
             wallet_native_wei = None
@@ -257,12 +259,13 @@ class ERC20Faucet:
 
             deployments.append({
                 'network': network,
-                'full_name': network_config.get('full_name', network),
-                'short_name': network_config.get('short_name', ''),
+                'full_name': faucet_config.get('full_name', network),
+                'short_name': faucet_config.get('short_name', ''),
+                'chain_name': metamask_config.get('chain_name', faucet_config.get('full_name', network)),
                 'chain_id': network_config.get('chain_id'),
-                'native_currency': network_config.get('native_currency'),
-                'rpc_urls': network_config.get('rpc_urls', []),
-                'block_explorer_urls': network_config.get('block_explorer_urls', []),
+                'native_currency': metamask_config.get('native_currency'),
+                'rpc_urls': metamask_config.get('rpc_urls', []),
+                'block_explorer_urls': metamask_config.get('block_explorer_urls', []),
                 'contract_address': contract_address,
                 'balance': self._token_balance(token_symbol, network, contract_address, config['decimals']),
                 # Strings, not ints: 0.025 ETH is 2.5e16 wei — past
@@ -304,7 +307,7 @@ class ERC20Faucet:
 
     def _min_native_wei(self, network):
         w3 = self.evm_faucet.w3_instances[network]
-        chunk = float(self.evm_faucet.NETWORK_CONFIGS[network].get('chunk_size', 0))
+        chunk = float(self.evm_faucet.NETWORK_CONFIGS[network].get('faucet', {}).get('chunk_size', 0))
         return int(w3.to_wei(chunk / 2, 'ether'))
 
 
@@ -374,9 +377,9 @@ class ERC20Faucet:
 
         if native_balance < self._min_native_wei(network):
             network_config = self.evm_faucet.NETWORK_CONFIGS[network]
-            native_symbol = (network_config.get('native_currency') or {}).get('symbol', 'ETH')
-            needed = float(network_config.get('chunk_size', 0)) / 2
-            return {"error": f"Piniginėje per mažai {native_symbol} tinklo mokesčiams (reikia bent {needed:g} {native_symbol}). Pirmiausia pasiimkite jų iš {network_config.get('full_name', network)} faucet'o."}, 400
+            native_symbol = (network_config.get('metamask', {}).get('native_currency') or {}).get('symbol', 'ETH')
+            needed = float(network_config.get('faucet', {}).get('chunk_size', 0)) / 2
+            return {"error": f"Piniginėje per mažai {native_symbol} tinklo mokesčiams (reikia bent {needed:g} {native_symbol}). Pirmiausia pasiimkite jų iš {network_config.get('faucet', {}).get('full_name', network)} faucet'o."}, 400
 
         if user_balance >= amount_to_send:
             return {"error": f"Jūsų piniginėje jau yra pakankamai {token_symbol}."}, 400
