@@ -287,7 +287,12 @@ class EVMFaucet:
                 }
 
                 signed_tx = w3.eth.account.sign_transaction(tx, self.FAUCET_PRIVATE_KEY)
-                tx_hash = w3.eth.send_raw_transaction(signed_tx.raw_transaction)
+
+                # web3 v7 renamed rawTransaction -> raw_transaction;
+                # the image ships 6.20.1, which only has the OLD name
+                # — accept either so an upgrade doesn't break payouts
+                raw_tx = getattr(signed_tx, 'raw_transaction', None) or signed_tx.rawTransaction
+                tx_hash = w3.eth.send_raw_transaction(raw_tx)
         except Exception:
             logging.exception(f"Failed to broadcast {network} payout")
             return {"error": "Nepavyko išsiųsti transakcijos. Bandykite dar kartą."}, 500
