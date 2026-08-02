@@ -1,339 +1,422 @@
-import React from 'react';
-import { Box, Typography, Paper, Button, TextField, FormControl, InputLabel, Select, MenuItem, IconButton, Divider, Alert, Switch, FormControlLabel } from '@mui/material';
+// -----------------------------------------------------------
+//  [*] ReorgAttack — ControlPanel
+//
+//  The sliding side panel that drives the attack: the switch
+//  attaching or detaching the private node from the public
+//  network, a raw HEX transaction sender, and the colour-coded
+//  transaction tracker.
+//
+//  The panel OWNS its form state (the two text fields and
+//  their colours) — the page only receives finished actions
+//  (onSendRawTransaction({ raw, color })), so typing here
+//  never re-renders the fork diagram.
+//
+//  Split into (root component last):
+//
+//    TRANSACTION_COLORS — the tracking palette
+//    ColorSelect        — colour dropdown with colour dots
+//    ConnectionSection  — the public-network switch + status
+//    RawTransactionForm — the HEX sender
+//    TrackedTransaction — one row of the tracked list
+//    TrackingSection    — add form + tracked list
+//    ControlPanel       — the panel shell (default export)
+// -----------------------------------------------------------
 
+import { useState } from 'react';
 
-// Icons
-import { MdAdd, MdRemove, MdSend, MdWifi, MdWifiOff, MdClose } from "react-icons/md";
+import {
+  Box, Typography, Paper, Button, TextField, FormControl, InputLabel,
+  Select, MenuItem, IconButton, Divider, Alert, Switch, FormControlLabel,
+} from '@mui/material';
+
+import { MdAdd, MdSend, MdWifi, MdWifiOff, MdClose } from 'react-icons/md';
 import DeleteIcon from '@mui/icons-material/Delete';
 
 
+// The palette a student picks from when colour-tracking a
+// transaction across the two chains
+const TRANSACTION_COLORS = ['red', 'green', 'blue', 'orange', 'purple', 'pink', 'cyan', 'yellow'];
 
 
 
 
-const ControlPanel = ({ 
-  isPanelOpen, setIsPanelOpen, isConnectedToPublic, onConnectionToggle, rawTransaction, setRawTransaction, rawTxColor, setRawTxColor, onSendRawTransaction,
-  transactions, onAddTransaction, onRemoveTransaction, newTxid, setNewTxid, selectedColor, setSelectedColor,
-  networkStatus, PANEL_WIDTH, TRANSACTION_COLORS 
-}) => {
-  
 
 
-  // Control panel functions - now use props handlers
-  const handleSendRawTransaction = () => {
-    if (rawTransaction.trim() && onSendRawTransaction) {
-      onSendRawTransaction();
-    }
+
+// -----------------------------------------------------------
+// ColorSelect
+// -----------------------------------------------------------
+//
+// The tracking-colour dropdown: every option shows the colour
+// as a dot next to its name.
+//
+// Used by:
+//   - RawTransactionForm, TrackingSection (below)
+// -----------------------------------------------------------
+
+function ColorSelect({ value, onChange }) {
+  return (
+    <FormControl size="small" sx={{ flex: 1 }}>
+      <InputLabel>Spalva</InputLabel>
+      <Select value={value} label="Spalva" onChange={(event) => onChange(event.target.value)}>
+        {TRANSACTION_COLORS.map((color) => (
+          <MenuItem key={color} value={color}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Box
+                sx={{
+                  width: 16,
+                  height: 16,
+                  borderRadius: '50%',
+                  backgroundColor: color,
+                  border: '1px solid rgba(0,0,0,0.2)',
+                }}
+              />
+              {color.charAt(0).toUpperCase() + color.slice(1)}
+            </Box>
+          </MenuItem>
+        ))}
+      </Select>
+    </FormControl>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// ConnectionSection
+// -----------------------------------------------------------
+//
+// The attack switch: detaching the private node lets it mine
+// its own fork in secret. The switch reflects the BACKEND's
+// reported state, so a failed toggle simply stays where it
+// was — there is nothing to revert by hand.
+//
+// Used by:
+//   - ControlPanel (below)
+// -----------------------------------------------------------
+
+function ConnectionSection({ isConnectedToPublic, onConnectionToggle, busy, networkStatus }) {
+  return (
+    <Box sx={{ mb: 3 }}>
+      <FormControlLabel
+        control={
+          <Switch
+            checked={isConnectedToPublic}
+            onChange={(event) => onConnectionToggle(event.target.checked)}
+            disabled={busy}
+            color="primary"
+          />
+        }
+        label={
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            {isConnectedToPublic ? <MdWifi /> : <MdWifiOff />}
+            {isConnectedToPublic ? 'Prisijungę prie viešo tinklo' : 'Atjungę nuo viešo tinklo'}
+          </Box>
+        }
+      />
+
+      <Alert severity={isConnectedToPublic ? 'success' : 'warning'} sx={{ mt: 1, fontSize: '0.8rem' }}>
+        {isConnectedToPublic ? 'Mazgas operuoja viešai' : 'Mazgas operuoja privačiai'}
+      </Alert>
+
+      <Box sx={{ mt: 2 }}>
+        <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 1 }}>
+          Tinklų Būsena:
+        </Typography>
+
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+          {networkStatus.connection && (
+            <Typography variant="caption" color="text.secondary">
+              Peers: {networkStatus.connection.peers?.length || 0}
+            </Typography>
+          )}
+
+          {networkStatus.publicTip && (
+            <Typography variant="caption" color="text.secondary">
+              Viešo tinklo viršūnės aukštis: {networkStatus.publicTip.height}
+              {networkStatus.publicTip.available ? ' ✅' : ' ❌'}
+            </Typography>
+          )}
+
+          {networkStatus.privateTip && (
+            <Typography variant="caption" color="text.secondary">
+              Privataus mazgo viršūnės aukštis: {networkStatus.privateTip.height}
+              {networkStatus.privateTip.available ? ' ✅' : ' ❌'}
+            </Typography>
+          )}
+        </Box>
+      </Box>
+    </Box>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// RawTransactionForm
+// -----------------------------------------------------------
+//
+// Broadcasts a raw HEX transaction straight into the private
+// node — the field clears itself once the send is away.
+//
+// Used by:
+//   - ControlPanel (below)
+// -----------------------------------------------------------
+
+function RawTransactionForm({ onSend, busy }) {
+
+  const [raw, setRaw] = useState('');
+  const [color, setColor] = useState('red');
+
+
+  const send = () => {
+    onSend({ raw: raw.trim(), color });
+    setRaw('');
   };
-
-  const handleAddTransaction = () => {
-    if (newTxid.trim() && onAddTransaction) {
-      onAddTransaction();
-    }
-  };
-
-  const handleRemoveTransaction = (txidToRemove) => {
-    if (onRemoveTransaction) {
-      onRemoveTransaction(txidToRemove);
-    }
-  };
-
-  const handleConnectionToggle = (event) => {
-    if (onConnectionToggle) {
-      onConnectionToggle(event.target.checked);
-    }
-  };
-
-
 
 
   return (
-    <Paper 
-      elevation={3}
-      sx={{ 
-        position: 'fixed', 
-        top: 0, 
-        right: isPanelOpen ? 0 : '-100%', 
-        width: PANEL_WIDTH, 
-        height: '100vh',
-        p: 2, 
-        zIndex: 1000,
-        overflow: 'auto',
-        transition: 'right 0.3s ease-in-out',
-        backgroundColor: 'white',
-        '& @keyframes pulse': {
-          '0%': {
-            opacity: 1,
-            transform: 'scale(1)',
-          },
-          '50%': {
-            opacity: 0.7,
-            transform: 'scale(1.2)',
-          },
-          '100%': {
-            opacity: 1,
-            transform: 'scale(1)',
-          },
-        }
-      }}
-    >
+    <Box sx={{ mb: 3 }}>
+      <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 'bold' }}>
+        Siųsti Transakciją į Privatų Mazgą
+      </Typography>
+
+      <TextField
+        fullWidth
+        multiline
+        rows={3}
+        placeholder="Įveskite transakciją HEX formatu..."
+        value={raw}
+        onChange={(event) => setRaw(event.target.value)}
+        variant="outlined"
+        size="small"
+        sx={{ mb: 1 }}
+      />
+
+      <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
+        <ColorSelect value={color} onChange={setColor} />
+      </Box>
+
+      <Button
+        fullWidth
+        variant="contained"
+        onClick={send}
+        disabled={!raw.trim() || busy}
+        startIcon={<MdSend />}
+        sx={{ backgroundColor: '#1976d2' }}
+      >
+        Siųsti Transakciją
+      </Button>
+    </Box>
+  );
+}
 
 
 
-      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-        <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
-          Valdymo Skydas
-        </Typography>
-        <IconButton 
-          onClick={() => setIsPanelOpen(false)}
-          size="small"
-          sx={{ color: 'text.secondary' }}
-        >
-          <MdClose />
+
+
+
+
+// -----------------------------------------------------------
+// TrackedTransaction
+// -----------------------------------------------------------
+//
+// One tracked transaction: its colour dot, shortened txid and
+// how many blocks it was found in — the number that exposes a
+// double-spend when the chains disagree.
+//
+// Used by:
+//   - TrackingSection (below)
+// -----------------------------------------------------------
+
+function TrackedTransaction({ transaction, onRemove, busy }) {
+  return (
+    <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.5 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Box
+            sx={{
+              width: 12,
+              height: 12,
+              borderRadius: '50%',
+              backgroundColor: transaction.color,
+              border: '1px solid rgba(0,0,0,0.2)',
+            }}
+          />
+          <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 'bold' }}>
+            {transaction.txid.substring(0, 12)}...
+          </Typography>
+        </Box>
+
+        <IconButton size="small" onClick={() => onRemove(transaction.txid)} disabled={busy} sx={{ p: 0.5 }}>
+          <DeleteIcon sx={{ fontSize: 16 }} />
         </IconButton>
       </Box>
-      
+
+      <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
+        {transaction.blocks?.length > 0
+          ? `Rasta ${transaction.blocks.length} blokuose`
+          : 'Nerasta nei viename bloke'}
+      </Typography>
+    </Box>
+  );
+}
 
 
 
 
-      {/* Connection Status */}
-      <Box sx={{ mb: 3 }}>
-        <FormControlLabel
-          control={
-            <Switch
-              checked={isConnectedToPublic}
-              onChange={handleConnectionToggle}
-              color="primary"
-            />
-          }
-          label={
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              {isConnectedToPublic ? <MdWifi /> : <MdWifiOff />}
-              {isConnectedToPublic ? 'Prisijungę prie viešo tinklo' : 'Atjungę nuo viešo tinklo'}
-            </Box>
-          }
-        />
-        <Alert 
-          severity={isConnectedToPublic ? 'success' : 'warning'} 
-          sx={{ mt: 1, fontSize: '0.8rem' }}
-        >
-          {isConnectedToPublic 
-            ? 'Mazgas operuoja viešai' 
-            : 'Mazgas operuoja privačiai'
-          }
-        </Alert>
-        
-        {/* Network Status Details */}
-        {networkStatus && (
-          <Box sx={{ mt: 2 }}>
-            <Typography variant="body2" sx={{ fontWeight: 'bold', mb: 1 }}>
-              Tinklų Būsena:
-            </Typography>
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, fontSize: '0.75rem' }}>
-              {networkStatus.connection && (
-                <Typography variant="caption" color="text.secondary">
-                  Peers: {networkStatus.connection.peers?.length || 0}
-                </Typography>
-              )}
-              {networkStatus.publicTip && (
-                <Typography variant="caption" color="text.secondary">
-                  Viešo tinklo viršūnės aukštis: {networkStatus.publicTip.height} 
-                  {networkStatus.publicTip.available ? ' ✅' : ' ❌'}
-                </Typography>
-              )}
-              {networkStatus.privateTip && (
-                <Typography variant="caption" color="text.secondary">
-                  Privataus mazgo viršūnės aukštis: {networkStatus.privateTip.height}
-                  {networkStatus.privateTip.available ? ' ✅' : ' ❌'}
-                </Typography>
-              )}
-            </Box>
-          </Box>
-        )}
-      </Box>
 
 
 
+// -----------------------------------------------------------
+// TrackingSection
+// -----------------------------------------------------------
+//
+// Add a txid to the colour-tracked list, and the list itself.
+//
+// Used by:
+//   - ControlPanel (below)
+// -----------------------------------------------------------
 
-      <Divider sx={{ mb: 2 }} />
+function TrackingSection({ transactions, onAdd, onRemove, busy }) {
+
+  const [txid, setTxid] = useState('');
+  const [color, setColor] = useState('green');
 
 
+  const add = () => {
+    onAdd({ txid: txid.trim(), color });
+    setTxid('');
+  };
 
 
-      {/* Send Raw Transaction */}
-      <Box sx={{ mb: 3 }}>
-        <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 'bold' }}>
-          Siųsti Transakciją į Privatų Mazgą
-        </Typography>
+  return (
+    <Box>
+      <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 'bold' }}>
+        Transakcijų Sekimas
+      </Typography>
+
+      <Box sx={{ mb: 2 }}>
         <TextField
           fullWidth
-          multiline
-          rows={3}
-          placeholder="Įveskite transakciją HEX formatu..."
-          value={rawTransaction}
-          onChange={(e) => setRawTransaction(e.target.value)}
+          placeholder="Įveskite transakcijos ID..."
+          value={txid}
+          onChange={(event) => setTxid(event.target.value)}
           variant="outlined"
           size="small"
           sx={{ mb: 1 }}
         />
+
         <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
-          <FormControl size="small" sx={{ flex: 1 }}>
-            <InputLabel>Spalva</InputLabel>
-            <Select
-              value={rawTxColor}
-              onChange={(e) => setRawTxColor(e.target.value)}
-              label="Spalva"
-            >
-              {TRANSACTION_COLORS.map(color => (
-                <MenuItem key={color} value={color}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                    <Box 
-                      sx={{ 
-                        width: 16, 
-                        height: 16, 
-                        borderRadius: '50%', 
-                        backgroundColor: color,
-                        border: '1px solid rgba(0,0,0,0.2)'
-                      }} 
-                    />
-                    {color.charAt(0).toUpperCase() + color.slice(1)}
-                  </Box>
-                </MenuItem>
-              ))}
-            </Select>
-          </FormControl>
+          <ColorSelect value={color} onChange={setColor} />
+
+          <Button
+            variant="contained"
+            onClick={add}
+            disabled={!txid.trim() || busy}
+            startIcon={<MdAdd />}
+            size="small"
+          >
+            Pridėti
+          </Button>
         </Box>
-        <Button
-          fullWidth
-          variant="contained"
-          onClick={handleSendRawTransaction}
-          disabled={!rawTransaction.trim()}
-          startIcon={<MdSend />}
-          sx={{ backgroundColor: '#1976d2' }}
-        >
-          Siųsti Transakciją
-        </Button>
       </Box>
 
+      <Typography variant="body2" sx={{ mb: 1, color: 'text.secondary' }}>
+        Sekamos Transakcijos ({transactions.length})
+      </Typography>
+
+      {transactions.length === 0 ? (
+        <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
+          Nesekama nei viena transakcija
+        </Typography>
+      ) : (
+        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+          {transactions.map((transaction) => (
+            <TrackedTransaction
+              key={transaction.txid}
+              transaction={transaction}
+              onRemove={onRemove}
+              busy={busy}
+            />
+          ))}
+        </Box>
+      )}
+    </Box>
+  );
+}
 
 
+
+
+
+
+
+// -----------------------------------------------------------
+// ControlPanel (default export)
+// -----------------------------------------------------------
+//
+// Used by:
+//   - Page.jsx — the sliding panel on the right
+// -----------------------------------------------------------
+
+export default function ControlPanel({
+  isPanelOpen, onClose, panelWidth, isConnectedToPublic, onConnectionToggle,
+  onSendRawTransaction, transactions, onAddTransaction, onRemoveTransaction,
+  networkStatus, busy,
+}) {
+  return (
+    <Paper
+      elevation={3}
+      sx={{
+        position: 'fixed',
+        top: 0,
+        right: isPanelOpen ? 0 : '-100%',
+        width: panelWidth,
+        height: '100vh',
+        p: 2,
+        zIndex: 1000,
+        overflow: 'auto',
+        transition: 'right 0.3s ease-in-out',
+        backgroundColor: 'white',
+      }}
+    >
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+        <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
+          Valdymo Skydas
+        </Typography>
+        <IconButton onClick={onClose} size="small" sx={{ color: 'text.secondary' }}>
+          <MdClose />
+        </IconButton>
+      </Box>
+
+      <ConnectionSection
+        isConnectedToPublic={isConnectedToPublic}
+        onConnectionToggle={onConnectionToggle}
+        busy={busy}
+        networkStatus={networkStatus}
+      />
+
+      <Divider sx={{ mb: 2 }} />
+
+      <RawTransactionForm onSend={onSendRawTransaction} busy={busy} />
 
       <Divider sx={{ mb: 3 }} />
 
-
-
-      {/* Transaction Tracking */}
-      <Box>
-        <Typography variant="subtitle2" sx={{ mb: 2, fontWeight: 'bold' }}>
-          Transakcijų Sekimas
-        </Typography>
-        
-        {/* Add New Transaction */}
-        <Box sx={{ mb: 2 }}>
-          <TextField
-            fullWidth
-            placeholder="Įveskite transakcijos ID..."
-            value={newTxid}
-            onChange={(e) => setNewTxid(e.target.value)}
-            variant="outlined"
-            size="small"
-            sx={{ mb: 1 }}
-          />
-          <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
-            <FormControl size="small" sx={{ flex: 1 }}>
-              <InputLabel>Spalva</InputLabel>
-              <Select
-                value={selectedColor}
-                onChange={(e) => setSelectedColor(e.target.value)}
-                label="Color"
-              >
-                {TRANSACTION_COLORS.map(color => (
-                  <MenuItem key={color} value={color}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <Box 
-                        sx={{ 
-                          width: 16, 
-                          height: 16, 
-                          borderRadius: '50%', 
-                          backgroundColor: color,
-                          border: '1px solid rgba(0,0,0,0.2)'
-                        }} 
-                      />
-                      {color.charAt(0).toUpperCase() + color.slice(1)}
-                    </Box>
-                  </MenuItem>
-                ))}
-              </Select>
-            </FormControl>
-            <Button
-              variant="contained"
-              onClick={handleAddTransaction}
-              disabled={!newTxid.trim()}
-              startIcon={<MdAdd />}
-              size="small"
-            >
-              Add
-            </Button>
-          </Box>
-        </Box>
-
-
-
-        {/* Tracked Transactions List */}
-        <Box>
-          <Typography variant="body2" sx={{ mb: 1, color: 'text.secondary' }}>
-            Sekamos Transakcijos ({transactions.length})
-          </Typography>
-          {transactions.length === 0 ? (
-            <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>
-              Nesekama nei viena transakcija
-            </Typography>
-          ) : (
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-              {transactions.map((tx, index) => (
-                <Box key={tx.txid} sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 1 }}>
-                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 0.5 }}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                      <Box 
-                        sx={{ 
-                          width: 12, 
-                          height: 12, 
-                          borderRadius: '50%', 
-                          backgroundColor: tx.color,
-                          border: '1px solid rgba(0,0,0,0.2)'
-                        }} 
-                      />
-                      <Typography variant="caption" sx={{ fontFamily: 'monospace', fontWeight: 'bold' }}>
-                        {tx.txid.substring(0, 12)}...
-                      </Typography>
-                    </Box>
-                    <IconButton 
-                      size="small" 
-                      onClick={() => handleRemoveTransaction(tx.txid)}
-                      sx={{ p: 0.5 }}
-                    >
-                      <DeleteIcon sx={{ fontSize: 16 }} />
-                    </IconButton>
-                  </Box>
-                  <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.7rem' }}>
-                    {tx.blocks && tx.blocks.length > 0 
-                      ? `Found in ${tx.blocks.length} block(s)`
-                      : 'Nerasta nei viename bloke'
-                    }
-                  </Typography>
-                </Box>
-              ))}
-            </Box>
-          )}
-        </Box>
-
-
-
-
-      </Box>
+      <TrackingSection
+        transactions={transactions}
+        onAdd={onAddTransaction}
+        onRemove={onRemoveTransaction}
+        busy={busy}
+      />
     </Paper>
   );
-};
-
-export default ControlPanel;
+}

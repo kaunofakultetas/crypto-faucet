@@ -1,30 +1,68 @@
-import React from 'react';
-import { Dialog, DialogTitle, DialogContent, DialogActions, Button, IconButton, Box, Typography, Chip, Divider, Tooltip } from '@mui/material';
-import { Close as CloseIcon, ContentCopy as ContentCopyIcon } from '@mui/icons-material';
+// -----------------------------------------------------------
+//  [*] ReorgAttack — BlockDetailsModal
+//
+//  Everything about one block, opened by clicking it in the
+//  fork diagram: height, accumulated work, both SHA-256
+//  hashes, the SCRYPT proof-of-work hash, the coinbase
+//  message (which is what marks a block as the attacker's)
+//  and the tracked transactions it carries.
+//
+//  Split into (root component last):
+//
+//    DetailRow          — one caption + monospace value
+//    BlockDetailsModal  — the dialog (default export)
+// -----------------------------------------------------------
+
+import {
+  Dialog, DialogTitle, DialogContent, DialogActions,
+  Button, IconButton, Box, Typography, Chip, Divider,
+} from '@mui/material';
+import CloseIcon from '@mui/icons-material/Close';
 
 
-const BlockDetailsModal = ({ 
-  open, 
-  onClose, 
-  blockData, 
-  transactions = [],
-  isPublicTip,
-  isPrivateTip,
-  isAttacker 
-}) => {
-  const [copyHints, setCopyHints] = React.useState({});
 
-  const copyToClipboard = async (text, field) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopyHints(prev => ({ ...prev, [field]: true }));
-      setTimeout(() => {
-        setCopyHints(prev => ({ ...prev, [field]: false }));
-      }, 1000);
-    } catch (err) {
-      console.error('Failed to copy:', err);
-    }
-  };
+
+
+
+
+// -----------------------------------------------------------
+// DetailRow
+// -----------------------------------------------------------
+//
+// One labelled field — hashes wrap rather than overflow.
+//
+// Used by:
+//   - BlockDetailsModal (below)
+// -----------------------------------------------------------
+
+function DetailRow({ label, children }) {
+  return (
+    <Box>
+      <Typography variant="caption" color="text.secondary">
+        {label}
+      </Typography>
+      <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
+        {children}
+      </Typography>
+    </Box>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// BlockDetailsModal (default export)
+// -----------------------------------------------------------
+//
+// Used by:
+//   - ReactFlowBlockchain.jsx — opened on a block click
+// -----------------------------------------------------------
+
+export default function BlockDetailsModal({ open, onClose, blockData, transactions = [], isAttacker }) {
 
   if (!blockData) return null;
 
@@ -49,145 +87,60 @@ const BlockDetailsModal = ({
           <Typography variant="h6" sx={{ fontWeight: 'bold' }}>
             Bloko Informacija
           </Typography>
-          
+
           {isAttacker ? (
-            <Chip 
-              label="Attacker Block"
-              color="error"
-              size="small"
-            />
+            <Chip label="Atakuotojo blokas" color="error" size="small" />
           ) : (
-            <Chip 
-              label="Honest Block"
-              size="small"
-              sx={{
-                backgroundColor: 'lightblue',
-              }}
-            />
+            <Chip label="Sąžiningas blokas" size="small" sx={{ backgroundColor: 'lightblue' }} />
           )}
         </Box>
-        
-        <IconButton 
-          aria-label="close" 
-          onClick={onClose} 
-          sx={{ position: 'absolute', right: 8, top: 8 }}
-        >
+
+        <IconButton aria-label="uždaryti" onClick={onClose} sx={{ position: 'absolute', right: 8, top: 8 }}>
           <CloseIcon />
         </IconButton>
       </DialogTitle>
 
       <DialogContent dividers>
-        <Box sx={{ mb: 3 }}>
-          <Box sx={{ display: 'grid', gap: 1 }}>
+        <Box sx={{ display: 'grid', gap: 1, mb: 3 }}>
+          <DetailRow label="Bloko Aukštis">{block.height}</DetailRow>
 
-            {/* Height */}
-            <Box>
-              <Typography variant="caption" color="text.secondary">
-                Bloko Aukštis
-              </Typography>
-              <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                {block.height}
-              </Typography>
-            </Box>
+          <DetailRow label="Grandinės Sukauptinis Visas Darbas (Log2)">
+            {Number(block.chainWork)}
+          </DetailRow>
 
-            {/* ChainWork (Log2) */}
-            <Box>
-              <Typography variant="caption" color="text.secondary">
-                Grandinės Sukauptinis Visas Darbas (Log2)
-              </Typography>
-              <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                {Number(block.chainWork)}
-              </Typography>
-            </Box>
+          <DetailRow label="Bloko SHA256 Hash (Šio)">{block.hash}</DetailRow>
 
-            {/* SHA256 Hash */}
-            <Box>
-              <Typography variant="caption" color="text.secondary">
-                Bloko SHA256 Hash (Šio)
-              </Typography>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
-                  {block.hash}
-                </Typography>
-              </Box>
-            </Box>
+          {block.prevHash && block.prevHash !== 'genesis' && (
+            <DetailRow label="Bloko SHA256 Hash (Ankstesnio)">{block.prevHash}</DetailRow>
+          )}
 
-            {/* Previous SHA256 Hash */}
-            {block.prevHash && block.prevHash !== 'genesis' && (
-              <Box>
-                <Typography variant="caption" color="text.secondary">
-                  Bloko SHA256 Hash (Ankstesnio)
-                </Typography>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-                  <Typography variant="body2" sx={{ fontFamily: 'monospace', wordBreak: 'break-all' }}>
-                    {block.prevHash}
-                  </Typography>
-                </Box>
-              </Box>
-            )}
+          <DetailRow label="Bloko SCRYPT Hash (Šio)">{block.scryptHash}</DetailRow>
 
-            {/* SCRYPT Hash */}
-            <Box>
-              <Typography variant="caption" color="text.secondary">
-                Bloko SCRYPT Hash (Šio)
-              </Typography>
-              <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                {block.scryptHash}
-              </Typography>
-            </Box>
+          <DetailRow label="Coinbase Žinutė">{block.coinbase}</DetailRow>
 
-            {/* Coinbase Message */}
-            <Box>
-              <Typography variant="caption" color="text.secondary">
-                Coinbase Žinutė
-              </Typography>
-              <Typography variant="body2" sx={{ fontFamily: 'monospace' }}>
-                {block.coinbase}
-              </Typography>
-            </Box>
-
-            {/* Timestamp */}
-            <Box>
-              <Typography variant="caption" color="text.secondary">
-                Laikas
-              </Typography>
-              <Typography variant="body2">
-                {block.date} {block.time}
-              </Typography>
-            </Box>
-
-
-          </Box>
+          <DetailRow label="Laikas">{block.date} {block.time}</DetailRow>
         </Box>
 
-        {/* Transactions */}
-        {transactions && transactions.length > 0 && (
+        {transactions.length > 0 && (
           <>
             <Divider sx={{ my: 2 }} />
-            <Box>
-              <Typography variant="h6" sx={{ mb: 2, color: 'black' }}>
-                Sekamos Transakcijos
-              </Typography>
-              <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
-                {transactions.map((tx, idx) => (
-                  <Chip
-                    label={tx.txid}
-                    size="small"
-                    sx={{
-                      bgcolor: tx.color,
-                      color: 'white',
-                      '&:hover': {
-                        opacity: 0.8
-                      }
-                    }}
-                  />
-                ))}
-              </Box>
+
+            <Typography variant="h6" sx={{ mb: 2, color: 'black' }}>
+              Sekamos Transakcijos
+            </Typography>
+
+            <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+              {transactions.map((tx) => (
+                <Chip
+                  key={tx.txid}
+                  label={tx.txid}
+                  size="small"
+                  sx={{ bgcolor: tx.color, color: 'white', '&:hover': { opacity: 0.8 } }}
+                />
+              ))}
             </Box>
           </>
         )}
-
-
       </DialogContent>
 
       <DialogActions>
@@ -197,6 +150,4 @@ const BlockDetailsModal = ({
       </DialogActions>
     </Dialog>
   );
-};
-
-export default BlockDetailsModal;
+}
