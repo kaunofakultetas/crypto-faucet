@@ -344,10 +344,12 @@ class UTXOFaucet:
         ctx = NetworkContext()
         ctx.network_key = network_key
 
+
         # STEP 1: resolve the network from the config's faucet
         # section (payout + connection settings live there). The
         # network IS just its HRP here — embit has no chain registry
         # to satisfy, so KNF needs nothing special.
+        # ==========================================================
         config = self.network_configs.get(network_key)
         if not config:
             raise ValueError(f'Unknown UTXO network: {network_key}')
@@ -355,13 +357,17 @@ class UTXOFaucet:
 
         ctx.hrp = self._get_hrp(network_key)
 
+
         # STEP 2: the network's long-lived Electrum client — created
         # and connected at startup, shared by every request.
+        # ==========================================================
         ctx.electrum = self._electrum_clients[network_key]
+
 
         # STEP 3: the faucet identity, derived once in __init__ —
         # the same key and scripthash on every chain, only the
         # bech32 address differs by HRP.
+        # =======================================================
         if not self.faucet_key:
             raise ValueError('Faucet private key not configured')
 
@@ -448,13 +454,16 @@ class UTXOFaucet:
 
     def _create_and_broadcast_transaction(self, ctx: NetworkContext, to_address: str, amount_sat: int) -> str:
         # STEP 1: what can we spend?
+        # ==========================
         utxos = ctx.electrum.list_unspent(ctx.scripthash)
         if not utxos:
             raise ValueError("No UTXOs available")
 
+
         # STEP 2: greedy coin selection — the target includes the fee
         # for the inputs selected so far, so the change can never go
         # negative.
+        # ===========================================================
         selected_utxos = []
         total_input = 0
         for utxo in utxos:
@@ -469,10 +478,12 @@ class UTXOFaucet:
 
         change = total_input - amount_sat - fee
 
+
         # STEP 3: outputs. The recipient decodes against this
         # network's HRP (full checksum check) into a witness-program
         # scriptPubKey: version opcode (OP_0, or OP_1..OP_16 =
         # 0x50 + n) followed by the pushed program.
+        # ==========================================================
         witver, witprog = embit_bech32.decode(ctx.hrp, to_address)
         if witver is None or witprog is None:
             raise ValueError("Invalid recipient address")
@@ -486,10 +497,12 @@ class UTXOFaucet:
             outputs.append(TransactionOutput(change, ctx.script_pubkey))
         # sub-dust change is simply left to the miners as extra fee
 
+
         # STEP 4: build and sign. Electrum reports tx_hash in display
         # order — the wire format wants it reversed. Per input the
         # witness stack is <DER signature + SIGHASH_ALL byte>
         # <compressed pubkey>; embit does the BIP-143 sighash math.
+        # ===========================================================
         tx = Transaction(
             version=2,
             vin=[TransactionInput(bytes.fromhex(u['tx_hash'])[::-1], u['tx_pos']) for u in selected_utxos],
@@ -508,7 +521,9 @@ class UTXOFaucet:
             der_sig = ctx.key.sign(sighash).serialize() + bytes([SIGHASH.ALL])
             tx.vin[i].witness = Witness([der_sig, pub.serialize()])
 
+
         # STEP 5: broadcast over the same Electrum connection.
+        # ====================================================
         return ctx.electrum.request("blockchain.transaction.broadcast", [tx.serialize().hex()])
 
 
@@ -630,8 +645,10 @@ class UTXOFaucet:
         try:
             ctx = self._setup_wallet_for_network(network_key)
 
+
             # STEP 1: input validation — address present, right HRP for
             # this network, and not the faucet paying itself.
+            # =========================================================
             if not to_address:
                 return {"error": "Trūksta reikalingų parametrų"}, 400
 
@@ -643,8 +660,10 @@ class UTXOFaucet:
             if to_address.lower() == ctx.address.lower():
                 return {"error": "Negalima siųsti į čiaupo adresą"}, 400
 
+
             # STEP 2: the cooldown — per (network, address), so
             # claiming on one chain doesn't lock the others.
+            # =================================================
             now = int(time.time())
             cooldown_key = (network_key, to_address.lower())
             last_request_time = self.last_request.get(cooldown_key)
@@ -658,14 +677,17 @@ class UTXOFaucet:
             if not ctx.chunk_size_btc or ctx.chunk_size_btc <= 0:
                 return {"error": "chunk_size must be > 0 for this network"}, 500
 
+
             # STEP 3: does the faucet have the coins? Only confirmed
             # balance counts — unconfirmed change can't be re-spent on
             # every chain config. The cached balance is fine here: the
             # UTXO selection inside the payout checks for real.
+            # ========================================================
             balance_info = self._faucet_balance(ctx)
             current_balance = balance_info["confirmed"]  # only spend confirmed coins
             if current_balance < ctx.chunk_size_btc:
                 return {"error": "Čiaupas nebeturi kriptovaliutos. Praneškite dėstytojui."}, 503
+
 
             # STEP 4: build, sign and broadcast — serialized per
             # network, or two simultaneous claims would select the
@@ -673,6 +695,7 @@ class UTXOFaucet:
             # starts only after a successful broadcast, and the
             # cached balance is dropped so the page shows the payout
             # on its next poll.
+            # ======================================================
             amount_sat = int(float(ctx.chunk_size_btc) * 1e8)
             with self._send_locks.setdefault(network_key, threading.Lock()):
                 tx_id = self._create_and_broadcast_transaction(ctx, to_address, amount_sat)

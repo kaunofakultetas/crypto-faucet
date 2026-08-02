@@ -413,8 +413,10 @@ class ERC20Faucet:
         config = self.TOKEN_CONFIGS[token_symbol]
         contract_address = config['deployments'][network]
 
+
         # STEP 1: input validation — all parameters present and the
         # address parses.
+        # =========================================================
         if not all([to_address, signature, nonce]):
             return {"error": "Trūksta reikalingų parametrų"}, 400
 
@@ -423,14 +425,17 @@ class ERC20Faucet:
         except Exception:
             return {"error": "Neteisingas adresas"}, 400
 
+
         # STEP 2: signature check — the exact message the frontend
         # asks MetaMask to sign, identical to the native ETH flow.
+        # ========================================================
         message = f"Pasirašykite žinutę kad patvirtintumėte jog naudojate šią piniginę. Nonce: {nonce}"
         if not self.evm_faucet.verify_signature(network, to_address, message, signature):
             return {"error": "Kriptografinis parašas kažkodėl neatitinka"}, 403
 
         contract = get_erc20_contract(w3, contract_address)
         amount_to_send = int(float(config['chunk_size']) * (10 ** config['decimals']))
+
 
         # STEP 3: eligibility — the wallet must hold ENOUGH native
         # crypto on this chain (half the native faucet's chunk;
@@ -439,6 +444,7 @@ class ERC20Faucet:
         # instead), must not already hold a full chunk, the
         # (network, token, address) cooldown has to be over, and
         # the faucet must still hold the tokens.
+        # ========================================================
         try:
             native_balance = w3.eth.get_balance(to_address)
             user_balance = contract.functions.balanceOf(to_address).call()
@@ -480,6 +486,7 @@ class ERC20Faucet:
             self.last_request.pop(cooldown_key, None)
             return {"error": "Čiaupas nebeturi žetonų. Praneškite dėstytojui."}, 503
 
+
         # STEP 4: broadcast — under the network's send lock, SHARED
         # with the native faucet, so token and native payouts from
         # the same wallet never collide on a nonce. The sign-and-send
@@ -489,6 +496,7 @@ class ERC20Faucet:
         # than the classic 100k) with a safe fallback; gasPrice is
         # explicit to force a LEGACY transaction — several testnets
         # have spotty EIP-1559 support.
+        # ===========================================================
         transfer_fn = contract.functions.transfer(to_address, amount_to_send)
 
         try:

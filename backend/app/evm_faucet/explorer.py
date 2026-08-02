@@ -279,10 +279,12 @@ class EtherscanExplorer:
         if not self.is_supported_network(network):
             return {"error": f"Unsupported network: {network}"}, 400
 
+
         # STEP 1: refresh the local cache from Etherscan, but at most
         # once per ETHERSCAN_REFRESH_INTERVAL per address — inside the
         # window the data comes straight from SQLite, which keeps the
         # graph's sweeps well under Etherscan's rate limit.
+        # ============================================================
         fetch_key = (network, address.lower())
         if int(time.time()) - self.last_etherscan_fetch.get(fetch_key, 0) >= self.ETHERSCAN_REFRESH_INTERVAL:
             try:
@@ -292,11 +294,13 @@ class EtherscanExplorer:
                 logging.exception("Error fetching/storing transactions")
                 return {"error": "Failed to refresh transactions"}, 500
 
+
         # STEP 2: aggregate. GetLatestUpdate: when each address was
         # last seen on either side of a transaction. GetFlows: the
         # aggregated transfers, already packed as JSON objects so the
         # final SELECT can return the whole result as a single JSON
         # array.
+        # ===========================================================
         with get_db_connection() as conn:
             # Timezone-aware on purpose: naive utcnow().timestamp()
             # would shift by the container's TZ offset if it ever ran

@@ -365,8 +365,10 @@ class EVMFaucet:
         amount_to_send = self.NETWORK_CONFIGS[network]['faucet']['chunk_size']
         amount_to_send_wei = Web3.to_wei(float(amount_to_send), 'ether')
 
+
         # STEP 1: input validation — all parameters present and the
         # address parses
+        # =========================================================
         if not all([to_address, signature, nonce]):
             return {"error": "Trūksta reikalingų parametrų"}, 400
 
@@ -378,16 +380,20 @@ class EVMFaucet:
         if not w3.is_address(to_address):
             return {"error": "Neteisingas adresas"}, 400
 
+
         # STEP 2: signature check. This is the exact message the
         # frontend asks MetaMask to sign — any mismatch (different
         # nonce, different wording) fails recovery.
+        # ========================================================
         message = f"Pasirašykite žinutę kad patvirtintumėte jog naudojate šią piniginę. Nonce: {nonce}"
         if not self.verify_signature(network, to_address, message, signature):
             return {"error": "Kriptografinis parašas kažkodėl neatitinka"}, 403
 
+
         # STEP 3: eligibility — no top-up if the wallet already holds
         # a full chunk, the per-address cooldown has to be over, and
         # the faucet itself must still have coins.
+        # ===========================================================
         try:
             user_balance = w3.eth.get_balance(to_address)
         except Exception:
@@ -408,6 +414,7 @@ class EVMFaucet:
         if faucet_balance < amount_to_send_wei:
             return {"error": "Čiaupas nebeturi kriptovaliutos. Praneškite dėstytojui."}, 503
 
+
         # STEP 4: broadcast — under the network's send lock, so two
         # concurrent claims can't get filled with the same pending
         # nonce. The sign-and-send middleware (attached in __init__)
@@ -416,6 +423,7 @@ class EVMFaucet:
         # — several of the configured testnets have spotty EIP-1559
         # support. The generous gas limit costs nothing, unused gas
         # is refunded.
+        # ===========================================================
         try:
             with self.send_lock_for(network):
                 tx_hash = w3.eth.send_transaction({
