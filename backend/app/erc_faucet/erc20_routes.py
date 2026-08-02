@@ -80,7 +80,7 @@ def get_tokens():
 # One token across every chain it lives on: the faucet's
 # balance per chain plus the network metadata MetaMask needs
 # for wallet_addEthereumChain and wallet_watchAsset. Balances
-# are cached ~30 s server-side. An optional ?address= adds
+# are cached ~10 s server-side. An optional ?address= adds
 # that wallet's native balance per chain (wallet_native_wei) —
 # the page gates its claim buttons on it.
 #

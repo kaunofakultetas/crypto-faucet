@@ -59,7 +59,7 @@ except ImportError:
 # How long a polled faucet balance is served from cache. The page
 # polls every few seconds per open browser tab; payouts drop the
 # cached entry, so a claim shows up immediately regardless.
-BALANCE_CACHE_TTL = 30
+BALANCE_CACHE_TTL = 10
 
 
 

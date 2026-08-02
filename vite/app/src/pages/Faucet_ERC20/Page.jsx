@@ -74,7 +74,7 @@ import { ItemDot } from '../../components/FaucetPicker';
 
 
 // How often the token payload (with the faucet's per-chain
-// balances) repolls — the backend caches those ~30 s anyway
+// balances) repolls — the backend caches those ~10 s anyway
 const TOKEN_REFRESH_MS = 15000;
 
 

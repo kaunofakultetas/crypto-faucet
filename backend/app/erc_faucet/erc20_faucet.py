@@ -102,7 +102,7 @@ class ERC20Faucet:
         # asks for the faucet's balance on EVERY chain the token
         # lives on, and the page polls — without this cache that is
         # one RPC call per chain per poll.
-        self.BALANCE_CACHE_TTL = 30
+        self.BALANCE_CACHE_TTL = 10
         self._balance_cache = {}
 
         self._warm_up_tokens()
