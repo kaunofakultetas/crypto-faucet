@@ -12,10 +12,11 @@
 #  composed WITH the EVMFaucet instance and borrows its Web3
 #  connections (which carry the sign-and-send middleware —
 #  signing happens there, this class never touches the key),
-#  its signature verification and — critically — its send
-#  lock. Native ETH payouts and token payouts spend from the
-#  same wallet, so they must share one nonce discipline or
-#  they'd race each other onto the same nonce.
+#  its signature verification and — critically — its
+#  per-network send locks. Native ETH payouts and token
+#  payouts spend from the same wallet, so on any one chain
+#  they must share one nonce discipline or they'd race each
+#  other onto the same nonce.
 #
 #  A payout mirrors the native flow: the student signs the
 #  same Lithuanian nonce message in MetaMask, the faucet
@@ -52,7 +53,7 @@ from .token_contracts import get_erc20_contract
 #   catalog — deployments_of, is_supported,
 #             get_token_catalog, get_token
 #   payout  — request_tokens, _min_native_wei
-#   setup   — __init__, _token_balance
+#   setup   — __init__, _warm_up_tokens, _token_balance
 #
 # Used by:
 #   - erc20_routes.py — one shared instance for all handlers
@@ -64,16 +65,19 @@ class ERC20Faucet:
 
 
 
+
     ############################################################
     # __init__
     ############################################################
     #
     # Composition, not duplication: evm_faucet is the shared
     # EVMFaucet instance whose Web3 connections (with the
-    # signing middleware), signature check and send lock this
-    # class borrows. token_configs is main.py's
+    # signing middleware), signature check and per-network
+    # send locks this class borrows. token_configs is main.py's
     # ERC20_TOKEN_CONFIGS (token-first, with a deployments map
-    # per token).
+    # per token). Ends with a warmup that pre-fetches every
+    # deployment's balance — a wrong contract address is
+    # visible in the console at startup.
     #
     # Used by:
     #   - erc20_routes.py — at import time, the single instance
@@ -101,6 +105,51 @@ class ERC20Faucet:
         self.BALANCE_CACHE_TTL = 30
         self._balance_cache = {}
 
+        self._warm_up_tokens()
+
+
+
+
+
+
+    ############################################################
+    # _warm_up_tokens
+    ############################################################
+    #
+    # The startup warmup, one thread per deployment: fetch the
+    # faucet's balance of every token on every chain it lives
+    # on, which also primes the balance cache — the first
+    # token page load answers instantly. A deployment that
+    # fails (typically a wrong contract address) is visible in
+    # the console at startup instead of as an empty row on the
+    # page, and does NOT kill the app.
+    #
+    # Used by:
+    #   - erc20_routes.py — via __init__, at import time
+    ############################################################
+
+    def _warm_up_tokens(self):
+
+        def warm(symbol, network, contract_address, decimals):
+            balance = self._token_balance(symbol, network, contract_address, decimals)
+            if balance is None:
+                print(f"[ERC20] {symbol} on {network} FAILED to warm up — check the contract address")
+            else:
+                print(f"[ERC20] {symbol} on {network} ready — faucet holds {balance}")
+
+        threads = [
+            threading.Thread(
+                target=warm,
+                args=(symbol, network, contract_address, config['decimals']),
+                name=f'erc20-warmup-{symbol}-{network}',
+            )
+            for symbol, config in self.TOKEN_CONFIGS.items()
+            for network, contract_address in self.deployments_of(symbol)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
 
 
 
@@ -137,7 +186,6 @@ class ERC20Faucet:
 
 
 
-
     ############################################################
     # is_supported
     ############################################################
@@ -151,7 +199,6 @@ class ERC20Faucet:
 
     def is_supported(self, network, token_symbol):
         return any(net == network for net, _ in self.deployments_of(token_symbol))
-
 
 
 
@@ -194,7 +241,6 @@ class ERC20Faucet:
 
 
 
-
     ############################################################
     # get_token_catalog
     ############################################################
@@ -227,7 +273,6 @@ class ERC20Faucet:
             'default_token': next(iter(tokens), None),
             'tokens': tokens,
         }, 200
-
 
 
 
@@ -311,7 +356,6 @@ class ERC20Faucet:
 
 
 
-
     ############################################################
     # _min_native_wei
     ############################################################
@@ -333,7 +377,6 @@ class ERC20Faucet:
         w3 = self.evm_faucet.w3_instances[network]
         chunk = float(self.evm_faucet.NETWORK_CONFIGS[network].get('faucet', {}).get('chunk_size', 0))
         return int(w3.to_wei(chunk / 2, 'ether'))
-
 
 
 
@@ -437,15 +480,15 @@ class ERC20Faucet:
             self.last_request.pop(cooldown_key, None)
             return {"error": "Čiaupas nebeturi žetonų. Praneškite dėstytojui."}, 503
 
-        # STEP 4: broadcast — under the SHARED send lock, so token
-        # and native payouts from the same wallet never collide on a
-        # nonce. The sign-and-send middleware on the borrowed Web3
-        # instance fills the pending nonce and chain id, signs and
-        # broadcasts. Gas is estimated per chain (zkSync-style chains
-        # want very different numbers than the classic 100k) with a
-        # safe fallback; gasPrice is explicit to force a LEGACY
-        # transaction — several testnets have spotty EIP-1559
-        # support.
+        # STEP 4: broadcast — under the network's send lock, SHARED
+        # with the native faucet, so token and native payouts from
+        # the same wallet never collide on a nonce. The sign-and-send
+        # middleware on the borrowed Web3 instance fills the pending
+        # nonce and chain id, signs and broadcasts. Gas is estimated
+        # per chain (zkSync-style chains want very different numbers
+        # than the classic 100k) with a safe fallback; gasPrice is
+        # explicit to force a LEGACY transaction — several testnets
+        # have spotty EIP-1559 support.
         transfer_fn = contract.functions.transfer(to_address, amount_to_send)
 
         try:
@@ -454,7 +497,7 @@ class ERC20Faucet:
             gas_limit = 100000
 
         try:
-            with self.evm_faucet.send_lock:
+            with self.evm_faucet.send_lock_for(network):
                 tx_hash = transfer_fn.transact({
                     'from': self.evm_faucet.FAUCET_ADDRESS,
                     'gas': gas_limit,

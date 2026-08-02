@@ -27,15 +27,20 @@ import os
 from flask import Blueprint, request, jsonify
 
 from .evm_faucet import EVMFaucet
+from .explorer import EtherscanExplorer
 from main import EVM_NETWORK_CONFIGS
 
 
 bp_evm_faucet = Blueprint('evm_faucet', __name__)
 
 
-# The single faucet instance, shared by every request handler below.
+# Two single instances, shared by every request handler below:
+# the faucet (payouts, balances) and the Etherscan explorer
+# behind the transaction graph — separate features, separate
+# classes.
 FAUCET_DEFAULT_NETWORK = os.getenv('FAUCET_DEFAULT_NETWORK', 'sepolia')
 evm_faucet = EVMFaucet(EVM_NETWORK_CONFIGS, FAUCET_DEFAULT_NETWORK)
+evm_explorer = EtherscanExplorer(EVM_NETWORK_CONFIGS)
 
 
 
@@ -138,8 +143,9 @@ def get_networks():
 # GET /api/evm/<network>/get-stored-transactions
 #
 # Aggregated transfer "flows" around ?address= for the graph
-# view — refreshes the local cache from Etherscan on every
-# call. ?hours narrows the window (default 24).
+# view — refreshes the local cache from Etherscan (via the
+# explorer, not the faucet). ?hours narrows the window
+# (default 24).
 #
 # Used by:
 #   - Graph/CryptoFlowGraph.jsx — useTransactionGraph's
@@ -150,7 +156,7 @@ def get_networks():
 def get_stored_transactions(network):
     address = request.args.get('address')
     hours = request.args.get('hours', default=24, type=int)
-    data, status = evm_faucet.get_stored_transactions(network, address, hours)
+    data, status = evm_explorer.get_stored_transactions(network, address, hours)
     return jsonify(data), status
 
 
@@ -178,5 +184,5 @@ def get_stored_transactions(network):
 def set_address_name():
     address = request.args.get('address')
     name = request.args.get('name')
-    data, status = evm_faucet.set_address_name(address, name)
+    data, status = evm_explorer.set_address_name(address, name)
     return jsonify(data), status

@@ -18,26 +18,31 @@
 #       chain id, signs with the faucet key (shared with the
 #       UTXO faucet) and broadcasts.
 #
-#  On top of the faucet itself, this class also feeds the
-#  transaction explorer: it pulls an address' history from
-#  Etherscan, caches it in the local SQLite database and
-#  serves aggregated "flows" (grouped from->to transfers)
-#  for the graph view on the frontend.
+#  Built for classroom load: the polled faucet balance is
+#  cached for a few seconds, payouts are serialized per
+#  network (nonces are per chain — different chains never
+#  contend), and every chain is warmed up at startup with a
+#  console report — including a chain-id check that catches a
+#  wrong RPC URL before the frontend and the faucet drift
+#  onto different chains.
+#
+#  The transaction-graph scraper that used to live here is
+#  explorer.py's EtherscanExplorer — a separate feature, a
+#  separate class.
 #
 #  Used by:
 #    - evm_routes.py — the Flask endpoints under /api/evm/*
+#    - erc20_faucet.py — borrows the connections, signature
+#      check and per-network send locks
 ############################################################
 
 
 import os
 import re
 import time
-import json
 import logging
 import threading
-from datetime import datetime, timedelta, timezone
 
-import requests
 from web3 import Web3
 from eth_account import Account
 from eth_account.messages import encode_defunct
@@ -50,7 +55,11 @@ except ImportError:
     from web3.middleware import SignAndSendRawMiddlewareBuilder
     construct_sign_and_send_raw_middleware = SignAndSendRawMiddlewareBuilder.build
 
-from ..database.db import get_db_connection
+
+# How long a polled faucet balance is served from cache. The page
+# polls every few seconds per open browser tab; payouts drop the
+# cached entry, so a claim shows up immediately regardless.
+BALANCE_CACHE_TTL = 30
 
 
 
@@ -64,21 +73,25 @@ from ..database.db import get_db_connection
 ############################################################
 #
 # One instance serves every configured network. Methods in
-# three groups:
+# groups:
 #
-#   setup    — __init__
-#   faucet   — is_supported_network, verify_signature,
-#              request_eth, get_faucet_balance, get_networks
-#   explorer — fetch_all_transactions_from_etherscan,
-#              store_transactions,
-#              fetch_and_store_transactions,
-#              get_stored_transactions, set_address_name
+#   setup   — __init__, _warm_up_networks
+#   locks   — send_lock_for
+#   queries — _faucet_balance
+#   faucet  — is_supported_network, verify_signature,
+#             request_eth, get_faucet_balance, get_networks
+#
+# The transaction-graph scraper that used to live here is
+# explorer.py's EtherscanExplorer now.
 #
 # Used by:
 #   - evm_routes.py — one shared instance for all handlers
+#   - erc20_faucet.py — the ERC-20 faucet is composed with
+#     this instance
 ############################################################
 
 class EVMFaucet:
+
 
 
 
@@ -104,7 +117,6 @@ class EVMFaucet:
     def __init__(self, network_configs, default_network=None):
         self.APP_DEBUG = os.getenv('APP_DEBUG', 'false').lower() == "true"
         self.FAUCET_DEFAULT_NETWORK = default_network or os.getenv('FAUCET_DEFAULT_NETWORK', 'sepolia')
-        self.ETHERSCAN_API_KEY = os.getenv('ETHERSCAN_API_KEY', '')
 
         self.NETWORK_CONFIGS = network_configs
 
@@ -155,18 +167,74 @@ class EVMFaucet:
         self.COOLDOWN_PERIOD = 60
         self.last_request = {}
 
-        # Payouts are serialized: the pending-nonce read and the
-        # broadcast must not interleave between two requests, or both
-        # would sign with the same nonce and one broadcast would fail.
-        self.send_lock = threading.Lock()
+        # network -> the lock serializing that chain's payouts, native
+        # AND ERC-20 (same wallet, same per-chain nonce sequence — see
+        # send_lock_for). Per network on purpose: a Sepolia payout has
+        # no business blocking a Hoodi one.
+        self._send_locks = {}
 
-        # (network, address) -> unix time of the last Etherscan
-        # refresh. get_stored_transactions serves straight from SQLite
-        # while the cache is younger than this window — the graph
-        # frontend sweeps every address every few seconds, which would
-        # otherwise hammer Etherscan into its rate limit.
-        self.ETHERSCAN_REFRESH_INTERVAL = 60
-        self.last_etherscan_fetch = {}
+        # network -> (unix time, balance in whole ETH) for the polled
+        # faucet balance — see _faucet_balance. Pre-filled by the
+        # warmup below.
+        self._balance_cache = {}
+
+        self._warm_up_networks()
+
+
+
+
+
+
+    ############################################################
+    # _warm_up_networks
+    ############################################################
+    #
+    # The startup warmup, one thread per network so the
+    # slowest RPC bounds the wall time: ask every chain for
+    # its chain id and compare it against the config — a
+    # mismatch means the frontend (which trusts the config)
+    # and the faucet (which pays over the RPC) would operate
+    # on DIFFERENT chains, so it screams instead of counting
+    # as ready. Then the faucet balance is pre-fetched into
+    # the cache, so the first page load answers instantly.
+    # Success and failure both go to the console; a failed
+    # network does NOT kill the app — the other networks and
+    # faucets keep serving.
+    #
+    # Used by:
+    #   - __init__ (above)
+    ############################################################
+
+    def _warm_up_networks(self):
+
+        def warm(network, w3):
+            try:
+                actual_chain_id = int(w3.eth.chain_id)
+                expected_chain_id = self.NETWORK_CONFIGS[network].get('chain_id')
+                if actual_chain_id != expected_chain_id:
+                    logging.error(
+                        f"[EVM] {network} CHAIN ID MISMATCH — config says {expected_chain_id}, "
+                        f"the RPC answers {actual_chain_id}; check faucet.rpc_url"
+                    )
+                    return
+
+                if self.FAUCET_ADDRESS:
+                    balance_eth = float(w3.from_wei(w3.eth.get_balance(self.FAUCET_ADDRESS), 'ether'))
+                    self._balance_cache[network] = (int(time.time()), balance_eth)
+                    print(f"[EVM] {network} ready — chain id {actual_chain_id}, faucet balance {balance_eth:.4f}")
+                else:
+                    print(f"[EVM] {network} connected (chain id {actual_chain_id}) — but NO FAUCET KEY is configured, payouts will fail")
+            except Exception:
+                logging.exception(f"[EVM] {network} FAILED to warm up")
+
+        threads = [
+            threading.Thread(target=warm, args=(network, w3), name=f'evm-warmup-{network}')
+            for network, w3 in self.w3_instances.items()
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
 
 
 
@@ -179,8 +247,6 @@ class EVMFaucet:
     #
     # Used by:
     #   - request_eth / get_faucet_balance (below)
-    #   - fetch_all_transactions_from_etherscan /
-    #     get_stored_transactions (below)
     ############################################################
 
     def is_supported_network(self, network):
@@ -212,6 +278,60 @@ class EVMFaucet:
             return signer.lower() == (address or '').lower()
         except Exception:
             return False
+
+
+
+
+
+
+    ############################################################
+    # send_lock_for
+    ############################################################
+    #
+    # The lock serializing one network's payouts. Shared BY
+    # DESIGN with the ERC-20 faucet: native and token payouts
+    # spend from the same wallet, so on any one chain they
+    # must take turns reading the pending nonce. setdefault is
+    # atomic under the GIL, so no extra locking here.
+    #
+    # Used by:
+    #   - request_eth (below)
+    #   - erc20_faucet.py — request_tokens
+    ############################################################
+
+    def send_lock_for(self, network):
+        return self._send_locks.setdefault(network, threading.Lock())
+
+
+
+
+
+
+    ############################################################
+    # _faucet_balance
+    ############################################################
+    #
+    # The faucet's balance on one chain in whole ETH, cached
+    # for BALANCE_CACHE_TTL seconds — the frontend polls it
+    # every few seconds per open browser tab, and a classroom
+    # of open tabs would otherwise burn an Infura call per
+    # poll. request_eth drops the entry after a payout, so the
+    # next poll shows the new number immediately.
+    #
+    # Used by:
+    #   - get_faucet_balance (below)
+    #   - _warm_up_networks (above) — pre-fills it
+    ############################################################
+
+    def _faucet_balance(self, network):
+        cached = self._balance_cache.get(network)
+        if cached and int(time.time()) - cached[0] < BALANCE_CACHE_TTL:
+            return cached[1]
+
+        w3 = self.w3_instances[network]
+        balance_eth = float(w3.from_wei(w3.eth.get_balance(self.FAUCET_ADDRESS), 'ether'))
+        self._balance_cache[network] = (int(time.time()), balance_eth)
+        return balance_eth
 
 
 
@@ -288,16 +408,16 @@ class EVMFaucet:
         if faucet_balance < amount_to_send_wei:
             return {"error": "Čiaupas nebeturi kriptovaliutos. Praneškite dėstytojui."}, 503
 
-        # STEP 4: broadcast — under the send lock, so two concurrent
-        # claims can't get filled with the same pending nonce. The
-        # sign-and-send middleware (attached in __init__) fills the
-        # nonce and chain id, signs and broadcasts. gasPrice is
-        # passed explicitly to force a LEGACY transaction — several
-        # of the configured testnets have spotty EIP-1559 support.
-        # The generous gas limit costs nothing, unused gas is
-        # refunded.
+        # STEP 4: broadcast — under the network's send lock, so two
+        # concurrent claims can't get filled with the same pending
+        # nonce. The sign-and-send middleware (attached in __init__)
+        # fills the nonce and chain id, signs and broadcasts.
+        # gasPrice is passed explicitly to force a LEGACY transaction
+        # — several of the configured testnets have spotty EIP-1559
+        # support. The generous gas limit costs nothing, unused gas
+        # is refunded.
         try:
-            with self.send_lock:
+            with self.send_lock_for(network):
                 tx_hash = w3.eth.send_transaction({
                     'from': self.FAUCET_ADDRESS,
                     'to': to_address,
@@ -309,8 +429,11 @@ class EVMFaucet:
             logging.exception(f"Failed to broadcast {network} payout")
             return {"error": "Nepavyko išsiųsti transakcijos. Bandykite dar kartą."}, 500
 
-        # The cooldown starts only after a successful broadcast.
+        # The cooldown starts only after a successful broadcast; the
+        # cached balance is dropped so the page shows the payout on
+        # its next poll.
         self.last_request[addr_key] = int(time.time())
+        self._balance_cache.pop(network, None)
 
         return {
             "message": "ETH sent successfully",
@@ -329,8 +452,10 @@ class EVMFaucet:
     #
     # The faucet wallet's balance, address and chunk size — the
     # UI shows it, and it's the operator's way to notice the
-    # faucet needs a top-up. Logs verbosely on purpose: a dead
-    # RPC endpoint is the most common failure here.
+    # faucet needs a top-up. Served from the balance cache. The
+    # old per-poll is_connected() probe is gone — it cost an
+    # extra RPC call on every poll, and a dead endpoint fails
+    # the balance call itself anyway.
     #
     # Used by:
     #   - evm_routes.py — GET /api/evm/<network>/faucet-balance
@@ -344,23 +469,10 @@ class EVMFaucet:
             logging.error("FAUCET_ADDRESS is None or empty")
             return {"error": "Čiaupo adresas nesukonfigūruotas"}, 500
 
-        w3 = self.w3_instances[network]
-
-        logging.info(f"Getting balance for network={network}, address={self.FAUCET_ADDRESS}")
-
         try:
-            if not w3.is_connected():
-                logging.error(f"Web3 is not connected for network {network}")
-                return {"error": "Nepavyko prisijungti prie tinklo"}, 500
-
-            balance = w3.eth.get_balance(self.FAUCET_ADDRESS)
-            balance_eth = float(w3.from_wei(balance, 'ether'))
-
-            logging.info(f"Balance retrieved successfully: {balance_eth} ETH (raw: {balance} wei)")
-
-        except Exception as e:
-            # Log the real error for debugging; the user gets a generic one.
-            logging.error(f"Failed to get faucet balance for network {network}: {type(e).__name__}: {e}")
+            balance_eth = self._faucet_balance(network)
+        except Exception:
+            logging.exception(f"Failed to get faucet balance for network {network}")
             return {"error": "Nepavyko gauti čiaupo balanso"}, 500
 
         return {
@@ -411,310 +523,3 @@ class EVMFaucet:
             "networks": networks,
             "default_network": self.FAUCET_DEFAULT_NETWORK
         }
-
-
-
-
-
-
-    ############################################################
-    # fetch_all_transactions_from_etherscan
-    ############################################################
-    #
-    # Pulls the full transaction history of an address from
-    # the Etherscan API, 1000 records per page, until a short
-    # page signals the end. An unknown API answer dumps the
-    # raw response into the container log (rate limits and bad
-    # API keys are the usual suspects) and raises.
-    #
-    # Used by:
-    #   - fetch_and_store_transactions (below)
-    ############################################################
-
-    def fetch_all_transactions_from_etherscan(self, address, network):
-        if not self.is_supported_network(network):
-            raise ValueError(f"Unsupported network: {network}")
-
-        url = self.NETWORK_CONFIGS[network].get('explorer', {}).get('etherscan_api_url')
-        if not url:
-            raise ValueError(f"No explorer API configured for network: {network}")
-        all_transactions = []
-        page = 1
-
-        while True:
-            params = {
-                'module': 'account',
-                'action': 'txlist',
-                'address': address,
-                'startblock': 0,
-                'endblock': 99999999,
-                'page': page,
-                'offset': 1000,
-                'sort': 'asc',
-                'chainid': self.NETWORK_CONFIGS[network]['chain_id'],
-                'apikey': self.ETHERSCAN_API_KEY
-            }
-            response = requests.get(url, params=params)
-            response.raise_for_status()
-            result = response.json()
-
-            if result.get('status') == '1':
-                transactions = result['result']
-                all_transactions.extend(transactions)
-
-                # A page shorter than the limit means we've seen everything.
-                if len(transactions) < 1000:
-                    break
-
-                page += 1
-
-            elif result.get('message') == 'No transactions found':
-                break
-
-            else:
-                print("+----------------------------------------+")
-                print(json.dumps(result, indent=4))
-                print("+----------------------------------------+")
-                raise Exception(f"Etherscan API error: {result.get('message', 'Unknown error')}")
-
-        return all_transactions
-
-
-
-
-
-
-    ############################################################
-    # store_transactions
-    ############################################################
-    #
-    # Caches Etherscan transactions in the local SQLite
-    # database. INSERT OR IGNORE + UPDATE keeps the whole
-    # thing idempotent: re-fetching the same history never
-    # duplicates rows and refreshes what's already there.
-    # Both endpoints of every transfer are also seeded into
-    # the addresses table, where the user can name them later.
-    #
-    # Used by:
-    #   - fetch_and_store_transactions (below)
-    ############################################################
-
-    def store_transactions(self, transactions, network):
-        with get_db_connection() as conn:
-
-            for tx in transactions:
-                # Contract deployments have no 'to' — the recipient is
-                # the freshly created contract address.
-                is_contract = 0
-                recipient = tx.get('to', '')
-                if recipient == '' or recipient == None:
-                    is_contract = 1
-                    recipient = tx.get('contractAddress', '')
-
-                conn.execute('''
-                    INSERT OR IGNORE INTO transactions (network, from_address, to_address, value, hash, block_number, timestamp)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)''',
-                (network.lower(), tx['from'].lower(), recipient.lower(), float(tx['value']) / 10**18, tx['hash'],
-                    int(tx['blockNumber']), int(tx['timeStamp'])
-                ))
-
-                conn.execute('''
-                    UPDATE transactions SET from_address = ?, to_address = ?, value = ?, block_number = ?, timestamp = ?
-                        WHERE LOWER(network) = ? AND hash = ?''',
-                (tx['from'].lower(), recipient.lower(), float(tx['value']) / 10**18, int(tx['blockNumber']),
-                    int(tx['timeStamp']), network.lower(), tx['hash']
-                ))
-
-                conn.execute('''
-                    INSERT OR IGNORE INTO addresses (address, name, is_contract)
-                    VALUES (?, ?, ?) ''',
-                    (tx['from'].lower(), "", 0))
-
-                conn.execute('''
-                    INSERT OR IGNORE INTO addresses (address, name, is_contract)
-                    VALUES (?, ?, ?) ''',
-                    (recipient.lower(), "", is_contract))
-
-
-
-
-
-
-    ############################################################
-    # fetch_and_store_transactions
-    ############################################################
-    #
-    # Etherscan -> SQLite in one call. The summary payload it
-    # returns is ignored by its only caller today.
-    #
-    # Used by:
-    #   - get_stored_transactions (below)
-    ############################################################
-
-    def fetch_and_store_transactions(self, network, address):
-        transactions = self.fetch_all_transactions_from_etherscan(address, network)
-        self.store_transactions(transactions, network)
-        return {
-            "address": address,
-            "network": network,
-            "total_transactions": len(transactions),
-            "message": "Transactions fetched and stored successfully"
-        }
-
-
-
-
-
-
-    ############################################################
-    # get_stored_transactions
-    ############################################################
-    #
-    # Data for the frontend's transaction graph: refresh the
-    # cache from Etherscan (at most once a minute per address —
-    # the graph sweeps aggressively), then aggregate transfers
-    # into "flows" — one row per (from, to) pair with the
-    # summed value and count, plus the display names and
-    # last-seen timestamps of both endpoints.
-    #
-    # Used by:
-    #   - evm_routes.py —
-    #     GET /api/evm/<network>/get-stored-transactions
-    ############################################################
-
-    def get_stored_transactions(self, network, address, hours=24):
-        if not address:
-            return {"error": "Address is required"}, 400
-        if not self.is_supported_network(network):
-            return {"error": f"Unsupported network: {network}"}, 400
-
-        # STEP 1: refresh the local cache from Etherscan, but at most
-        # once per ETHERSCAN_REFRESH_INTERVAL per address — inside the
-        # window the data comes straight from SQLite, which keeps the
-        # graph's sweeps well under Etherscan's rate limit.
-        fetch_key = (network, address.lower())
-        if int(time.time()) - self.last_etherscan_fetch.get(fetch_key, 0) >= self.ETHERSCAN_REFRESH_INTERVAL:
-            try:
-                self.fetch_and_store_transactions(network, address)
-                self.last_etherscan_fetch[fetch_key] = int(time.time())
-            except Exception:
-                logging.exception("Error fetching/storing transactions")
-                return {"error": "Failed to refresh transactions"}, 500
-
-        # STEP 2: aggregate. GetLatestUpdate: when each address was
-        # last seen on either side of a transaction. GetFlows: the
-        # aggregated transfers, already packed as JSON objects so the
-        # final SELECT can return the whole result as a single JSON
-        # array.
-        with get_db_connection() as conn:
-            # Timezone-aware on purpose: naive utcnow().timestamp()
-            # would shift by the container's TZ offset if it ever ran
-            # outside UTC.
-            threshold_time = int((datetime.now(timezone.utc) - timedelta(hours=hours)).timestamp())
-
-            sqlQueryResult = conn.execute('''
-                WITH GetLatestUpdate AS (
-                    SELECT
-                        address,
-                        MAX(timestamp) as timestamp
-                    FROM
-                    (
-                        SELECT
-                            from_address AS address,
-                            MAX(timestamp) as timestamp
-                        FROM
-                            transactions
-                        GROUP BY from_address
-
-                        UNION ALL
-                        SELECT
-                            to_address AS address,
-                            MAX(timestamp)
-                        FROM
-                            transactions
-                        GROUP BY to_address
-                    )
-                    GROUP BY address
-                ),
-
-                GetFlows AS (
-                    SELECT
-                        json_object(
-                            'from_address',         transactions.from_address,
-                            'from_name',            addr_from.name,
-                            'from_timestamp',       latest_update_from.timestamp,
-
-                            'to_address',           transactions.to_address,
-                            'to_name',              addr_to.name,
-                            'to_timestamp',         latest_update_to.timestamp,
-                            'to_addr_contract',     addr_to.is_contract,
-
-                            'value',                SUM(transactions.value),
-                            'count',                COUNT(*)
-                        ) as JSON
-                    FROM
-                        transactions
-
-                    LEFT JOIN addresses AS addr_from
-                        ON addr_from.address = transactions.from_address
-                    LEFT JOIN addresses AS addr_to
-                        ON addr_to.address = transactions.to_address
-
-                    LEFT JOIN GetLatestUpdate AS latest_update_from
-                        ON latest_update_from.address = transactions.from_address
-                    LEFT JOIN GetLatestUpdate AS latest_update_to
-                        ON latest_update_to.address = transactions.to_address
-
-                    WHERE
-                        LOWER(network) = ? AND
-                        (LOWER(from_address) = ? OR LOWER(to_address) = ?) AND
-                        transactions.timestamp >= ?
-                    GROUP BY transactions.from_address, transactions.to_address
-                )
-
-                SELECT
-                    json_group_array(
-                        JSON(
-                            JSON
-                        )
-                    )
-                FROM
-                    GetFlows
-            ''', [network.lower(), address.lower(), address.lower(), threshold_time])
-
-            result = sqlQueryResult.fetchone()
-            transactions_json = result[0] if result else '[]'
-
-            return {"transactions": json.loads(transactions_json)}, 200
-
-
-
-
-
-
-    ############################################################
-    # set_address_name
-    ############################################################
-    #
-    # Lets the user label an address shown in the transaction
-    # graph. Matches the address exactly as sent — the graph
-    # always sends lowercase, which is how store_transactions
-    # writes the rows.
-    #
-    # Used by:
-    #   - evm_routes.py — GET /api/evm/set-address-name
-    ############################################################
-
-    def set_address_name(self, address, name):
-        if not address:
-            return {"error": "Address is required"}, 400
-
-        with get_db_connection() as conn:
-            conn.execute(''' UPDATE addresses SET name = ? WHERE address = ? ''', [name, address])
-
-        return {"status": "OK"}, 200
-
-
-
-
-
