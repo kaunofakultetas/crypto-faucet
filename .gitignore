@@ -1,19 +1,8 @@
 # Faculty's docker-compose
-docker-compose.yml
+/docker-compose.yml
 
-
-# Knfcoind data folders
-knfcoind-private/
-knfcoind-public/
-knfcoind-dummy/
-
-
-# Served dapps
-dapps-server/data
-
-
-# Local faucet data
-_DATA/
+# Local  data
+/_DATA
 
 
 

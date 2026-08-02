@@ -21,5 +21,8 @@ RUN pip install --no-cache-dir     \
      "scrypt==0.9.4"
 
 
+# Copy the source code
+COPY . .
+
 EXPOSE 8000
 CMD ["python3", "-u", "main.py"]
