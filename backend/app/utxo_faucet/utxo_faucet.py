@@ -15,9 +15,11 @@
 #       address.
 #    2. UTXOs and balances are fetched from the Electrum
 #       server for that address' scripthash.
-#    3. A transaction is built and signed — with bitcoinlib
-#       for Bitcoin/Litecoin, or by hand (raw bytes + ecdsa)
-#       for KNF, whose network params bitcoinlib doesn't know.
+#    3. A transaction is built and BIP-143-signed with embit —
+#       ONE code path for every chain, KNF included, because
+#       embit takes network params as plain data instead of
+#       validating against a chain registry (the reason the
+#       previous engines needed a hand-rolled KNF path).
 #    4. The raw transaction is broadcast through the same
 #       Electrum connection.
 #
@@ -37,14 +39,13 @@ import time
 import ssl
 import socket
 import json
-import struct
 import hashlib
 import logging
 
-import bech32
-import ecdsa
-from bitcoinlib.keys import HDKey
-from bitcoinlib.transactions import Transaction, Output, Input
+from embit import ec as embit_ec
+from embit import script as embit_script
+from embit import bech32 as embit_bech32
+from embit.transaction import Transaction, TransactionInput, TransactionOutput, Witness, SIGHASH
 
 
 # Electrum protocol version announced during the server.version
@@ -82,9 +83,10 @@ DUST_LIMIT_SAT = 546
 class NetworkContext:
 
     def __init__(self):
-        self.network = None         # bitcoinlib network name, e.g. 'litecoin_testnet'
-        self.coin_type = None       # 'bitcoin' | 'litecoin' | 'knf'
-        self.key = None             # HDKey holding the faucet private key
+        self.network_key = None     # config key: 'btc4', 'ltc4', 'knf', ...
+        self.hrp = None             # bech32 prefix from the config: 'tb', 'knf', ...
+        self.key = None             # embit PrivateKey holding the faucet key
+        self.script_pubkey = None   # the faucet's own p2wpkh script
         self.address = None         # faucet bech32 address on this network
         self.scripthash = None      # Electrum scripthash of that address
         self.electrum_host = None
@@ -107,18 +109,13 @@ class NetworkContext:
 # state lives in NetworkContext. Methods in groups:
 #
 #   setup       — __init__
-#   keys        — _hash160, _convert_ethereum_key_to_bitcoin,
-#                 _get_hrp, _create_bech32_address,
-#                 _bech32_address_to_scripthash
-#   resolution  — _get_coin_type_from_key,
-#                 _get_bitcoinlib_network_name,
-#                 _setup_wallet_for_network
+#   keys        — _convert_ethereum_key_to_bitcoin, _get_hrp
+#   resolution  — _setup_wallet_for_network
 #   electrum    — _connect_electrum, _disconnect_electrum,
 #                 _send_electrum_request
 #   queries     — _get_balance, _get_utxos
-#   building    — _create_inputs, _estimate_fee,
-#                 _create_and_broadcast_transaction,
-#                 _create_and_broadcast_raw_transaction
+#   building    — _estimate_fee,
+#                 _create_and_broadcast_transaction
 #   validation  — _validate_address
 #   public API  — get_networks, get_faucet_balance,
 #                 request_crypto
@@ -144,8 +141,7 @@ class UTXOFaucet:
     def __init__(self, network_configs: dict):
         # Per-network settings from main.py's UTXO_NETWORK_CONFIGS —
         # identity at the top level, payout/connection settings under
-        # each entry's 'faucet' section
-        # coming from main.py / environment.
+        # each entry's 'faucet' section.
         self.network_configs = network_configs or {}
 
         # Same private key as the EVM faucet, so one funded identity
@@ -161,22 +157,6 @@ class UTXOFaucet:
         # In-memory on purpose: resets on restart, fresh wallets walk
         # around it — accepted for a lab faucet on testnets.
         self.last_request = {}
-
-
-
-    ############################################################
-    # _hash160
-    ############################################################
-    #
-    # Bitcoin's HASH160: RIPEMD160(SHA256(data)).
-    #
-    # Used by:
-    #   - _setup_wallet_for_network (below)
-    ############################################################
-
-    def _hash160(self, data: bytes) -> bytes:
-        sha256_hash = hashlib.sha256(data).digest()
-        return hashlib.new('ripemd160', sha256_hash).digest()
 
 
 
@@ -211,134 +191,19 @@ class UTXOFaucet:
     #
     # The bech32 Human Readable Part ('tb', 'tltc', 'knf', ...)
     # comes straight from the network config — guessing it from
-    # the coin type would silently produce addresses for the
+    # the coin name would silently produce addresses for the
     # wrong chain.
     #
     # Used by:
-    #   - _create_bech32_address (below)
-    #   - _validate_address (below)
+    #   - _setup_wallet_for_network (below)
     ############################################################
 
-    def _get_hrp(self, network: str, coin_type: str, network_key: str = None) -> str:
-        if network_key and network_key in self.network_configs:
-            config_hrp = self.network_configs[network_key].get('faucet', {}).get('hrp')
-            if config_hrp:
-                return config_hrp
+    def _get_hrp(self, network_key: str) -> str:
+        config_hrp = self.network_configs.get(network_key, {}).get('faucet', {}).get('hrp')
+        if config_hrp:
+            return config_hrp
 
         raise ValueError(f"No HRP configured for network: {network_key}")
-
-
-
-    ############################################################
-    # _create_bech32_address
-    ############################################################
-    #
-    # Native SegWit v0 address: witness version 0 + the 20-byte
-    # pubkey hash, bech32-encoded under the network's HRP.
-    #
-    # Used by:
-    #   - _setup_wallet_for_network (below)
-    ############################################################
-
-    def _create_bech32_address(self, pubkey_hash: bytes, network: str, coin_type: str, network_key: str = None) -> str:
-        hrp = self._get_hrp(network, coin_type, network_key)
-        converted = bech32.convertbits(pubkey_hash, 8, 5)
-        return bech32.bech32_encode(hrp, [0] + converted)
-
-
-
-    ############################################################
-    # _bech32_address_to_scripthash
-    ############################################################
-    #
-    # Electrum servers index by scripthash, not by address:
-    # SHA256 of the output script, reversed, as hex. The HRP
-    # allowlist is the hardcoded baseline plus every hrp the
-    # network config declares — a new chain only needs its
-    # config entry, not a code change here.
-    #
-    # Used by:
-    #   - _setup_wallet_for_network (below)
-    ############################################################
-
-    def _bech32_address_to_scripthash(self, address: str) -> str:
-        hrp, data = bech32.bech32_decode(address)
-        configured_hrps = tuple(
-            c.get('faucet', {}).get('hrp')
-            for c in self.network_configs.values()
-            if c.get('faucet', {}).get('hrp')
-        )
-        valid_hrps = ('tb', 'bc', 'bcrt', 'tltc', 'ltc', 'rltc', 'knf') + configured_hrps
-        if hrp not in valid_hrps:
-            raise ValueError('Invalid Bech32 address')
-
-        decoded = bech32.convertbits(data[1:], 5, 8, False)
-        script = b'\x00\x14' + bytes(decoded)  # OP_0 PUSH20 <pubkey hash>
-
-        return hashlib.sha256(script).digest()[::-1].hex()
-
-
-
-    ############################################################
-    # _get_coin_type_from_key
-    ############################################################
-    #
-    # Network keys are named like 'ltc4', 'knf', 'btc4' — the
-    # coin type is encoded in the name itself; anything that
-    # isn't Litecoin or KNF counts as Bitcoin.
-    #
-    # Used by:
-    #   - _setup_wallet_for_network (below)
-    ############################################################
-
-    def _get_coin_type_from_key(self, network_key: str) -> str:
-        key_lower = network_key.lower()
-
-        if 'ltc' in key_lower:
-            return 'litecoin'
-        elif 'knf' in key_lower:
-            return 'knf'
-        else:
-            return 'bitcoin'
-
-
-
-    ############################################################
-    # _get_bitcoinlib_network_name
-    ############################################################
-    #
-    # Maps our generic 'testnet'/'regtest'/'mainnet' labels
-    # onto the exact network names bitcoinlib expects. KNF is
-    # special: bitcoinlib has no idea what it is, so bitcoin
-    # stands in and KNF transactions are built by hand (see
-    # _create_and_broadcast_raw_transaction).
-    #
-    # Used by:
-    #   - _setup_wallet_for_network (below)
-    ############################################################
-
-    def _get_bitcoinlib_network_name(self, generic_network: str, coin_type: str) -> str:
-        generic_lower = generic_network.lower()
-        coin_lower = coin_type.lower()
-
-        if coin_lower == 'litecoin':
-            if generic_lower == 'mainnet':
-                return 'litecoin'
-            elif generic_lower == 'regtest':
-                return 'litecoin_regtest'
-            else:  # testnet
-                return 'litecoin_testnet'
-
-        elif coin_lower == 'knf':
-            return 'bitcoin'
-
-        else:  # bitcoin
-            if generic_lower == 'mainnet':
-                return 'bitcoin'
-            elif generic_lower == 'regtest':
-                return 'regtest'
-            else:  # testnet
-                return 'testnet'
 
 
 
@@ -358,17 +223,18 @@ class UTXOFaucet:
 
     def _setup_wallet_for_network(self, network_key: str) -> NetworkContext:
         ctx = NetworkContext()
+        ctx.network_key = network_key
 
-        # STEP 1: resolve the network and coin type from the config's
-        # faucet section (payout + connection settings live there).
+        # STEP 1: resolve the network from the config's faucet
+        # section (payout + connection settings live there). The
+        # network IS just its HRP here — embit has no chain registry
+        # to satisfy, so KNF needs nothing special.
         config = self.network_configs.get(network_key)
         if not config:
             raise ValueError(f'Unknown UTXO network: {network_key}')
         faucet_config = config.get('faucet', {})
 
-        generic_network = faucet_config.get('network', 'testnet')
-        ctx.coin_type = self._get_coin_type_from_key(network_key)
-        ctx.network = self._get_bitcoinlib_network_name(generic_network, ctx.coin_type)
+        ctx.hrp = self._get_hrp(network_key)
 
         # STEP 2: Electrum endpoint, 'host:port' with 50002 (SSL) as
         # the default port.
@@ -380,28 +246,24 @@ class UTXOFaucet:
             ctx.electrum_host = electrum_server
             ctx.electrum_port = 50002
 
-        # STEP 3: derive the key. For KNF don't tell HDKey a network —
-        # bitcoinlib would try to validate against params that don't
-        # match the custom chain.
+        # STEP 3: derive the faucet identity — the same 32 secret
+        # bytes as the EVM faucet, the same compressed pubkey the
+        # old engines derived (verified byte-for-byte during the
+        # embit migration).
         if not self.faucet_private_key:
             raise ValueError('Faucet private key not configured')
 
         try:
-            btc_private_key = self._convert_ethereum_key_to_bitcoin(self.faucet_private_key)
-
-            if ctx.coin_type == 'knf':
-                ctx.key = HDKey(import_key=btc_private_key)
-            else:
-                ctx.key = HDKey(import_key=btc_private_key, network=ctx.network)
+            ctx.key = embit_ec.PrivateKey(self._convert_ethereum_key_to_bitcoin(self.faucet_private_key))
         except Exception as e:
-            raise ValueError(f'Invalid private key for network {ctx.network}: {e}')
+            raise ValueError(f'Invalid private key: {e}')
 
-        # STEP 4: the faucet address, the scripthash Electrum indexes
-        # it under, and this network's payout size.
-        pubkey = ctx.key.public_byte
-        pubkey_hash = self._hash160(pubkey)
-        ctx.address = self._create_bech32_address(pubkey_hash, ctx.network, ctx.coin_type, network_key)
-        ctx.scripthash = self._bech32_address_to_scripthash(ctx.address)
+        # STEP 4: the faucet's p2wpkh script, its bech32 address, the
+        # scripthash Electrum indexes it under (SHA256 of the script,
+        # reversed), and this network's payout size.
+        ctx.script_pubkey = embit_script.p2wpkh(ctx.key.get_public_key())
+        ctx.address = ctx.script_pubkey.address({'bech32': ctx.hrp})
+        ctx.scripthash = hashlib.sha256(ctx.script_pubkey.data).digest()[::-1].hex()
 
         ctx.chunk_size_btc = float(faucet_config.get('chunk_size', self.default_amount_btc))
 
@@ -501,7 +363,7 @@ class UTXOFaucet:
 
         elapsed_time = time.time() - start_time
         if self.app_debug:
-            print(f"[DEBUG] Electrum request '{method}' took {elapsed_time:.3f}s (network: {ctx.network})")
+            print(f"[DEBUG] Electrum request '{method}' took {elapsed_time:.3f}s (network: {ctx.network_key})")
 
         try:
             response = json.loads(response_line.decode('utf-8'))
@@ -556,55 +418,6 @@ class UTXOFaucet:
 
 
     ############################################################
-    # _create_inputs
-    ############################################################
-    #
-    # Greedy coin selection: take UTXOs in the order Electrum
-    # returned them until the target amount PLUS the estimated
-    # fee for the inputs selected so far is covered — selecting
-    # for the amount alone could leave nothing for the fee and
-    # push the change negative.
-    #
-    # Used by:
-    #   - _create_and_broadcast_transaction (below)
-    ############################################################
-
-    def _create_inputs(self, ctx: NetworkContext, utxos: list, target_amount_sat: int = None) -> tuple:
-        inputs = []
-        total_input = 0
-
-        for utxo in utxos:
-            if target_amount_sat and total_input >= target_amount_sat + self._estimate_fee(len(inputs), 2):
-                break
-
-            # Same KNF caveat as in _setup_wallet_for_network: passing a
-            # network would make bitcoinlib validate against wrong params.
-            if ctx.coin_type == 'knf':
-                input_obj = Input(
-                    prev_txid=utxo['tx_hash'],
-                    output_n=utxo['tx_pos'],
-                    value=utxo['value'],
-                    address=ctx.address,
-                    script_type='p2wpkh'
-                )
-            else:
-                input_obj = Input(
-                    prev_txid=utxo['tx_hash'],
-                    output_n=utxo['tx_pos'],
-                    value=utxo['value'],
-                    address=ctx.address,
-                    script_type='p2wpkh',
-                    network=ctx.network
-                )
-
-            inputs.append(input_obj)
-            total_input += utxo['value']
-
-        return inputs, total_input
-
-
-
-    ############################################################
     # _estimate_fee
     ############################################################
     #
@@ -614,7 +427,6 @@ class UTXOFaucet:
     #
     # Used by:
     #   - _create_and_broadcast_transaction (below)
-    #   - _create_and_broadcast_raw_transaction (below)
     ############################################################
 
     def _estimate_fee(self, num_inputs: int, num_outputs: int) -> int:
@@ -627,9 +439,13 @@ class UTXOFaucet:
     # _create_and_broadcast_transaction
     ############################################################
     #
-    # Builds, signs and broadcasts a payout. Bitcoin/Litecoin
-    # go through bitcoinlib; KNF takes the manual raw-bytes
-    # path below.
+    # Builds, signs and broadcasts a payout with embit: ONE
+    # code path for every chain, KNF included — the BIP-141
+    # transaction format is identical across them, only the
+    # bech32 HRP differs and that comes from the config.
+    # Signatures use deterministic RFC-6979 nonces, and the
+    # recipient address is checksum-validated and accepted as
+    # any witness program (p2wpkh, p2wsh, taproot).
     #
     # Used by:
     #   - request_crypto (below)
@@ -641,57 +457,7 @@ class UTXOFaucet:
         if not utxos:
             raise ValueError("No UTXOs available")
 
-        if ctx.coin_type == 'knf':
-            return self._create_and_broadcast_raw_transaction(ctx, to_address, amount_sat, utxos)
-
-        # STEP 2: pick inputs — the selection targets amount + fee, so
-        # the change can never go negative.
-        inputs, total_input = self._create_inputs(ctx, utxos, amount_sat)
-        fee = self._estimate_fee(len(inputs), 2)
-        if total_input < amount_sat + fee:
-            raise ValueError("Insufficient funds")
-
-        # STEP 3: outputs — the payout, plus the leftover back to the
-        # faucet unless it's dust (then it's cheaper to just leave it
-        # as extra fee).
-        outputs = [Output(amount_sat, to_address, network=ctx.network)]
-
-        change = total_input - amount_sat - fee
-        if change > DUST_LIMIT_SAT:
-            outputs.append(Output(change, ctx.address, network=ctx.network))
-        else:
-            fee += change
-
-        # STEP 4: sign with bitcoinlib and broadcast over Electrum.
-        tx = Transaction(
-            inputs=inputs,
-            outputs=outputs,
-            network=ctx.network,
-            witness_type='segwit'
-        )
-        tx.sign(ctx.key)
-
-        raw_tx = tx.raw_hex()
-        return self._send_electrum_request(ctx, "blockchain.transaction.broadcast", [raw_tx])
-
-
-
-    ############################################################
-    # _create_and_broadcast_raw_transaction
-    ############################################################
-    #
-    # Hand-rolled SegWit v0 transaction for KNF, where
-    # bitcoinlib's network validation gets in the way.
-    # Serializes the BIP-141 format byte by byte and signs
-    # each input per BIP-143.
-    #
-    # Used by:
-    #   - _create_and_broadcast_transaction (above) — the KNF
-    #     branch
-    ############################################################
-
-    def _create_and_broadcast_raw_transaction(self, ctx: NetworkContext, to_address: str, amount_sat: int, utxos: list) -> str:
-        # STEP 1: greedy coin selection — the target includes the fee
+        # STEP 2: greedy coin selection — the target includes the fee
         # for the inputs selected so far, so the change can never go
         # negative.
         selected_utxos = []
@@ -708,92 +474,47 @@ class UTXOFaucet:
 
         change = total_input - amount_sat - fee
 
-        # STEP 2: output scripts — recipient and change (faucet)
-        # pubkey hashes straight from bech32.
-        to_hrp, to_data = bech32.bech32_decode(to_address)
-        to_decoded = bech32.convertbits(to_data[1:], 5, 8, False)
-        to_pubkey_hash = bytes(to_decoded)
+        # STEP 3: outputs. The recipient decodes against this
+        # network's HRP (full checksum check) into a witness-program
+        # scriptPubKey: version opcode (OP_0, or OP_1..OP_16 =
+        # 0x50 + n) followed by the pushed program.
+        witver, witprog = embit_bech32.decode(ctx.hrp, to_address)
+        if witver is None or witprog is None:
+            raise ValueError("Invalid recipient address")
+        witprog = bytes(witprog)
 
-        from_hrp, from_data = bech32.bech32_decode(ctx.address)
-        from_decoded = bech32.convertbits(from_data[1:], 5, 8, False)
-        from_pubkey_hash = bytes(from_decoded)
+        version_opcode = bytes([0x50 + witver if witver else 0])
+        to_script = embit_script.Script(version_opcode + bytes([len(witprog)]) + witprog)
 
-        outputs = [{
-            'amount': amount_sat,
-            'script_pubkey': b'\x00\x14' + to_pubkey_hash  # OP_0 PUSH20 <hash>
-        }]
-
+        outputs = [TransactionOutput(amount_sat, to_script)]
         if change > DUST_LIMIT_SAT:
-            outputs.append({
-                'amount': change,
-                'script_pubkey': b'\x00\x14' + from_pubkey_hash
-            })
+            outputs.append(TransactionOutput(change, ctx.script_pubkey))
+        # sub-dust change is simply left to the miners as extra fee
 
-        # STEP 3: serialize the unsigned part of the transaction.
-        tx_bytes = struct.pack('<I', 2)   # version
-        tx_bytes += b'\x00\x01'           # SegWit marker + flag
+        # STEP 4: build and sign. Electrum reports tx_hash in display
+        # order — the wire format wants it reversed. Per input the
+        # witness stack is <DER signature + SIGHASH_ALL byte>
+        # <compressed pubkey>; embit does the BIP-143 sighash math.
+        tx = Transaction(
+            version=2,
+            vin=[TransactionInput(bytes.fromhex(u['tx_hash'])[::-1], u['tx_pos']) for u in selected_utxos],
+            vout=outputs,
+            locktime=0,
+        )
 
-        tx_bytes += bytes([len(selected_utxos)])
-        for utxo in selected_utxos:
-            tx_bytes += bytes.fromhex(utxo['tx_hash'])[::-1]  # prev txid (reversed)
-            tx_bytes += struct.pack('<I', utxo['tx_pos'])     # prev output index
-            tx_bytes += b'\x00'                               # empty scriptSig (SegWit)
-            tx_bytes += b'\xff\xff\xff\xff'                   # sequence
+        # scriptCode for p2wpkh per BIP-143: the classic p2pkh script
+        # over our pubkey hash — which is exactly the last 20 bytes
+        # of the p2wpkh script (OP_0 PUSH20 <hash160>)
+        pub = ctx.key.get_public_key()
+        script_code = embit_script.Script(b'\x76\xa9\x14' + ctx.script_pubkey.data[2:] + b'\x88\xac')
 
-        tx_bytes += bytes([len(outputs)])
-        for output in outputs:
-            tx_bytes += struct.pack('<Q', output['amount'])
-            tx_bytes += bytes([len(output['script_pubkey'])])
-            tx_bytes += output['script_pubkey']
-
-        # STEP 4: one BIP-143 signature per input, appended as the
-        # witness stack: <signature + SIGHASH_ALL byte> <pubkey>.
         for i, utxo in enumerate(selected_utxos):
-            hash_prevouts = hashlib.sha256(hashlib.sha256(
-                b''.join([bytes.fromhex(u['tx_hash'])[::-1] + struct.pack('<I', u['tx_pos']) for u in selected_utxos])
-            ).digest()).digest()
-
-            hash_sequence = hashlib.sha256(hashlib.sha256(
-                b'\xff\xff\xff\xff' * len(selected_utxos)
-            ).digest()).digest()
-
-            hash_outputs = hashlib.sha256(hashlib.sha256(
-                b''.join([struct.pack('<Q', o['amount']) + bytes([len(o['script_pubkey'])]) + o['script_pubkey'] for o in outputs])
-            ).digest()).digest()
-
-            # scriptCode for p2wpkh: OP_DUP OP_HASH160 <hash> OP_EQUALVERIFY OP_CHECKSIG
-            script_code = b'\x19\x76\xa9\x14' + from_pubkey_hash + b'\x88\xac'
-
-            sighash_preimage = (
-                struct.pack('<I', 2) +                       # version
-                hash_prevouts +
-                hash_sequence +
-                bytes.fromhex(utxo['tx_hash'])[::-1] +       # this input's outpoint
-                struct.pack('<I', utxo['tx_pos']) +
-                script_code +
-                struct.pack('<Q', utxo['value']) +           # amount being spent
-                b'\xff\xff\xff\xff' +                        # sequence
-                hash_outputs +
-                struct.pack('<I', 0) +                       # locktime
-                struct.pack('<I', 1)                         # SIGHASH_ALL
-            )
-
-            sighash = hashlib.sha256(hashlib.sha256(sighash_preimage).digest()).digest()
-
-            sk = ecdsa.SigningKey.from_string(ctx.key.private_byte, curve=ecdsa.SECP256k1)
-            signature = sk.sign_digest(sighash, sigencode=ecdsa.util.sigencode_der_canonize)
-
-            tx_bytes += b'\x02'
-            sig_with_hashtype = signature + b'\x01'
-            tx_bytes += bytes([len(sig_with_hashtype)]) + sig_with_hashtype
-            pubkey = ctx.key.public_byte
-            tx_bytes += bytes([len(pubkey)]) + pubkey
-
-        tx_bytes += struct.pack('<I', 0)  # locktime
+            sighash = tx.sighash_segwit(i, script_code, utxo['value'])
+            der_sig = ctx.key.sign(sighash).serialize() + bytes([SIGHASH.ALL])
+            tx.vin[i].witness = Witness([der_sig, pub.serialize()])
 
         # STEP 5: broadcast over the same Electrum connection.
-        raw_tx = tx_bytes.hex()
-        return self._send_electrum_request(ctx, "blockchain.transaction.broadcast", [raw_tx])
+        return self._send_electrum_request(ctx, "blockchain.transaction.broadcast", [tx.serialize().hex()])
 
 
 
@@ -803,21 +524,18 @@ class UTXOFaucet:
     #
     # Cheap sanity check: the address must carry this network's
     # HRP ('tb1...', 'tltc1...', 'knf1...'). Full checksum
-    # validation happens implicitly when the transaction is
-    # built.
+    # validation happens in _create_and_broadcast_transaction,
+    # where the address is bech32-decoded for real.
     #
     # Used by:
     #   - request_crypto (below)
     ############################################################
 
-    def _validate_address(self, ctx: NetworkContext, address: str, network_key: str = None) -> bool:
+    def _validate_address(self, ctx: NetworkContext, address: str) -> bool:
         if not address:
             return False
 
-        address_lower = address.lower()
-        expected_hrp = self._get_hrp(ctx.network, ctx.coin_type, network_key)
-
-        return address_lower.startswith(expected_hrp + '1')
+        return address.lower().startswith(ctx.hrp + '1')
 
 
 
@@ -920,7 +638,7 @@ class UTXOFaucet:
 
             to_address = to_address.strip()
 
-            if not self._validate_address(ctx, to_address, network_key):
+            if not self._validate_address(ctx, to_address):
                 return {"error": "Neteisingas adresas"}, 400
 
             if to_address.lower() == ctx.address.lower():
@@ -963,8 +681,7 @@ class UTXOFaucet:
                 "transaction_id": tx_id,
                 "amount": float(ctx.chunk_size_btc),
                 "from_address": ctx.address,
-                "network": ctx.network,
-                "coin_type": ctx.coin_type
+                "network": ctx.network_key
             }, 200
 
         except Exception as e:

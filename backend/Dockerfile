@@ -10,12 +10,13 @@ RUN  apt-get update && \
 
 
 # Setup Backend
+# scrypt stays even though bitcoinlib is gone — the reorg-attack
+# tool hashes KNF block headers with it (fullnode_rpc.py)
 RUN pip install --no-cache-dir     \
      "requests==2.32.3"            \
      "web3==6.20.1"                \
      "flask==3.0.3"                \
-     "bitcoinlib==0.6.13"          \
-     "bech32==1.2.0"               \
+     "embit==0.8.0"                \
      "aiohttp==3.12.15"            \
      "scrypt==0.9.4"
 
