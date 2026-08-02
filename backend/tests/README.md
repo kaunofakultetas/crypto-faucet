@@ -4,7 +4,7 @@ Three layers, from cheapest to heaviest:
 
 | Layer | Files | Needs network? | When to run |
 |---|---|---|---|
-| Config invariants | `test_configs.py` | no | always |
+| Config invariants | `test_configs.py`, `test_config_models.py` | no | always |
 | Offline regression | `test_utxo_engine.py`, `test_evm_faucet.py`, `test_erc20_faucet.py` | no | always |
 | Live smoke | `integration/test_live_smoke.py` | yes (running backend) | opt-in via `RUN_LIVE=1` |
 

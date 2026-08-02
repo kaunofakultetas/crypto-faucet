@@ -13,6 +13,7 @@ import sqlite3
 from flask import Flask, Response
 
 from app.database.db import get_db_connection
+from app.config_models import validate_configs
 
 
 app = Flask(__name__)
@@ -283,6 +284,18 @@ UTXO_NETWORK_CONFIGS = {
     #     },
     # }
 }
+
+
+
+
+# The three maps above are VALIDATED before anything uses them —
+# a misspelled key, a malformed contract address or a token on an
+# unknown network kills the boot with a precise error instead of
+# becoming a silent runtime fallback. The enforced schema lives
+# in app/config_models.py.
+EVM_NETWORK_CONFIGS, ERC20_TOKEN_CONFIGS, UTXO_NETWORK_CONFIGS = validate_configs(
+    EVM_NETWORK_CONFIGS, ERC20_TOKEN_CONFIGS, UTXO_NETWORK_CONFIGS,
+)
 
 
 
