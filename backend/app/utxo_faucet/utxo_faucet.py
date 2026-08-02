@@ -5,7 +5,8 @@
 #  and the custom KNF coin), each in testnet / regtest /
 #  mainnet flavours. It talks directly to an Electrum server
 #  (ElectrumX) over SSL JSON-RPC — no local wallet files, no
-#  bitcoind RPC.
+#  bitcoind RPC. The protocol work lives in electrum_client.py
+#  (ElectrumClient); this file holds the faucet logic.
 #
 #  How a payout works, end to end:
 #
@@ -23,11 +24,20 @@
 #    4. The raw transaction is broadcast through the same
 #       Electrum connection.
 #
-#  Every request gets its own NetworkContext + Electrum
-#  connection, so concurrent requests to different networks
-#  never share state.
+#  Built for classroom load: every request still gets its own
+#  NetworkContext, but the heavy pieces behind it are shared
+#  and guarded — ONE long-lived, self-reconnecting
+#  ElectrumClient per network, a short-TTL cache for the
+#  polled faucet balance, and a per-network payout lock so two
+#  simultaneous claims can't select (and try to double-spend)
+#  the same UTXOs.
 #
-#  Based on: https://github.com/tomasvanagas/btc-minimal-wallet
+#  Everything is prepared EAGERLY at startup — clients built,
+#  connections opened, balances pre-fetched — so a dead
+#  server or a typoed endpoint screams in the console before
+#  the first student arrives. A network that fails to warm up
+#  does not kill the app (the other faucets keep serving);
+#  its client simply self-heals on first use.
 #
 #  Used by:
 #    - utxo_routes.py — the Flask endpoints under /api/utxo/*
@@ -36,27 +46,26 @@
 
 import os
 import time
-import ssl
-import socket
-import json
 import hashlib
 import logging
+import threading
 
 from embit import ec as embit_ec
 from embit import script as embit_script
 from embit import bech32 as embit_bech32
 from embit.transaction import Transaction, TransactionInput, TransactionOutput, Witness, SIGHASH
 
+from .electrum_client import ElectrumClient
 
-# Electrum protocol version announced during the server.version
-# handshake. Newer ElectrumX releases refuse to serve a session
-# that doesn't introduce itself first (see _connect_electrum).
-ELECTRUM_CLIENT_NAME = 'knf-faucet'
-ELECTRUM_PROTOCOL_VERSION = '1.4'
 
 # Outputs below this value (in satoshis) are considered dust and
 # not worth creating — the would-be change is left to the miners.
 DUST_LIMIT_SAT = 546
+
+# How long a polled faucet balance is served from cache. The page
+# polls every few seconds per open browser tab; payouts drop the
+# cached entry, so a claim shows up immediately regardless.
+BALANCE_CACHE_TTL = 30
 
 
 
@@ -70,10 +79,11 @@ DUST_LIMIT_SAT = 546
 ############################################################
 #
 # Everything a single faucet request needs to know about the
-# network it operates on: the derived key/address, the
-# Electrum endpoint and the live SSL socket. A fresh instance
-# is built per request, which keeps the faucet thread-safe
-# without locks.
+# network it operates on: the faucet identity plus pointers to
+# the network's SHARED pieces (the long-lived ElectrumClient).
+# A fresh instance is still built per request — it's cheap,
+# and no request ever mutates another's view; everything
+# shared underneath carries its own lock.
 #
 # Used by:
 #   - UTXOFaucet (below) — built in
@@ -89,9 +99,7 @@ class NetworkContext:
         self.script_pubkey = None   # the faucet's own p2wpkh script
         self.address = None         # faucet bech32 address on this network
         self.scripthash = None      # Electrum scripthash of that address
-        self.electrum_host = None
-        self.electrum_port = None
-        self.ssock = None           # live SSL socket to the Electrum server
+        self.electrum = None        # the network's SHARED ElectrumClient — never closed here
         self.chunk_size_btc = None  # payout size for this network, in coins
 
 
@@ -108,17 +116,21 @@ class NetworkContext:
 # One instance serves every configured network; per-request
 # state lives in NetworkContext. Methods in groups:
 #
-#   setup       — __init__
+#   setup       — __init__, _warm_up_networks
 #   keys        — _convert_ethereum_key_to_bitcoin, _get_hrp
 #   resolution  — _setup_wallet_for_network
-#   electrum    — _connect_electrum, _disconnect_electrum,
-#                 _send_electrum_request
-#   queries     — _get_balance, _get_utxos
+#   queries     — _faucet_balance
 #   building    — _estimate_fee,
 #                 _create_and_broadcast_transaction
 #   validation  — _validate_address
 #   public API  — get_networks, get_faucet_balance,
 #                 request_crypto
+#
+# All Electrum protocol work lives in electrum_client.py:
+# one long-lived, self-reconnecting ElectrumClient per
+# network, shared by every request. Payouts are serialized
+# per network and the polled faucet balance is cached for a
+# few seconds.
 #
 # Used by:
 #   - utxo_routes.py — one shared instance for all handlers
@@ -126,13 +138,21 @@ class NetworkContext:
 
 class UTXOFaucet:
 
+
+
+
+
+
     ############################################################
     # __init__
     ############################################################
     #
-    # Only configuration and the cooldown table live on the
-    # instance — everything network-specific is derived per
-    # request in _setup_wallet_for_network.
+    # EVERYTHING is prepared here, at startup: configuration,
+    # the cooldown table, the faucet identity, and one
+    # ElectrumClient per configured network — then
+    # _warm_up_networks opens every connection and pre-fetches
+    # every balance, so misconfiguration is visible in the
+    # console immediately, not on the first student's claim.
     #
     # Used by:
     #   - utxo_routes.py — at import time, the single instance
@@ -157,6 +177,99 @@ class UTXOFaucet:
         # In-memory on purpose: resets on restart, fresh wallets walk
         # around it — accepted for a lab faucet on testnets.
         self.last_request = {}
+
+        # The faucet identity is the same on every chain (same key,
+        # same p2wpkh script, same scripthash — only the address HRP
+        # differs), so it's derived ONCE here. A missing or broken
+        # key leaves it None and every payout path answers with a
+        # config error instead of crashing the import (the same
+        # pattern EVMFaucet uses).
+        self.faucet_key = None
+        self.faucet_script = None
+        self.faucet_scripthash = None
+        if self.faucet_private_key:
+            try:
+                self.faucet_key = embit_ec.PrivateKey(self._convert_ethereum_key_to_bitcoin(self.faucet_private_key))
+                self.faucet_script = embit_script.p2wpkh(self.faucet_key.get_public_key())
+                self.faucet_scripthash = hashlib.sha256(self.faucet_script.data).digest()[::-1].hex()
+            except Exception:
+                logging.exception("Invalid FAUCET_PRIVATE_KEY for the UTXO faucet")
+
+        # network_key -> the lock serializing that chain's payouts:
+        # two concurrent claims would otherwise select the same UTXOs
+        # and race to double-spend them (the same discipline as
+        # EVMFaucet.send_lock, but per chain — different chains never
+        # contend).
+        self._send_locks = {}
+
+        # network_key -> (unix time, balance dict) for the polled
+        # faucet balance — see _faucet_balance. Pre-filled by the
+        # warmup below.
+        self._balance_cache = {}
+
+        # network_key -> its long-lived ElectrumClient. Built for
+        # EVERY configured network right here — nothing is lazy —
+        # then connected and warmed by _warm_up_networks, so a dead
+        # endpoint fails the console at startup instead of failing
+        # the first student.
+        self._electrum_clients = {}
+        for network_key, config in self.network_configs.items():
+            self._electrum_clients[network_key] = ElectrumClient(
+                config.get('faucet', {}).get('electrum_server', ''),
+                debug=self.app_debug,
+                label=network_key,
+            )
+
+        self._warm_up_networks()
+
+
+
+
+
+
+    ############################################################
+    # _warm_up_networks
+    ############################################################
+    #
+    # The startup warmup, one thread per network so the
+    # slowest server bounds the wall time: open every Electrum
+    # connection and fetch the faucet balance (which also
+    # primes the balance cache — the first page load answers
+    # instantly). Success and failure both go to the console.
+    # A failed network deliberately does NOT raise: the rest
+    # of the backend (EVM faucets included) keeps serving, and
+    # the failed client reconnects by itself on first use.
+    #
+    # Used by:
+    #   - __init__ (above)
+    ############################################################
+
+    def _warm_up_networks(self):
+
+        def warm(network_key, client):
+            try:
+                client.connect()
+
+                if self.faucet_scripthash:
+                    balance = client.get_balance(self.faucet_scripthash)
+                    self._balance_cache[network_key] = (int(time.time()), balance)
+                    print(f"[UTXO] {network_key} ready — faucet balance {balance['confirmed']} confirmed")
+                else:
+                    print(f"[UTXO] {network_key} connected — but NO FAUCET KEY is configured, payouts will fail")
+            except Exception:
+                logging.exception(f"[UTXO] {network_key} FAILED to warm up (endpoint: {client.host}:{client.port})")
+
+        threads = [
+            threading.Thread(target=warm, args=(key, client), name=f'utxo-warmup-{key}')
+            for key, client in self._electrum_clients.items()
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+
+
 
 
 
@@ -185,6 +298,9 @@ class UTXOFaucet:
 
 
 
+
+
+
     ############################################################
     # _get_hrp
     ############################################################
@@ -207,15 +323,18 @@ class UTXOFaucet:
 
 
 
+
+
+
     ############################################################
     # _setup_wallet_for_network
     ############################################################
     #
     # Builds the per-request NetworkContext: resolves the
-    # network, derives the faucet key/address for it and notes
-    # where its Electrum server is. Does NOT open the socket —
-    # that's _connect_electrum, called only by the paths that
-    # actually talk to the chain.
+    # network and points the context at the SHARED pieces —
+    # the pre-derived faucet identity and the network's
+    # long-lived ElectrumClient (created on first use; it
+    # connects itself lazily inside request()).
     #
     # Used by:
     #   - get_faucet_balance / request_crypto (below)
@@ -236,34 +355,20 @@ class UTXOFaucet:
 
         ctx.hrp = self._get_hrp(network_key)
 
-        # STEP 2: Electrum endpoint, 'host:port' with 50002 (SSL) as
-        # the default port.
-        electrum_server = faucet_config.get('electrum_server', '')
-        if ':' in electrum_server:
-            ctx.electrum_host, port_str = electrum_server.split(':', 1)
-            ctx.electrum_port = int(port_str)
-        else:
-            ctx.electrum_host = electrum_server
-            ctx.electrum_port = 50002
+        # STEP 2: the network's long-lived Electrum client — created
+        # and connected at startup, shared by every request.
+        ctx.electrum = self._electrum_clients[network_key]
 
-        # STEP 3: derive the faucet identity — the same 32 secret
-        # bytes as the EVM faucet, the same compressed pubkey the
-        # old engines derived (verified byte-for-byte during the
-        # embit migration).
-        if not self.faucet_private_key:
+        # STEP 3: the faucet identity, derived once in __init__ —
+        # the same key and scripthash on every chain, only the
+        # bech32 address differs by HRP.
+        if not self.faucet_key:
             raise ValueError('Faucet private key not configured')
 
-        try:
-            ctx.key = embit_ec.PrivateKey(self._convert_ethereum_key_to_bitcoin(self.faucet_private_key))
-        except Exception as e:
-            raise ValueError(f'Invalid private key: {e}')
-
-        # STEP 4: the faucet's p2wpkh script, its bech32 address, the
-        # scripthash Electrum indexes it under (SHA256 of the script,
-        # reversed), and this network's payout size.
-        ctx.script_pubkey = embit_script.p2wpkh(ctx.key.get_public_key())
-        ctx.address = ctx.script_pubkey.address({'bech32': ctx.hrp})
-        ctx.scripthash = hashlib.sha256(ctx.script_pubkey.data).digest()[::-1].hex()
+        ctx.key = self.faucet_key
+        ctx.script_pubkey = self.faucet_script
+        ctx.scripthash = self.faucet_scripthash
+        ctx.address = self.faucet_script.address({'bech32': ctx.hrp})
 
         ctx.chunk_size_btc = float(faucet_config.get('chunk_size', self.default_amount_btc))
 
@@ -271,149 +376,36 @@ class UTXOFaucet:
 
 
 
-    ############################################################
-    # _connect_electrum
-    ############################################################
-    #
-    # Opens an SSL connection to the Electrum server. The
-    # servers run with self-signed certificates, so
-    # verification is disabled. The server.version handshake
-    # goes out immediately — recent ElectrumX versions close
-    # the session ("server.version must be first msg") if any
-    # other request arrives before it.
-    #
-    # Used by:
-    #   - get_faucet_balance / request_crypto (below)
-    ############################################################
-
-    def _connect_electrum(self, ctx: NetworkContext):
-        if not ctx.electrum_host or not ctx.electrum_port:
-            raise ValueError('Electrum server not configured')
-
-        sock = socket.create_connection((ctx.electrum_host, ctx.electrum_port))
-        context = ssl.create_default_context()
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
-        ctx.ssock = context.wrap_socket(sock, server_hostname=ctx.electrum_host)
-
-        self._send_electrum_request(
-            ctx,
-            "server.version",
-            [ELECTRUM_CLIENT_NAME, ELECTRUM_PROTOCOL_VERSION]
-        )
 
 
 
     ############################################################
-    # _disconnect_electrum
+    # _faucet_balance
     ############################################################
     #
-    # Used by:
-    #   - get_faucet_balance / request_crypto (below) — their
-    #     finally blocks, so the socket never leaks
-    ############################################################
-
-    def _disconnect_electrum(self, ctx: NetworkContext):
-        if ctx.ssock:
-            ctx.ssock.close()
-            ctx.ssock = None
-
-
-
-    ############################################################
-    # _send_electrum_request
-    ############################################################
-    #
-    # One JSON-RPC round-trip over the open socket. Newline-
-    # delimited protocol: send one line, read until the first
-    # '\n' comes back. Electrum-side errors surface as raised
-    # exceptions, never as return values. The timing print
-    # only fires with APP_DEBUG on.
-    #
-    # Used by:
-    #   - _connect_electrum (above) — the handshake
-    #   - _get_balance / _get_utxos (below)
-    #   - both transaction broadcast paths (below)
-    ############################################################
-
-    def _send_electrum_request(self, ctx: NetworkContext, method: str, params: list):
-        if not ctx.ssock:
-            raise ConnectionError("Not connected to Electrum server")
-
-        request = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": method,
-            "params": params
-        }
-
-        start_time = time.time()
-
-        ctx.ssock.sendall((json.dumps(request) + "\n").encode("utf-8"))
-
-        response_data = b""
-        while True:
-            chunk = ctx.ssock.recv(1024)
-            if not chunk:
-                raise ConnectionError("Connection closed by server")
-            response_data += chunk
-            if b'\n' in response_data:
-                response_line = response_data.split(b'\n', 1)[0]
-                break
-
-        elapsed_time = time.time() - start_time
-        if self.app_debug:
-            print(f"[DEBUG] Electrum request '{method}' took {elapsed_time:.3f}s (network: {ctx.network_key})")
-
-        try:
-            response = json.loads(response_line.decode('utf-8'))
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON response from Electrum server: {e}")
-
-        if "error" in response and response["error"]:
-            raise RuntimeError(f"Electrum error: {response['error']}")
-
-        if "result" not in response:
-            raise ValueError("Unexpected Electrum response format")
-
-        return response["result"]
-
-
-
-    ############################################################
-    # _get_balance
-    ############################################################
-    #
-    # Faucet balance in whole coins (Electrum answers in
-    # satoshis), split into confirmed / unconfirmed / total.
+    # The faucet's balance on one chain, cached for
+    # BALANCE_CACHE_TTL seconds — the frontend polls it every
+    # few seconds per open browser tab, and a classroom of
+    # open tabs would otherwise turn every poll into an
+    # Electrum round trip. request_crypto drops the entry
+    # after a payout, so the next poll shows the new number
+    # immediately.
     #
     # Used by:
     #   - get_faucet_balance / request_crypto (below)
     ############################################################
 
-    def _get_balance(self, ctx: NetworkContext) -> dict:
-        result = self._send_electrum_request(ctx, "blockchain.scripthash.get_balance", [ctx.scripthash])
-        confirmed = result.get("confirmed", 0) / 1e8
-        unconfirmed = result.get("unconfirmed", 0) / 1e8
+    def _faucet_balance(self, ctx: NetworkContext) -> dict:
+        cached = self._balance_cache.get(ctx.network_key)
+        if cached and int(time.time()) - cached[0] < BALANCE_CACHE_TTL:
+            return cached[1]
 
-        return {
-            "confirmed": confirmed,
-            "unconfirmed": unconfirmed,
-            "total": confirmed + unconfirmed
-        }
+        balance_info = ctx.electrum.get_balance(ctx.scripthash)
+        self._balance_cache[ctx.network_key] = (int(time.time()), balance_info)
+        return balance_info
 
 
 
-    ############################################################
-    # _get_utxos
-    ############################################################
-    #
-    # Used by:
-    #   - _create_and_broadcast_transaction (below)
-    ############################################################
-
-    def _get_utxos(self, ctx: NetworkContext) -> list:
-        return self._send_electrum_request(ctx, "blockchain.scripthash.listunspent", [ctx.scripthash])
 
 
 
@@ -435,6 +427,9 @@ class UTXOFaucet:
 
 
 
+
+
+
     ############################################################
     # _create_and_broadcast_transaction
     ############################################################
@@ -453,7 +448,7 @@ class UTXOFaucet:
 
     def _create_and_broadcast_transaction(self, ctx: NetworkContext, to_address: str, amount_sat: int) -> str:
         # STEP 1: what can we spend?
-        utxos = self._get_utxos(ctx)
+        utxos = ctx.electrum.list_unspent(ctx.scripthash)
         if not utxos:
             raise ValueError("No UTXOs available")
 
@@ -514,7 +509,10 @@ class UTXOFaucet:
             tx.vin[i].witness = Witness([der_sig, pub.serialize()])
 
         # STEP 5: broadcast over the same Electrum connection.
-        return self._send_electrum_request(ctx, "blockchain.transaction.broadcast", [tx.serialize().hex()])
+        return ctx.electrum.request("blockchain.transaction.broadcast", [tx.serialize().hex()])
+
+
+
 
 
 
@@ -536,6 +534,9 @@ class UTXOFaucet:
             return False
 
         return address.lower().startswith(ctx.hrp + '1')
+
+
+
 
 
 
@@ -573,6 +574,9 @@ class UTXOFaucet:
 
 
 
+
+
+
     ############################################################
     # get_faucet_balance
     ############################################################
@@ -587,12 +591,9 @@ class UTXOFaucet:
     ############################################################
 
     def get_faucet_balance(self, network_key: str) -> tuple:
-        ctx = None
         try:
             ctx = self._setup_wallet_for_network(network_key)
-
-            self._connect_electrum(ctx)
-            balance_info = self._get_balance(ctx)
+            balance_info = self._faucet_balance(ctx)
 
             return {
                 "balance": balance_info["total"],  # confirmed + unconfirmed
@@ -606,9 +607,8 @@ class UTXOFaucet:
             logging.exception(f"Failed to get UTXO faucet balance for {network_key}")
             return {"error": "Nepavyko gauti čiaupo informacijos"}, 500
 
-        finally:
-            if ctx:
-                self._disconnect_electrum(ctx)
+
+
 
 
 
@@ -627,7 +627,6 @@ class UTXOFaucet:
     ############################################################
 
     def request_crypto(self, network_key: str, to_address: str) -> tuple:
-        ctx = None
         try:
             ctx = self._setup_wallet_for_network(network_key)
 
@@ -661,20 +660,25 @@ class UTXOFaucet:
 
             # STEP 3: does the faucet have the coins? Only confirmed
             # balance counts — unconfirmed change can't be re-spent on
-            # every chain config.
-            self._connect_electrum(ctx)
-
-            balance_info = self._get_balance(ctx)
+            # every chain config. The cached balance is fine here: the
+            # UTXO selection inside the payout checks for real.
+            balance_info = self._faucet_balance(ctx)
             current_balance = balance_info["confirmed"]  # only spend confirmed coins
             if current_balance < ctx.chunk_size_btc:
                 return {"error": "Čiaupas nebeturi kriptovaliutos. Praneškite dėstytojui."}, 503
 
-            # STEP 4: build, sign and broadcast; the cooldown starts
-            # only after a successful broadcast.
+            # STEP 4: build, sign and broadcast — serialized per
+            # network, or two simultaneous claims would select the
+            # same UTXOs and race to double-spend them. The cooldown
+            # starts only after a successful broadcast, and the
+            # cached balance is dropped so the page shows the payout
+            # on its next poll.
             amount_sat = int(float(ctx.chunk_size_btc) * 1e8)
-            tx_id = self._create_and_broadcast_transaction(ctx, to_address, amount_sat)
+            with self._send_locks.setdefault(network_key, threading.Lock()):
+                tx_id = self._create_and_broadcast_transaction(ctx, to_address, amount_sat)
 
             self.last_request[cooldown_key] = now
+            self._balance_cache.pop(network_key, None)
 
             return {
                 "message": "Cryptocurrency sent successfully",
@@ -687,6 +691,9 @@ class UTXOFaucet:
         except Exception as e:
             return {"error": "Nepavyko išsiųsti kriptovaliutą", "details": str(e)}, 500
 
-        finally:
-            if ctx:
-                self._disconnect_electrum(ctx)
+
+
+
+
+
+
