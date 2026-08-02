@@ -240,20 +240,20 @@ UTXO_NETWORK_CONFIGS = {
             'block_explorer': 'https://litecoinspace.org/testnet',
         },
     },
-    'btc3': {
-        'id': 3,
-        'short_name': "tBTC3",
-        'full_name': 'Bitcoin Testnet3',
-        'faucet': {
-            'chunk_size': 0.005,
-            'network': 'testnet',
-            'hrp': 'tb',
-            'electrum_server': '158.129.172.247:51002',
-        },
-        'explorer': {
-            'block_explorer': 'https://mempool.space/testnet',
-        },
-    },
+    # 'btc3': {
+    #     'id': 3,
+    #     'short_name': "tBTC3",
+    #     'full_name': 'Bitcoin Testnet3',
+    #     'faucet': {
+    #         'chunk_size': 0.005,
+    #         'network': 'testnet',
+    #         'hrp': 'tb',
+    #         'electrum_server': '158.129.172.247:51002',
+    #     },
+    #     'explorer': {
+    #         'block_explorer': 'https://mempool.space/testnet',
+    #     },
+    # },
     'btc4': {
         'id': 4,
         'short_name': "tBTC4",
