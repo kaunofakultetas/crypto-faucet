@@ -122,6 +122,26 @@ EVM_NETWORK_CONFIGS = {
 
 
 
+# ERC-20 test tokens, token-first: each token is defined once and
+# lists every chain it is deployed on (network key -> contract
+# address). Network keys must exist in EVM_NETWORK_CONFIGS. Adding
+# a chain to a token = one deployments line; adding a token = one
+# block. Fill in real contract addresses to activate.
+ERC20_TOKEN_CONFIGS = {
+    'LINK': {
+        'name': 'Chainlink',
+        'decimals': 18,
+        'chunk_size': 5,
+        'deployments': {
+            # Official Chainlink token on Sepolia (docs.chain.link)
+            'sepolia': '0x779877A7B0D9E8603169DdbD7836e478b4624789',
+        },
+    },
+}
+
+
+
+
 UTXO_NETWORK_CONFIGS = {
     'knf': {
         'id': 1,
@@ -135,7 +155,7 @@ UTXO_NETWORK_CONFIGS = {
     },
     'ltc4': {
         'id': 2,
-        'chunk_size': 0.1,
+        'chunk_size': 1000,
         'short_name': "tLTC4",
         'full_name': 'Litecoin Testnet4',
         'network': 'testnet',
@@ -218,8 +238,8 @@ if __name__ == '__main__':
     from app.utxo_faucet.utxo_routes import bp_utxo_faucet
     app.register_blueprint(bp_utxo_faucet, url_prefix='')
 
-    # from app.erc20_faucet.erc20_routes import bp_erc20_faucet
-    # app.register_blueprint(bp_erc20_faucet, url_prefix='')
+    from app.erc_faucet.erc20_routes import bp_erc20_faucet
+    app.register_blueprint(bp_erc20_faucet, url_prefix='')
 
     from app.reorg_attack.routes import bp_reorg_attack
     app.register_blueprint(bp_reorg_attack, url_prefix='')
