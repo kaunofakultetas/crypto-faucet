@@ -116,19 +116,16 @@ function rangeOfDay(dayString) {
 // DateSliderBar
 // -----------------------------------------------------------
 //
-// Two centered rows with three ways to pick a day, all over
-// the SAME used-day list:
-//
-//   row 1 — the searchable dropdown (Autocomplete, newest
-//           first) — type a fragment like "07-" to filter
-//   row 2 — the − / + steppers (exactly one used day earlier
-//           / later) around the slider; positions are indices
-//           into `days`, rightmost = newest. The tooltip
-//           previews WHILE dragging, the graph refetches only
-//           on release.
+// ONE compact row with three ways to pick a day, all over the
+// SAME used-day list: the searchable dropdown (Autocomplete,
+// newest first — type a fragment like "07-" to filter), then
+// the − / + steppers (exactly one used day earlier / later)
+// around the slider. Slider positions are indices into
+// `days`, rightmost = newest; the tooltip previews WHILE
+// dragging, the graph refetches only on release.
 //
 // With a single known day there is nothing to step or slide —
-// only the dropdown row renders.
+// the row shrinks to the centered dropdown alone.
 //
 // Used by:
 //   - GraphPage (below)
@@ -150,26 +147,25 @@ function DateSliderBar({ days, selectedDay, onCommit }) {
   const dayText = (day) => (day === todayString() ? `${day} (šiandien)` : day);
 
   return (
-    <Box className="card-surface mx-auto mb-4 w-full max-w-[760px] px-6 py-4">
+    <Box
+      className={`card-surface mx-auto mb-3 flex w-full max-w-[760px] items-center gap-3 px-4 py-2 ${
+        days.length > 1 ? '' : 'justify-center'
+      }`}
+    >
+      <TodayIcon sx={{ color: '#78003F' }} />
+      <Autocomplete
+        size="small"
+        options={[...days].reverse()}
+        value={selectedDay}
+        onChange={(_, value) => value && onCommit(value)}
+        getOptionLabel={dayText}
+        disableClearable
+        sx={{ width: 240 }}
+        renderInput={(params) => <TextField {...params} label="Data" />}
+      />
 
-      {/* Row 1: the searchable day picker, centered */}
-      <Box className="flex items-center justify-center gap-2">
-        <TodayIcon sx={{ color: '#78003F' }} />
-        <Autocomplete
-          size="small"
-          options={[...days].reverse()}
-          value={selectedDay}
-          onChange={(_, value) => value && onCommit(value)}
-          getOptionLabel={dayText}
-          disableClearable
-          sx={{ width: 280 }}
-          renderInput={(params) => <TextField {...params} label="Data" />}
-        />
-      </Box>
-
-      {/* Row 2: steppers + the day slider */}
       {days.length > 1 && (
-        <Box className="mt-4 flex items-center gap-3">
+        <>
           <IconButton
             size="small"
             aria-label="Ankstesnė diena"
@@ -181,6 +177,7 @@ function DateSliderBar({ days, selectedDay, onCommit }) {
           </IconButton>
 
           <Slider
+            size="small"
             value={shownIndex}
             min={0}
             max={days.length - 1}
@@ -204,7 +201,7 @@ function DateSliderBar({ days, selectedDay, onCommit }) {
           >
             <AddIcon fontSize="small" />
           </IconButton>
-        </Box>
+        </>
       )}
     </Box>
   );

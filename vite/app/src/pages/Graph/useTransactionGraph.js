@@ -33,6 +33,7 @@
 // -----------------------------------------------------------
 
 import { useEffect, useRef, useState } from 'react';
+import axios from 'axios';
 import { Network } from 'vis-network';
 import { DataSet } from 'vis-data';
 
@@ -165,17 +166,12 @@ export default function useTransactionGraph({ faucetAddress, network, dateRange,
   // history that day (or a failed request) just yields []
   const fetchTransactions = async (address) => {
     try {
-      const response = await fetch(
-        `/api/evm/${network}/get-stored-transactions`
-        + `?address=${address}&from=${dateRange.from}&to=${dateRange.to}`
-      );
-      if (!response.ok) {
-        throw new Error('Failed to fetch transactions');
-      }
-      const data = await response.json();
+      const { data } = await axios.get(`/api/evm/${network}/get-stored-transactions`, {
+        params: { address, from: dateRange.from, to: dateRange.to },
+      });
       return data.transactions;
     } catch (err) {
-      console.error('Error fetching data:', err);
+      console.error('Error fetching transactions:', err);
       return [];
     }
   };
