@@ -112,11 +112,11 @@ function LoadingSkeleton() {
         <Skeleton variant="text" height={20} width="90%" />
       </div>
 
-      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
+      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4">
         <Skeleton variant="rectangular" height={60} />
       </div>
 
-      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
+      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4">
         <Stack spacing={2}>
           <Skeleton variant="text" height={28} />
           <Skeleton variant="text" height={28} />
@@ -125,7 +125,7 @@ function LoadingSkeleton() {
         </Stack>
       </div>
 
-      <div className="card-surface mx-auto mb-5 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
+      <div className="card-surface mx-auto mb-5 w-full min-w-[320px] max-w-[640px] p-4">
         <Stack direction="row" spacing={2} alignItems="center">
           <Box sx={{ flex: 1 }}>
             <Skeleton variant="text" height={24} width="50%" />
@@ -178,17 +178,17 @@ export default function FaucetEVM() {
     try {
       const { nonce, signature } = await wallet.signMessage();
 
-      const params = new URLSearchParams({ address: wallet.account, signature, nonce });
-      const res = await fetch(`/api/evm/${network}/request?${params.toString()}`, {
-        headers: { Accept: 'application/json' },
+      await axios.get(`/api/evm/${network}/request`, {
+        params: { address: wallet.account, signature, nonce },
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `Nepavyko išsiųsti ${network} ETH`);
 
       addAlert('success', `${networkInfo.full_name} išsiųstas į jūsų piniginę.`);
       queryClient.invalidateQueries({ queryKey: ['evm-faucet-balance', network] });
     } catch (e) {
-      addAlert('error', e.message || 'Nepavyko išsiųsti kriptovaliutos.');
+      // Backend refusals arrive as { error } in the response
+      // body; wallet errors (sign refused, not connected) only
+      // carry a message
+      addAlert('error', e.response?.data?.error || e.message || 'Nepavyko išsiųsti kriptovaliutos.');
     } finally {
       setClaiming(false);
     }
@@ -223,7 +223,7 @@ export default function FaucetEVM() {
       </div>
 
       {/* The four-step MetaMask flow */}
-      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
+      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4">
         <MetamaskStepper
           activeStep={wallet.step}
           steps={[
@@ -236,7 +236,7 @@ export default function FaucetEVM() {
       </div>
 
       {/* Balances, the claim button and its outcome alerts */}
-      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
+      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4">
 
         <div className="my-2 flex">
           <span className="flex-1">Jūsų Metamask balansas:</span>
@@ -284,7 +284,7 @@ export default function FaucetEVM() {
       </div>
 
       {/* Return address + the transaction graph shortcut */}
-      <div className="card-surface mx-auto mb-5 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
+      <div className="card-surface mx-auto mb-5 w-full min-w-[320px] max-w-[640px] p-4">
         <div className="my-2 flex items-start gap-4">
           <span className="flex-1">
             Grąžinkite nebereikalingą <u><b>{networkInfo.short_name}</b></u> krypto atgal:

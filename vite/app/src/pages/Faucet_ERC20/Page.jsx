@@ -202,7 +202,7 @@ function AddressRow({ value }) {
 
 function GasNoticeCard({ gasless }) {
   return (
-    <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] border-l-4 border-amber-500 p-4 shadow-card">
+    <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] border-l-4 border-amber-500 p-4">
       <div className="flex items-start gap-3">
         <LocalGasStationIcon sx={{ color: '#b45309' }} />
 
@@ -266,7 +266,7 @@ function GasNoticeCard({ gasless }) {
 
 function ChainCard({ deployment, token, isCurrentChain, walletReady, needsGas, busy, alerts, onClaim, onShowInMetamask }) {
   return (
-    <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
+    <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4">
 
       <div className="mb-3 flex items-center gap-2">
         <AssetIcon assetKey={deployment.network} icon={deployment.icon} size={18} />
@@ -349,7 +349,7 @@ function ChainCard({ deployment, token, isCurrentChain, walletReady, needsGas, b
 
 function ReturnAddressCard({ address, symbol }) {
   return (
-    <div className="card-surface mx-auto mb-5 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
+    <div className="card-surface mx-auto mb-5 w-full min-w-[320px] max-w-[640px] p-4">
       <div className="my-2 flex items-start gap-4">
         <span className="flex-1">
           Grąžinkite nebereikalingus <u><b>{symbol}</b></u> žetonus atgal:
@@ -387,11 +387,11 @@ function LoadingSkeleton() {
         <Skeleton variant="text" height={20} width="90%" />
       </div>
 
-      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
+      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4">
         <Skeleton variant="rectangular" height={60} />
       </div>
 
-      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
+      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4">
         <Stack spacing={2}>
           <Skeleton variant="text" height={28} width="50%" />
           <Skeleton variant="text" height={28} />
@@ -403,7 +403,7 @@ function LoadingSkeleton() {
         </Stack>
       </div>
 
-      <div className="card-surface mx-auto mb-5 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
+      <div className="card-surface mx-auto mb-5 w-full min-w-[320px] max-w-[640px] p-4">
         <Stack direction="row" spacing={2} alignItems="center">
           <Box sx={{ flex: 1 }}>
             <Skeleton variant="text" height={24} width="50%" />
@@ -467,12 +467,9 @@ export default function FaucetERC20() {
     try {
       const { nonce, signature } = await wallet.signMessage();
 
-      const params = new URLSearchParams({ address: wallet.account, signature, nonce });
-      const res = await fetch(`/api/erc20/${deployment.network}/${symbol}/request?${params.toString()}`, {
-        headers: { Accept: 'application/json' },
+      await axios.get(`/api/erc20/${deployment.network}/${symbol}/request`, {
+        params: { address: wallet.account, signature, nonce },
       });
-      const payload = await res.json();
-      if (!res.ok) throw new Error(payload.error || `Nepavyko išsiųsti ${symbol}`);
 
       addAlert(
         'success',
@@ -481,7 +478,10 @@ export default function FaucetERC20() {
       );
       reload();
     } catch (e) {
-      addAlert('error', e.message || 'Nepavyko išsiųsti žetonų.', deployment.network);
+      // Backend refusals arrive as { error } in the response
+      // body; wallet errors (sign refused, not connected) only
+      // carry a message
+      addAlert('error', e.response?.data?.error || e.message || 'Nepavyko išsiųsti žetonų.', deployment.network);
     } finally {
       setBusy(null);
     }
@@ -522,7 +522,7 @@ export default function FaucetERC20() {
   if (error) {
     return (
       <Box className="p-4">
-        <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
+        <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4">
           <p className="text-center text-red-600">{error}</p>
         </div>
       </Box>
@@ -597,7 +597,7 @@ export default function FaucetERC20() {
           token's chains completes the network step. Gate
           errors and the connected-wallet line live here, with
           the gate. */}
-      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
+      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4">
         <MetamaskStepper
           activeStep={activeStep}
           steps={[
@@ -647,7 +647,7 @@ export default function FaucetERC20() {
           native balance (RPC unreachable) fails OPEN — the
           backend still enforces the gas rule. */}
       {deployments.length === 0 ? (
-        <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
+        <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4">
           <p className="text-sm text-gray-700">
             Šis žetonas kol kas nėra įdiegtas jokiame tinkle.
           </p>
