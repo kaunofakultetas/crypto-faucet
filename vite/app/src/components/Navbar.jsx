@@ -81,6 +81,23 @@ const WHITE_OUTLINED_SX = {
 
 const FAUCET_TYPES = [
   {
+    key: 'utxo',
+    label: 'UTXO',
+    pickLabel: 'Pasirinkti tinklą',
+    api: '/api/utxo/networks',
+    queryKey: ['utxo-networks'],
+    fallback: 'btc4',
+    defaultOf: (data) => data.default_network ?? null,
+    itemsOf: (data) => Object.entries(data.networks ?? {})
+      .sort(([, a], [, b]) => (a.id ?? 0) - (b.id ?? 0))
+      .map(([key, network]) => ({
+        key,
+        primary: network.full_name || key,
+        secondary: `Tinklas: ${network.chain ?? 'testnet'}`,
+        icon: network.icon ?? null,
+      })),
+  },
+  {
     key: 'evm',
     label: 'EVM',
     pickLabel: 'Pasirinkti tinklą',
@@ -111,23 +128,6 @@ const FAUCET_TYPES = [
         primary: `${token.name} (${token.symbol})`,
         secondary: `${token.chunk_size} ${token.symbol} · ${token.networks.length} tinkl.`,
         icon: token.icon ?? null,
-      })),
-  },
-  {
-    key: 'utxo',
-    label: 'UTXO',
-    pickLabel: 'Pasirinkti tinklą',
-    api: '/api/utxo/networks',
-    queryKey: ['utxo-networks'],
-    fallback: 'btc4',
-    defaultOf: (data) => data.default_network ?? null,
-    itemsOf: (data) => Object.entries(data.networks ?? {})
-      .sort(([, a], [, b]) => (a.id ?? 0) - (b.id ?? 0))
-      .map(([key, network]) => ({
-        key,
-        primary: network.full_name || key,
-        secondary: `Tinklas: ${network.chain ?? 'testnet'}`,
-        icon: network.icon ?? null,
       })),
   },
 ];
