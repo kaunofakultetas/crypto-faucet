@@ -1,21 +1,20 @@
 ############################################################
-#  [*] Faucet Backend — entrypoint & configuration
+#  [*] Faucet Backend — entrypoint & configuration loading
 #
-#  The Flask app plus the THREE config maps that drive every
-#  faucet: EVM networks, ERC-20 tokens and UTXO networks.
-#  All three are validated against app/config_models.py right
-#  after their definitions — a misspelled key, a malformed
-#  contract address or a token on an unknown network kills
-#  the boot with a precise error instead of becoming a silent
-#  runtime fallback.
-#
-#  Each network entry is sectioned by WHO consumes the
-#  settings (top-level identity, then 'faucet' / 'metamask' /
-#  'explorer') — the banner above each map spells its
-#  sections out.
+#  The Flask app plus the LOADER for the three config maps
+#  that drive every faucet (EVM networks, ERC-20 tokens,
+#  UTXO networks). The maps themselves live OUTSIDE the
+#  image, in the mounted config directory (_CONFIG/coins.py
+#  on the host → /config/coins.py in the container), so an
+#  operator edits coins live and restarts the backend —
+#  never rebuilds the stack. All three are validated against
+#  app/config_models.py right after loading — a misspelled
+#  key, a malformed contract address or a token on an
+#  unknown network kills the boot with a precise error
+#  instead of becoming a silent runtime fallback.
 #
 #  Run directly (python main.py) this file wires the
-#  database, the four blueprints and the dev server. The
+#  database, the five blueprints and the dev server. The
 #  route modules import THIS module back for their config
 #  maps — that is why the blueprint imports sit inside
 #  __main__: by the time they run, main is fully defined and
@@ -25,12 +24,16 @@
 #    - app/evm_faucet/evm_routes.py — EVM_NETWORK_CONFIGS
 #    - app/erc_faucet/erc20_routes.py — ERC20_TOKEN_CONFIGS
 #    - app/utxo_faucet/utxo_routes.py — UTXO_NETWORK_CONFIGS
+#    - app/icons.py — CONFIG_DIR (the icons live beside coins.py)
 #    - tests/ — config invariants + schema tests import main
 #    - Dockerfile — CMD ["python3", "-u", "main.py"]
 ############################################################
 
 
 import os
+import sys
+import importlib.util
+
 from flask import Flask, Response
 
 from app.database.db import get_db_connection
@@ -44,334 +47,62 @@ app = Flask(__name__)
 
 
 
-
-
-
-
 ############################################################
-# EVM_NETWORK_CONFIGS
+# CONFIG_DIR
 ############################################################
 #
-# EVM networks, one entry per chain, split by WHO consumes
-# the settings:
-#
-#   (top level)  — identity every part of the app shares:
-#                  id (picker order), chain_id
-#   'faucet'     — the faucet itself, backend AND pages: the
-#                  names the UI displays, the backend's own
-#                  RPC connection and the payout size.
-#                  <NAME> inside rpc_url is replaced with the
-#                  environment variable of that name at
-#                  startup (so the Infura key never sits in
-#                  this file)
-#   'metamask'   — what wallet_addEthereumChain hands the
-#                  student's wallet; public endpoints only.
-#                  chain_name is the network name MetaMask
-#                  STORES — students keep seeing it in their
-#                  wallet's network list
-#   'explorer'   — the /graph transaction-flow scraper; omit
-#                  the whole section if the chain has no
-#                  Etherscan-style API
+# Where the operator's mounted configuration lives: coins.py
+# and the icons/ folder. Resolution order — an explicit
+# CONFIG_DIR env var, the docker mount (/config, from the
+# compose line ./_CONFIG:/config), then the repo's _CONFIG/
+# for runs straight from a checkout (tests, local dev
+# without docker).
 #
 # Used by:
-#   - app/evm_faucet/evm_routes.py — EVMFaucet and
-#     EtherscanExplorer are built from this map
-#   - app/erc_faucet/erc20_faucet.py — indirectly, through
-#     the shared EVMFaucet instance
+#   - the coins.py loader (below)
+#   - app/icons.py — ICONS_DIR = CONFIG_DIR/icons
 ############################################################
 
-EVM_NETWORK_CONFIGS = {
-    'sepolia': {
-        'id': 1,
-        'chain_id': 11155111,
-        'faucet': {
-            'short_name': "SepETH",
-            'full_name': 'Sepolia',
-            'rpc_url': 'https://sepolia.infura.io/v3/<INFURA_PROJECT_ID>',
-            'chunk_size': 0.2,
-        },
-        'metamask': {
-            'chain_name': 'Sepolia',
-            'native_currency': {
-                'name': 'Ethereum',
-                'symbol': 'SepETH',
-                'decimals': 18
-            },
-            'rpc_urls': ['https://rpc.sepolia.org'],
-            'block_explorer_urls': ['https://sepolia.etherscan.io'],
-        },
-        'explorer': {
-            'etherscan_api_url': 'https://api.etherscan.io/v2/api',
-        },
-    },
-    'zkSyncSepolia': {
-        'id': 3,
-        'chain_id': 300,
-        'faucet': {
-            'short_name': "ETH",
-            'full_name': 'zkSync Sepolia Testnet',
-            'rpc_url': 'https://zksync-sepolia.infura.io/v3/<INFURA_PROJECT_ID>',
-            'chunk_size': 0.05,
-        },
-        'metamask': {
-            'chain_name': 'zkSync Sepolia Testnet',
-            'native_currency': {
-                'name': 'Ethereum',
-                'symbol': 'ETH',
-                'decimals': 18
-            },
-            'rpc_urls': ['https://sepolia.era.zksync.dev'],
-            'block_explorer_urls': ['https://block-explorer-api.sepolia.zksync.dev'],
-        },
-        'explorer': {
-            'etherscan_api_url': 'https://block-explorer-api.sepolia.zksync.dev/api',
-        },
-    },
-    'polygonZkEvm': {
-        'id': 4,
-        'chain_id': 2442,
-        'faucet': {
-            'short_name': "ETH",
-            'full_name': 'Polygon zkEVM Cardona Testnet',
-            'rpc_url': 'https://rpc.cardona.zkevm-rpc.com',
-            'chunk_size': 0.05,
-        },
-        'metamask': {
-            'chain_name': 'Polygon zkEVM Cardona Testnet',
-            'native_currency': {
-                'name': 'Ethereum',
-                'symbol': 'ETH',
-                'decimals': 18
-            },
-            'rpc_urls': ['https://rpc.cardona.zkevm-rpc.com'],
-            'block_explorer_urls': ['https://explorer-ui.cardona.zkevm-rpc.com'],
-        },
-        'explorer': {
-            'etherscan_api_url': 'https://api-cardona-zkevm.polygonscan.com/api',
-        },
-    },
-    'lineaSepolia': {
-        'id': 5,
-        'chain_id': 59141,
-        'faucet': {
-            'short_name': "ETH",
-            'full_name': 'Linea Sepolia',
-            'rpc_url': 'https://linea-sepolia.infura.io/v3/<INFURA_PROJECT_ID>',
-            'chunk_size': 0.05,
-        },
-        'metamask': {
-            'chain_name': 'Linea Sepolia',
-            'native_currency': {
-                'name': 'LineaETH',
-                'symbol': 'LineaETH',
-                'decimals': 18
-            },
-            'rpc_urls': ['https://linea-sepolia-rpc.publicnode.com'],
-            'block_explorer_urls': ['https://explorer.linea.build'],
-        },
-        'explorer': {
-            'etherscan_api_url': 'https://api-explorer.sepolia.linea.build/api',
-        },
-    },
-    "hoodi": {
-        'id': 6,
-        'chain_id': 560048,
-        'faucet': {
-            'short_name': "ETH",
-            'full_name': 'Ethereum Hoodi',
-            'rpc_url': 'https://rpc.hoodi.ethpandaops.io',
-            'chunk_size': 0.05,
-        },
-        'metamask': {
-            'chain_name': 'Ethereum Hoodi',
-            'native_currency': {
-                'name': 'Ethereum',
-                'symbol': 'ETH',
-                'decimals': 18
-            },
-            'rpc_urls': ['https://rpc.hoodi.ethpandaops.io'],
-            'block_explorer_urls': ['https://light-hoodi.beaconcha.in'],
-        },
-        'explorer': {
-            'etherscan_api_url': 'https://api.etherscan.io/v2/api',
-        },
-    },
-    "arbitrumSepolia": {
-        'id': 7,
-        'chain_id': 421614,
-        'faucet': {
-            'short_name': "ETH",
-            'full_name': 'Arbitrum Sepolia',
-            'rpc_url': 'https://arbitrum-sepolia.infura.io/v3/<INFURA_PROJECT_ID>',
-            'chunk_size': 0.05,
-        },
-        'metamask': {
-            'chain_name': 'Arbitrum Sepolia',
-            'native_currency': {
-                'name': 'Ethereum',
-                'symbol': 'ETH',
-                'decimals': 18
-            },
-            'rpc_urls': ['https://sepolia.arbitrum.io/rpc'],
-        },
-        # no 'explorer' — Arbitrum Sepolia has no API configured,
-        # so the /graph feature is off for this chain
-    }
-}
+_REPO_CONFIG_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '_CONFIG')
+)
 
-
-
-
+CONFIG_DIR = os.getenv('CONFIG_DIR') or (
+    '/config' if os.path.isdir('/config') else _REPO_CONFIG_DIR
+)
 
 
 
 
 ############################################################
-# ERC20_TOKEN_CONFIGS
+# Coins configuration — loaded from CONFIG_DIR/coins.py
 ############################################################
 #
-# ERC-20 test tokens, token-first: each token is defined once
-# and lists every chain it is deployed on (network key ->
-# contract address). Network keys must exist in
-# EVM_NETWORK_CONFIGS — validation refuses unknown ones.
-# Adding a chain to a token = one deployments line; adding a
-# token = one block.
+# The three maps are loaded from the MOUNTED file and
+# validated before anything uses them; what the rest of the
+# app imports from main are the validated, normalized maps —
+# same names as before the move, so no consumer changed.
 #
-# Used by:
-#   - app/erc_faucet/erc20_routes.py — builds the ERC20Faucet
+# The loaded module is registered in sys.modules so the
+# Werkzeug dev reloader watches coins.py like any backend
+# file — in dev mode, saving it restarts Flask by itself. In
+# production a config edit takes one
+# `docker restart faucet-backend`.
 ############################################################
 
-ERC20_TOKEN_CONFIGS = {
-    'LINK': {
-        'name': 'Chainlink',
-        'decimals': 18,
-        'chunk_size': 5,
-        'deployments': {
-            # Official Chainlink token on Sepolia (docs.chain.link)
-            'sepolia': '0x779877A7B0D9E8603169DdbD7836e478b4624789',
-        },
-    },
-}
+def _load_coins_module():
+    path = os.path.join(CONFIG_DIR, 'coins.py')
+    spec = importlib.util.spec_from_file_location('coins_config', path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules['coins_config'] = module
+    spec.loader.exec_module(module)
+    return module
 
 
-
-
-
-
-
-
-############################################################
-# UTXO_NETWORK_CONFIGS
-############################################################
-#
-# UTXO networks, same sectioning idea as the EVM config:
-#
-#   (top level)  — identity: id (picker order), names
-#   'faucet'     — what the BACKEND payout machinery uses:
-#                  payout size, mainnet/testnet flavour, the
-#                  bech32 HRP addresses are built with, and
-#                  the ElectrumX endpoint (host:port, SSL)
-#   'explorer'   — where the UI links a transaction / address
-#
-# Used by:
-#   - app/utxo_faucet/utxo_routes.py — builds the UTXOFaucet
-############################################################
-
-UTXO_NETWORK_CONFIGS = {
-    'knf': {
-        'id': 1,
-        'short_name': "KNF",
-        'full_name': 'KNF Coin',
-        'faucet': {
-            'chunk_size': 1000,
-            'network': 'mainnet',
-            'hrp': 'knf',
-            'electrum_server': '158.129.172.247:49002',
-        },
-        'explorer': {
-            'block_explorer': 'https://knfcoin.knf.vu.lt/explorer',
-        },
-    },
-    'ltc4': {
-        'id': 2,
-        'short_name': "tLTC4",
-        'full_name': 'Litecoin Testnet4',
-        'faucet': {
-            'chunk_size': 1000,
-            'network': 'testnet',
-            'hrp': 'tltc',
-            'electrum_server': '158.129.172.247:50002',
-        },
-        'explorer': {
-            'block_explorer': 'https://litecoinspace.org/testnet',
-        },
-    },
-    # 'btc3': {
-    #     'id': 3,
-    #     'short_name': "tBTC3",
-    #     'full_name': 'Bitcoin Testnet3',
-    #     'faucet': {
-    #         'chunk_size': 0.005,
-    #         'network': 'testnet',
-    #         'hrp': 'tb',
-    #         'electrum_server': '158.129.172.247:51002',
-    #     },
-    #     'explorer': {
-    #         'block_explorer': 'https://mempool.space/testnet',
-    #     },
-    # },
-    'btc4': {
-        'id': 4,
-        'short_name': "tBTC4",
-        'full_name': 'Bitcoin Testnet4',
-        'faucet': {
-            'chunk_size': 0.01,
-            'network': 'testnet',
-            'hrp': 'tb',
-            'electrum_server': '158.129.172.247:52002',
-        },
-        'explorer': {
-            'block_explorer': 'https://mempool.space/testnet4',
-        },
-    },
-    # 'doge3': {
-    #     'id': 5,
-    #     'short_name': "tDOGE3",
-    #     'full_name': 'Dogecoin Testnet3',
-    #     'faucet': {
-    #         'chunk_size': 0.01,
-    #         'network': 'testnet',
-    #         'hrp': 'doge',
-    #         'electrum_server': '158.129.172.247:53002',
-    #     },
-    #     'explorer': {
-    #         'block_explorer': 'https://mempool.space/testnet3',
-    #     },
-    # }
-}
-
-
-
-
-
-
-
-
-############################################################
-# Config validation
-############################################################
-#
-# The three maps above are VALIDATED before anything uses
-# them — a misspelled key, a malformed contract address or a
-# token on an unknown network kills the boot with a precise
-# error instead of becoming a silent runtime fallback. What
-# comes back is the same maps, normalized (optional sections
-# dropped instead of None). The enforced schema lives in
-# app/config_models.py.
-############################################################
+_coins = _load_coins_module()
 
 EVM_NETWORK_CONFIGS, ERC20_TOKEN_CONFIGS, UTXO_NETWORK_CONFIGS = validate_configs(
-    EVM_NETWORK_CONFIGS, ERC20_TOKEN_CONFIGS, UTXO_NETWORK_CONFIGS,
+    _coins.EVM_NETWORK_CONFIGS, _coins.ERC20_TOKEN_CONFIGS, _coins.UTXO_NETWORK_CONFIGS,
 )
 
 
@@ -427,7 +158,7 @@ def get_example_blockchain():
 ############################################################
 #
 # Wires the whole backend when run directly: the database
-# schema, the four feature blueprints, then the dev server.
+# schema, the five feature blueprints, then the dev server.
 # The blueprint imports are deliberately DEFERRED to down
 # here — the route modules import main back for their config
 # maps, and at this point main is fully defined, so the
@@ -459,6 +190,9 @@ if __name__ == '__main__':
 
     from app.reorg_attack.routes import bp_reorg_attack
     app.register_blueprint(bp_reorg_attack, url_prefix='')
+
+    from app.icons import bp_icons
+    app.register_blueprint(bp_icons, url_prefix='')
 
 
     # STEP 3: the dev server. Debug mode means hot reload AND

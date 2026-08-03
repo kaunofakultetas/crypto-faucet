@@ -48,6 +48,7 @@ from eth_account import Account
 from eth_account.messages import encode_defunct
 
 from ..cooldown import CooldownTable
+from ..icons import icon_url
 
 # web3 v7 renamed this middleware — accept either name so an
 # image upgrade doesn't break payouts
@@ -512,6 +513,8 @@ class EVMFaucet:
     # which network to preselect. Deliberately COMPOSED, not a
     # raw config dump: the backend-only sections (faucet RPC
     # template, explorer API) stay out of the public payload.
+    # icon is the /api/icons/... URL when an icon file exists
+    # in the mounted config dir, else None (see app/icons.py).
     #
     # Used by:
     #   - evm_routes.py — GET /api/evm/networks
@@ -530,6 +533,7 @@ class EVMFaucet:
                 # separately — editing one never changes the other
                 'short_name': faucet.get('short_name', ''),
                 'full_name': faucet.get('full_name', key),
+                'icon': icon_url('evm', key),
                 'chain_name': metamask.get('chain_name', faucet.get('full_name', key)),
                 'native_currency': metamask.get('native_currency'),
                 'rpc_urls': metamask.get('rpc_urls', []),

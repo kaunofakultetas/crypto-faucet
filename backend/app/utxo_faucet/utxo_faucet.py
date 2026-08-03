@@ -57,6 +57,7 @@ from embit.transaction import Transaction, TransactionInput, TransactionOutput, 
 
 from .electrum_client import ElectrumClient
 from ..cooldown import CooldownTable
+from ..icons import icon_url
 
 
 # Outputs below this value (in satoshis) are considered dust and
@@ -577,6 +578,7 @@ class UTXOFaucet:
                 'id': config.get('id', 0),
                 'short_name': config.get('short_name', 'BTC'),
                 'full_name': config.get('full_name', key),
+                'icon': icon_url('utxo', key),
                 'chain_id': 0,  # not applicable for UTXO chains
                 'chain': faucet_config.get('network', 'testnet'),
                 'chunk_size': float(faucet_config.get('chunk_size')) if faucet_config.get('chunk_size') is not None else float(self.default_amount_btc),

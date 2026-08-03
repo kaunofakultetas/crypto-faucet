@@ -40,6 +40,7 @@ import threading
 
 from .token_contracts import get_erc20_contract
 from ..cooldown import CooldownTable
+from ..icons import icon_url
 
 
 
@@ -260,6 +261,7 @@ class ERC20Faucet:
             tokens[symbol] = {
                 'symbol': symbol,
                 'name': config.get('name', symbol),
+                'icon': icon_url('erc20', symbol),
                 'decimals': config['decimals'],
                 'chunk_size': float(config['chunk_size']),
                 'networks': networks,
@@ -323,6 +325,7 @@ class ERC20Faucet:
                 'network': network,
                 'full_name': faucet_config.get('full_name', network),
                 'short_name': faucet_config.get('short_name', ''),
+                'icon': icon_url('evm', network),
                 'chain_name': metamask_config.get('chain_name', faucet_config.get('full_name', network)),
                 'chain_id': network_config.get('chain_id'),
                 'native_currency': metamask_config.get('native_currency'),
@@ -340,6 +343,7 @@ class ERC20Faucet:
             'token': {
                 'symbol': token_symbol,
                 'name': config.get('name', token_symbol),
+                'icon': icon_url('erc20', token_symbol),
                 'decimals': config['decimals'],
                 'chunk_size': float(config['chunk_size']),
             },
