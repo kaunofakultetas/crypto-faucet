@@ -1,9 +1,12 @@
 services:
 
+  # ------------------------------------------------------------
+  #              Incoming/outgoing traffic endpoints
+  # ------------------------------------------------------------
   faucet-endpoint:
     container_name: faucet-endpoint
     image: caddy:2.11-alpine
-    # user: 1000:1000
+    user: 1000:1000
     read_only: true
     environment:
       ############################ SISTEMOS PASSWORD #######################
@@ -16,17 +19,112 @@ services:
       - 80:80
     restart: unless-stopped
 
+  # ------------------------------------------------------------
+  # ------------------------------------------------------------
+  # ------------------------------------------------------------
 
 
+
+
+
+
+
+  # ------------------------------------------------------------
+  #                        Students gate
+  # ------------------------------------------------------------
   faucet-login:
     container_name: faucet-login
     image: vuknf/simple-login-page:20260401
     environment:
       VITE_SYSTEM_NAME: "KNF Testnet<br/>Kriptovaliutų Faucet'as"
     restart: unless-stopped
+  # ------------------------------------------------------------
+  # ------------------------------------------------------------
+  # ------------------------------------------------------------
 
 
 
+
+
+
+
+
+
+
+
+  # ------------------------------------------------------------
+  #                    Crypto Faucet Services
+  # ------------------------------------------------------------
+  faucet-vite:
+    container_name: faucet-vite
+
+    # Docker hub
+    image: vuknf/faucet-vite:latest
+
+    # # Self-built
+    # image: faucet-vite
+    # build:
+    #   context: ./vite
+    #   # dockerfile: Dockerfile                                                         # Prod
+    #   dockerfile: Dockerfile.dev                                                     # Dev
+
+    user: 1000:1000
+    read_only: true
+    # tmpfs:                                                                           # Dev
+    #   - /home/node/.npm:uid=1000,gid=1000                                            # Dev
+    # volumes:                                                                         # Dev
+    #   - ./vite/app:/app                                                              # Dev
+    restart: unless-stopped
+
+
+  faucet-backend:
+    container_name: faucet-backend
+    
+    # Docker hub
+    image: vuknf/faucet-backend:latest
+    
+    # # Self-built
+    # image: faucet-backend
+    # build: ./backend
+    
+    user: 1000:1000
+    environment:
+      # App Configuration
+      # - APP_DEBUG=True                                                               # Dev
+      - DB_PATH=/data/database.db
+
+      # Faucet Configs:
+      - INFURA_PROJECT_ID=${INFURA_PROJECT_ID}
+      - ETHERSCAN_API_KEY=${ETHERSCAN_API_KEY}
+      - FAUCET_PRIVATE_KEY=${FAUCET_PRIVATE_KEY}
+    tmpfs:
+      - /.bitcoinlib:uid=1000,gid=1000
+    volumes:
+      # Configuration
+      - /etc/localtime:/etc/localtime:ro
+      - ./_CONFIG:/config:ro
+
+      # Backend Database
+      - ./_DATA/backend:/data
+
+      # Backend Source Code
+      # - ./backend:/app                                                               # Dev
+    restart: unless-stopped
+  # ------------------------------------------------------------
+  # ------------------------------------------------------------
+  # ------------------------------------------------------------
+
+
+
+
+
+
+
+
+  
+  # ------------------------------------------------------------
+  #                   Crypto Faucet Notes
+  # ------------------------------------------------------------
   faucet-etherpad:
     container_name: faucet-etherpad
     image: etherpad/etherpad:2.2.7
@@ -37,93 +135,28 @@ services:
     volumes:
       - ./_DATA/etherpad:/opt/etherpad-lite/var
     restart: unless-stopped
-    
-
-
-  faucet-backend:
-    container_name: faucet-backend
-    image: faucet-backend
-    build: ./backend
-    user: 1000:1000
-    environment:
-      # App Configuration
-      - APP_DEBUG=True                                                               # Dev
-      - DB_PATH=/data/database.db
-
-      # Faucet Configs:
-      - FAUCET_DEFAULT_NETWORK=sepolia
-
-      # Register and get from https://infura.io
-      - INFURA_PROJECT_ID=...
-
-      # Register and get from https://etherscan.io
-      - ETHERSCAN_API_KEY=...
-
-      # Private key for faucet (CHANGE THIS TO RANDOM SHA256 HASH)
-      - FAUCET_PRIVATE_KEY=52bd6e1cf039fde0c2bb3feafa7118be495952a1445a3eb3e050d1ca61a2e671
-
-    tmpfs:
-      - /.bitcoinlib:uid=1000,gid=1000
-    volumes:
-      # Configuration
-      - /etc/localtime:/etc/localtime:ro
-
-      # Backend Database
-      - ./_DATA/backend:/data
-
-      # Backend Source Code
-      - ./backend:/app
-    restart: unless-stopped
-
-
-
-  faucet-vite:
-    container_name: faucet-vite
-    image: faucet-vite
-    build:
-      context: ./vite
-      dockerfile: Dockerfile                                                         # Prod
-      # dockerfile: Dockerfile.dev                                                     # Dev
-    user: 1000:1000
-    read_only: true
-    # tmpfs:                                                                           # Dev
-    #   - /home/node/.npm:uid=1000,gid=1000                                            # Dev
-    # volumes:                                                                         # Dev
-    #   - ./vite/app:/app                                                              # Dev
-    restart: unless-stopped
-
-
-  # # OPTIONAL: Database GUI
-  # faucet-dbgate:
-  #   container_name: faucet-dbgate
-  #   image: dbgate/dbgate:7.1.4
-  #   environment:
-  #     WEB_ROOT: /dbgate
-
-  #     LOGINS: admin
-  #     LOGIN_PASSWORD_admin: FAUCET_ADMIN_PASSWORD
-
-  #     CONNECTIONS: con4
-  #     LABEL_con4: KNF Faucet DB
-  #     FILE_con4: /root/db.sqlite3
-  #     ENGINE_con4: sqlite@dbgate-plugin-sqlite
-  #   read_only: false
-  #   volumes:
-  #     - ./backend/transactions.db:/root/db.sqlite3
-  #   restart: unless-stopped
+  # ------------------------------------------------------------
+  # ------------------------------------------------------------
+  # ------------------------------------------------------------
 
 
 
 
 
 
-  #####################################
-  ############ DAPPS SERVER ###########
-  #####################################
+
+
+
+
+
+
+  # ------------------------------------------------------------
+  #                           Dapps services
+  # ------------------------------------------------------------
   faucet-dapps-filebrowser:
     container_name: faucet-dapps-filebrowser
     image: vuknf/filebrowser-noauth:latest
-    # user: 1000:1000
+    user: 1000:1000
     read_only: false
     volumes:
       # Filebrowser Configuration
@@ -137,7 +170,7 @@ services:
   faucet-dapps-caddy:
     container_name: faucet-dapps-caddy
     image: caddy:2.11-alpine
-    # user: 1000:1000
+    user: 1000:1000
     read_only: true
     volumes:
       # Caddy Configuration
@@ -146,9 +179,9 @@ services:
       # Dapps Root Directory
       - ./_DATA/dapps:/srv:ro
     restart: unless-stopped
-  #####################################
-  #####################################
-  #####################################
+  # ------------------------------------------------------------
+  # ------------------------------------------------------------
+  # ------------------------------------------------------------
 
 
 
@@ -156,107 +189,32 @@ services:
 
 
 
-  #####################################
-  ############# FULLNODES #############
-  #####################################
-  faucet-knfcoind-public:
-    container_name: faucet-knfcoind-public
-    image: vuknf/knfcoin-fullnode:20251014
-    volumes:
-      - ./_DATA/fullnodes/public:/root/.litecoin
-    command:
-      [
-        "knfcoind",
-        "-server=1",
-        "-txindex=1",
-        "-rpcuser=admin",
-        "-rpcpassword=admin",
-        "-rpcallowip=172.0.0.0/8",
-        "-rpcport=19332",
-        "-rpcbind=0.0.0.0",
-        "-dbcache=512",
-        "-checkblocks=6",
-        "-dnsseed=0"
-      ]
-    restart: unless-stopped
-
-
-  faucet-knfcoind-private:
-    container_name: faucet-knfcoind-private
-    image: vuknf/knfcoin-fullnode:20251014
-    volumes:
-      - ./_DATA/fullnodes/private:/root/.litecoin
-    command:
-      [
-        "knfcoind",
-        "-server=1",
-        "-txindex=1",
-        "-rpcuser=admin",
-        "-rpcpassword=admin",
-        "-rpcallowip=172.0.0.0/8",
-        "-rpcport=19332",
-        "-rpcbind=0.0.0.0",
-        "-dbcache=512",
-        "-checkblocks=6",
-        "-dnsseed=0",
-        "-addnode=faucet-knfcoind-dummy:49333"
-      ]
-    restart: unless-stopped
-
-
-  faucet-knfcoind-dummy:
-    container_name: faucet-knfcoind-dummy
-    image: vuknf/knfcoin-fullnode:20251014
-    volumes:
-      - ./_DATA/fullnodes/dummy:/root/.litecoin
-    command:
-      [
-        "knfcoind",
-        "-server=1",
-        "-txindex=1",
-        "-rpcuser=admin",
-        "-rpcpassword=admin",
-        "-rpcallowip=172.0.0.0/8",
-        "-rpcport=19332",
-        "-rpcbind=0.0.0.0",
-        "-dbcache=512",
-        "-checkblocks=6",
-        "-dnsseed=0"
-      ]
-    restart: unless-stopped
-  #####################################
-  #####################################
-  #####################################
 
 
 
 
-  faucet-stratum:
-    container_name: faucet-stratum
-    image: vuknf/anypool-stratum:20251016
-    ports:
-      - "61033:3333"
+  # ------------------------------------------------------------
+  #              Additional administration services 
+  # ------------------------------------------------------------
+  faucet-dbgate:
+    container_name: faucet-dbgate
+    image: dbgate/dbgate:7.2.0
     environment:
-      # Coin Selection
-      - COIN=KNF
-      - COIN_NETWORK=mainnet
+      WEB_ROOT: /dbgate
 
-      # Fullnode RPC
-      - RPC_HOST=faucet-knfcoind-private
-      - RPC_PORT=19332
-      - RPC_USER=admin
-      - RPC_PASS=admin
+      LOGINS: admin
+      LOGIN_PASSWORD_admin: ${DBGATE_PASSWORD}
 
-      # Coinbase Transaction
-      - REWARD_ADDR=knf1q6v5tfdrvaunzz60c6as9fx9dttzc98j435ll4a
-      - COINBASE_MESSAGE=/VU KNF/
-
-      # Pool Settings
-      - POOL_DIFFICULTY=100000
-      - POLL_DIFF_DROPPER=True
-
-      - DEBUG=False
+      CONNECTIONS: con1
+      LABEL_con1: KNF Faucet DB
+      FILE_con1: /data/database.db
+      ENGINE_con1: sqlite@dbgate-plugin-sqlite
+    read_only: false
     volumes:
-      - /etc/localtime:/etc/localtime:ro
+      - ./_DATA/backend:/data
     restart: unless-stopped
+  # ------------------------------------------------------------
+  # ------------------------------------------------------------
+  # ------------------------------------------------------------
+
 

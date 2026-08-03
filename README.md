@@ -7,17 +7,21 @@ A comprehensive multi-blockchain faucet system developed for Vilnius University.
 ## 🚀 Features
 
 ### Multi-Blockchain Faucet Support
+- **UTXO-Based Networks**:
+  - KNF Coin (faculty's own blockchain)
+  - Bitcoin Testnet4
+  - Litecoin Testnet4
+
 - **EVM-Compatible Networks**:
   - Ethereum Sepolia Testnet
   - zkSync Sepolia Testnet
   - Polygon zkEVM Cardona Testnet
   - Linea Sepolia Testnet
   - Ethereum Hoodi Testnet
+  - Arbitrum Sepolia Testnet
 
-- **UTXO-Based Networks**:
-  - Bitcoin Testnet3
-  - Bitcoin Testnet4
-  - Litecoin Testnet4
+- **ERC-20 Test Tokens** (token-first — one page per token, across every chain it is deployed on):
+  - Chainlink (LINK) on Sepolia
 
 ### Educational Tools
 - **Blockchain Simulator**: Interactive SHA-256 blockchain demonstration
@@ -29,7 +33,7 @@ A comprehensive multi-blockchain faucet system developed for Vilnius University.
 
 - Docker and Docker Compose
 - Infura API key (for EVM networks)
-- Etherscan API key (optional, for enhanced features)
+- Etherscan API key (optional, for the transaction graph)
 
 ## 🚀 Quick Start
 
@@ -45,15 +49,15 @@ Copy the sample configuration:
 cp docker-compose.yml.sample docker-compose.yml
 ```
 
-Edit `docker-compose.yml` and update the following environment variables:
-```yaml
-environment:
-  - INFURA_PROJECT_ID=your_infura_project_id
-  - ETHERSCAN_API_KEY=your_etherscan_api_key
-  - FAUCET_PRIVATE_KEY=your_private_key_here
-  - DEFAULT_WALLET_ETH_AMOUNT=0.2
-  - APP_PASSWORD_1=your_secure_password
+Create a `.env` file next to `docker-compose.yml` with your secrets (the compose file reads them via `${...}` substitution):
+```bash
+INFURA_PROJECT_ID=your_infura_project_id
+ETHERSCAN_API_KEY=your_etherscan_api_key
+FAUCET_PRIVATE_KEY=your_faucet_wallet_private_key
+DBGATE_PASSWORD=your_db_admin_password
 ```
+
+Then set the GUI login password in `docker-compose.yml` (service `faucet-endpoint` → `APP_PASSWORD_1`).
 
 ### 3. Deploy Stack
 ```bash
@@ -62,7 +66,8 @@ environment:
 
 ### 4. Access the Application
 - **Main Interface**: `http://<server-ip>` (or your configured domain)
-- **Default GUI Password**: ***FAUCET_GUI_PASSWORD***
+- **GUI Password**: the `APP_PASSWORD_1` you set above
+- **Database Browser**: `/dbgate` (login `admin` + your `DBGATE_PASSWORD`)
 
 ## 🔧 Configuration
 
@@ -71,36 +76,45 @@ environment:
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
 | `INFURA_PROJECT_ID` | Infura API project ID | - | ✅ |
-| `ETHERSCAN_API_KEY` | Etherscan API key | - | ❌ |
-| `FAUCET_PRIVATE_KEY` | Private key for faucet wallet | - | ✅ |
-| `DEFAULT_WALLET_ETH_AMOUNT` | ETH amount per faucet request | 0.2 | ❌ |
+| `FAUCET_PRIVATE_KEY` | Private key of the faucet wallet (shared by EVM + ERC-20) | - | ✅ |
+| `DBGATE_PASSWORD` | Password of the `/dbgate` database browser | - | ✅ |
+| `APP_PASSWORD_1` | System GUI access password (set in compose, not `.env`) | - | ✅ |
+| `ETHERSCAN_API_KEY` | Etherscan API key (transaction graph) | - | ❌ |
 | `FAUCET_DEFAULT_NETWORK` | Default EVM network | sepolia | ❌ |
-| `APP_DEBUG` | Enable debug mode | false | ❌ |
-| `APP_PASSWORD_1` | System GUI access password | - | ✅ |
+| `UTXO_DEFAULT_NETWORK` | Default UTXO network | btc4 | ❌ |
+| `APP_DEBUG` | Flask debug mode (development only) | false | ❌ |
 
-### Network Configuration
+### Coins & Icons — the `_CONFIG` Directory
 
-Networks are configured in `backend/main.py`:
+All networks and tokens are defined in **`_CONFIG/coins.py`**, which is mounted read-only into the backend container (`./_CONFIG:/config`) — so the coin catalog lives *outside* the images and can be changed without rebuilding anything:
 
-- **EVM Networks**: Configured with chain ID, RPC URLs, and block explorers
-- **UTXO Networks**: Configured with Electrum servers and transaction parameters
+- **`_CONFIG/coins.py`** holds three maps: `EVM_NETWORK_CONFIGS`, `ERC20_TOKEN_CONFIGS`, `UTXO_NETWORK_CONFIGS`. Each entry is sectioned by who consumes the settings (`faucet` / `metamask` / `explorer`). The file is validated on boot — a typo kills the start with a precise error in `docker logs faucet-backend` instead of a silent fallback. The Infura key never sits in this file: `<INFURA_PROJECT_ID>` inside `rpc_url` is substituted from the environment at startup.
+- **`_CONFIG/icons/<type>/<key>.svg`** (or `.png` / `.webp`) holds the asset icons, where `<type>` is `evm` / `erc20` / `utxo` and `<key>` is the entry's key in the maps (e.g. `evm/sepolia.svg`, `erc20/LINK.svg`, `utxo/btc4.svg`). Assets without an icon file automatically fall back to a colored dot in the UI.
+
+**To add or change a coin**: edit `_CONFIG/coins.py`, then `docker restart faucet-backend` (~3 s).
+**To add or change an icon**: drop the file into `_CONFIG/icons/` — it appears on the next page load, no restart at all.
 
 ## 📚 Usage
 
 ### Requesting Testnet Tokens
 
+#### UTXO Networks (KNF, Bitcoin, Litecoin)
+1. Navigate to `/faucet/utxo/{network}` (e.g., `/faucet/utxo/btc4`, `/faucet/utxo/ltc4`, `/faucet/utxo/knf`)
+2. Enter your testnet address
+3. Click the request button
+4. Receive testnet cryptocurrency at your address
+
 #### EVM Networks (Ethereum-like)
 1. Navigate to `/faucet/evm/{network}` (e.g., `/faucet/evm/sepolia`)
-2. Connect your Web3 wallet (MetaMask, etc.)
-3. Sign the verification message
-4. Click "Request Tokens"
-5. Receive testnet ETH in your wallet
+2. Connect your MetaMask wallet and switch to the network (the page adds it to MetaMask if missing)
+3. Sign the verification message — no transaction, the signature only proves you own the address
+4. Receive testnet ETH in your wallet
 
-#### UTXO Networks (Bitcoin and Litecoin)
-1. Navigate to `/faucet/utxo/{network}` (e.g., `/faucet/utxo/btc3`, `/faucet/utxo/ltc`)
-2. Enter your cryptocurrency testnet address (Bitcoin or Litecoin)
-3. Click "Request Tokens"
-4. Receive testnet cryptocurrency at your address
+#### ERC-20 Tokens
+1. Navigate to `/faucet/erc20/{token}` (e.g., `/faucet/erc20/LINK`) — one page shows the token on **every** chain it is deployed on
+2. Connect MetaMask and switch to one of the token's networks
+3. Hold some native crypto there first — receiving tokens is free, but *using* them costs gas, so each chain requires at least **half the native faucet's chunk** before its claim button unlocks (the page links to the right native faucet if you're short)
+4. Claim, then press **"Rodyti MetaMask"** on the chain card — it switches the wallet and imports the token contract, since freshly received ERC-20s are invisible in MetaMask until imported
 
 ### Educational Tools
 
@@ -130,43 +144,45 @@ Networks are configured in `backend/main.py`:
 
 ### Project Structure
 ```
-├── backend/                 # Python Flask API
+├── _CONFIG/                # Operator-editable config (mounted into the backend)
+│   ├── coins.py            # EVM / ERC-20 / UTXO network & token definitions
+│   └── icons/              # Crypto asset icons (evm/, erc20/, utxo/)
+├── _DATA/                  # Runtime data (SQLite, dapps, notes) — created on first run
+├── backend/                # Python Flask API
 │   ├── app/
-│   │   ├── evm_faucet/     # Ethereum-like faucet logic
-│   │   ├── utxo_faucet/    # UTXO-based faucet logic (Bitcoin, Litecoin)
-│   │   └── reorg_attack/   # 51% attack tool (LTC Testnet4)
-│   ├── main.py             # Application entry point
-│   └── requirements.txt    # Python dependencies
-├── vite/                   # React frontend
-│   └── app/
-│       ├── src/
-│       │   ├── components/ # Reusable UI components
-│       │   └── pages/      # Application pages
-│       └── package.json    # Node.js dependencies
-├── dapps-server/           # Static file hosting
-├── dapps-filebrowser/      # File management interface
-├── litecoind-public/       # Public Litecoin node data (Represents public blockchain)
-├── litecoind-private/      # Private Litecoin node data (Controlled by students)
-├── litecoind-dummy/        # Dummy Litecoin node data (Required for private node to work)
+│   │   ├── evm_faucet/     # Native EVM faucet + Etherscan explorer
+│   │   ├── erc_faucet/     # ERC-20 token faucet
+│   │   ├── utxo_faucet/    # UTXO faucet (Electrum-based)
+│   │   ├── reorg_attack/   # 51% attack tool (LTC Testnet4)
+│   │   ├── icons.py        # /api/icons — serves _CONFIG/icons
+│   │   └── database/       # SQLite helpers
+│   ├── tests/              # Unit tests
+│   └── main.py             # Entry point — loads & validates _CONFIG/coins.py
+├── vite/                   # React frontend (Vite + MUI + Tailwind)
+├── endpoint/               # Caddy ingress (login gate + routing)
+├── dapps/                  # DApp hosting configs (filebrowser + caddy)
 └── docker-compose.yml      # Container orchestration
 ```
 
 ### API Endpoints
 
-#### EVM Faucet
-- `GET /api/evm/networks` - List supported EVM networks
-- `POST /api/evm/{network}/request` - Request testnet tokens
-- `GET /api/evm/{network}/faucet-balance` - Check faucet balance
+All endpoints are `GET`; the request endpoints take their inputs as query parameters.
 
 #### UTXO Faucet
 - `GET /api/utxo/networks` - List supported UTXO networks
-- `POST /api/utxo/{network}/request` - Request testnet tokens
+- `GET /api/utxo/{network}/request-btc?address=` - Request testnet coins
 - `GET /api/utxo/{network}/faucet-balance` - Check faucet balance
 
-## 🙋‍♂️ Support
+#### EVM Faucet
+- `GET /api/evm/networks` - List supported EVM networks
+- `GET /api/evm/{network}/request?address=&signature=&nonce=` - Request testnet ETH (signature proves address ownership)
+- `GET /api/evm/{network}/faucet-balance` - Check faucet balance
 
-For questions, issues, or contributions:
+#### ERC-20 Faucet
+- `GET /api/erc20/tokens` - List supported tokens and their networks
+- `GET /api/erc20/token/{symbol}?address=` - One token across all its chains (balances, gas thresholds)
+- `GET /api/erc20/{network}/{token}/request?address=&signature=&nonce=` - Request tokens on one chain
 
-1. **Issues**: Open a GitHub issue for bug reports
-2. **Features**: Submit feature requests via GitHub issues
-3. **Education**: This platform is designed for learning blockchain development
+#### Asset Icons
+- `GET /api/icons/{type}/{key}` - Icon of a network or token (`type`: `evm` / `erc20` / `utxo`)
+
