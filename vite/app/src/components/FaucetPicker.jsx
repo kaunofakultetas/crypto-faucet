@@ -11,18 +11,19 @@
 //    UTXO  → a network  (Bitcoin Testnet4, …)
 //
 //  The component knows nothing about that distinction: it
-//  takes a ready list of { key, primary, secondary } items
-//  from the navbar and navigates to /faucet/<type>/<key>. The
-//  pick is remembered per type as lastPick:<type>.
+//  takes a ready list of { key, primary, secondary, icon }
+//  items from the navbar and navigates to
+//  /faucet/<type>/<key>. The pick is remembered per type as
+//  lastPick:<type>. Each row's identity mark is an AssetIcon
+//  (components/AssetIcon.jsx) — the backend icon when one
+//  exists, a coloured hash-dot otherwise.
 //
 //  Split into (root component last):
 //
-//    colorFromString — stable per-item colour dot
-//    useSelectedKey  — the picked key straight from the URL
+//    useSelectedKey — the picked key straight from the URL
 //    useLocalStorage — JSON state persisted per key
-//    ItemDot         — the little coloured circle (exported)
-//    ItemRow         — one selectable menu row
-//    FaucetPicker    — button + menu (default export)
+//    ItemRow        — one selectable menu row
+//    FaucetPicker   — button + menu (default export)
 // -----------------------------------------------------------
 
 import { useEffect, useState } from 'react';
@@ -34,36 +35,7 @@ import StarBorderIcon from '@mui/icons-material/StarBorder';
 import SearchIcon from '@mui/icons-material/Search';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 
-
-
-
-
-
-
-// -----------------------------------------------------------
-// colorFromString
-// -----------------------------------------------------------
-//
-// A stable HSL colour from any string — every network and
-// every token gets its own recognizable dot without anyone
-// maintaining a palette.
-//
-// Used by:
-//   - ItemDot (below)
-// -----------------------------------------------------------
-
-function colorFromString(input) {
-  if (!input) return 'grey.500';
-
-  let hash = 0;
-  for (let i = 0; i < input.length; i += 1) {
-    hash = (hash << 5) - hash + input.charCodeAt(i);
-    hash |= 0; // keep it a 32bit integer
-  }
-
-  const hue = Math.abs(hash) % 360;
-  return `hsl(${hue}, 65%, 55%)`;
-}
+import AssetIcon from './AssetIcon';
 
 
 
@@ -139,44 +111,10 @@ function useLocalStorage(key, initialValue) {
 
 
 // -----------------------------------------------------------
-// ItemDot (exported)
-// -----------------------------------------------------------
-//
-// The little coloured circle identifying a network or token,
-// on the trigger button and on every menu row. Exported so
-// the ERC-20 page can reuse the SAME key→colour mapping — a
-// chain's dot on the page matches its dot in this picker.
-//
-// Used by:
-//   - ItemRow / FaucetPicker (below)
-//   - pages/Faucet_ERC20/Page.jsx — token title + chain cards
-// -----------------------------------------------------------
-
-export function ItemDot({ itemKey, size = 10 }) {
-  return (
-    <Box
-      sx={{
-        width: size,
-        height: size,
-        borderRadius: '50%',
-        bgcolor: colorFromString(itemKey),
-        flex: '0 0 auto',
-      }}
-    />
-  );
-}
-
-
-
-
-
-
-
-// -----------------------------------------------------------
 // ItemRow
 // -----------------------------------------------------------
 //
-// One row of the menu: colour dot, the item's name, its
+// One row of the menu: the asset's mark, the item's name, its
 // secondary line (chain id, or how many chains a token lives
 // on) and the favourite star — stopPropagation on the star,
 // so pinning doesn't also select.
@@ -188,7 +126,7 @@ export function ItemDot({ itemKey, size = 10 }) {
 function ItemRow({ item, isFavorite, isSelected, onToggleFavorite, onSelect }) {
   return (
     <MenuItem selected={isSelected} onClick={() => onSelect(item)} sx={{ gap: 1.5, py: 1 }}>
-      <ItemDot itemKey={item.key} />
+      <AssetIcon assetKey={item.key} icon={item.icon} size={24} />
 
       <Box sx={{ minWidth: 0, flex: 1 }}>
         <Typography sx={{ fontSize: 14, fontWeight: 600, lineHeight: 1.2 }} noWrap>
@@ -303,7 +241,7 @@ export default function FaucetPicker({ items = [], loading = false, faucetType, 
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <ItemDot itemKey={selected?.key} />
+          <AssetIcon assetKey={selected?.key} icon={selected?.icon} size={20} />
           <span>{selected?.primary || selectedKey || label}</span>
         </Box>
       </Button>

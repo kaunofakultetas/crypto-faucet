@@ -31,13 +31,15 @@ import QRCode from 'react-qr-code';
 
 import { Box, Paper, TextField, Button, Alert, Stack, Typography, Divider, Skeleton } from '@mui/material';
 
+import AssetIcon from '@/components/AssetIcon';
+
 
 // How often the faucet balance repolls in the background
 const BALANCE_REFRESH_MS = 5000;
 
 // Shown until /api/utxo/networks answers (and kept if it
 // fails) — the page stays usable with generic BTC labels
-const DEFAULT_NET_META = { short_name: 'BTC', full_name: 'Bitcoin' };
+const DEFAULT_NET_META = { short_name: 'BTC', full_name: 'Bitcoin', icon: null };
 
 
 
@@ -79,7 +81,7 @@ function useFaucetInfo(network) {
   });
   const info = networksData?.networks?.[network];
   const netMeta = info
-    ? { short_name: info.short_name || 'BTC', full_name: info.full_name || 'Bitcoin' }
+    ? { short_name: info.short_name || 'BTC', full_name: info.full_name || 'Bitcoin', icon: info.icon ?? null }
     : DEFAULT_NET_META;
 
   const balanceQuery = useQuery({
@@ -158,7 +160,7 @@ function ReturnAddressCard({ initialLoad, loadingInfo, faucetInfo, currencyShort
 
   if (initialLoad && loadingInfo) {
     return (
-      <Paper elevation={0} className="card-surface mx-auto mb-5 w-full min-w-[320px] max-w-[560px] p-4">
+      <Paper elevation={0} className="card-surface mx-auto mb-5 w-full min-w-[320px] max-w-[640px] p-4">
         <Skeleton variant="text" height={30} width="60%" />
         <Skeleton variant="text" height={20} sx={{ mt: 1.5 }} />
       </Paper>
@@ -170,7 +172,7 @@ function ReturnAddressCard({ initialLoad, loadingInfo, faucetInfo, currencyShort
   }
 
   return (
-    <Paper elevation={0} className="card-surface mx-auto mb-5 w-full min-w-[320px] max-w-[560px] p-4">
+    <Paper elevation={0} className="card-surface mx-auto mb-5 w-full min-w-[320px] max-w-[640px] p-4">
       <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>
         <Box sx={{ flex: 1 }}>
           <Typography>
@@ -265,18 +267,20 @@ export default function FaucetUTXO() {
   return (
     <Box className="p-4">
 
-      {/* Title */}
-      <Box className="mx-auto w-full min-w-[320px] max-w-[560px] px-4 pt-4">
-        <Typography variant="h3" sx={{ fontWeight: 800, color: '#78003F', mb: 1.5, fontSize: 36 }}>
+      {/* Title — same markup as the EVM and ERC-20 pages, so
+          the top gap and title size match across all three */}
+      <Box className="mx-auto w-full min-w-[320px] max-w-[640px] px-4 pt-4">
+        <h1 className="mb-3 text-center text-[45px] font-bold text-[#78003F]">
+          <AssetIcon assetKey={network} icon={netMeta.icon} size={40} inline />
           {currencyFull} faucet&apos;as
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
+        </h1>
+        <p className="text-sm text-gray-700">
           Šiuo įrankiu galite gauti <u>{currencyFull}</u> testinės kriptovaliutos laboratoriniams darbams.
-        </Typography>
+        </p>
       </Box>
 
       {/* Main card — the numbers, outcome alerts and the form */}
-      <Paper elevation={0} className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[560px] p-4">
+      <Paper elevation={0} className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4">
         <Stack spacing={2}>
 
           {initialLoad && loadingInfo ? (

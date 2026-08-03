@@ -25,20 +25,20 @@ import axios from 'axios';
 
 import { ThemeProvider, CssBaseline, Box } from '@mui/material';
 import { StyledEngineProvider } from '@mui/material/styles';
-import theme from './theme';
+import theme from '@/theme';
 
-import Navbar from './components/Navbar';
-import Footer from './components/Footer';
+import Navbar from '@/components/Navbar';
+import Footer from '@/components/Footer';
 
 // Pages
-import FaucetEVM from './pages/Faucet_EVM/Page';
-import FaucetERC20 from './pages/Faucet_ERC20/Page';
-import FaucetUTXO from './pages/Faucet_UTXO/Page';
-import GraphPage from './pages/Graph/Page';
-import BlockchainSimulatorPage from './pages/BlockchainSimulator/Page';
-import DappsServerPage from './pages/DappsServer/Page';
-import ReorgAttackPage from './pages/ReorgAttack/Page';
-import VideosPage from './pages/Videos/Page';
+import FaucetEVM from '@/pages/Faucet_EVM/Page';
+import FaucetERC20 from '@/pages/Faucet_ERC20/Page';
+import FaucetUTXO from '@/pages/Faucet_UTXO/Page';
+import GraphPage from '@/pages/Graph/Page';
+import BlockchainSimulatorPage from '@/pages/BlockchainSimulator/Page';
+import DappsServerPage from '@/pages/DappsServer/Page';
+import ReorgAttackPage from '@/pages/ReorgAttack/Page';
+import VideosPage from '@/pages/Videos/Page';
 
 
 

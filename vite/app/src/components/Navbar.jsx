@@ -94,6 +94,7 @@ const FAUCET_TYPES = [
         key,
         primary: network.full_name || key,
         secondary: `Chain ID: ${network.chain_id}`,
+        icon: network.icon ?? null,
       })),
   },
   {
@@ -109,6 +110,7 @@ const FAUCET_TYPES = [
         key,
         primary: `${token.name} (${token.symbol})`,
         secondary: `${token.chunk_size} ${token.symbol} · ${token.networks.length} tinkl.`,
+        icon: token.icon ?? null,
       })),
   },
   {
@@ -125,6 +127,7 @@ const FAUCET_TYPES = [
         key,
         primary: network.full_name || key,
         secondary: `Tinklas: ${network.chain ?? 'testnet'}`,
+        icon: network.icon ?? null,
       })),
   },
 ];

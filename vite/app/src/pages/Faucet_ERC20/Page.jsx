@@ -69,9 +69,9 @@ import CheckIcon from '@mui/icons-material/Check';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import LocalGasStationIcon from '@mui/icons-material/LocalGasStation';
 
-import useWallet from '../../hooks/useWallet';
-import { MetamaskStepper, WalletGateButton, FadingAlert, useAlerts } from '../../components/WalletFlow';
-import { ItemDot } from '../../components/FaucetPicker';
+import useWallet from '@/hooks/useWallet';
+import { MetamaskStepper, WalletGateButton, FadingAlert, useAlerts } from '@/components/WalletFlow';
+import AssetIcon from '@/components/AssetIcon';
 
 
 // How often the token payload (with the faucet's per-chain
@@ -202,7 +202,7 @@ function AddressRow({ value }) {
 
 function GasNoticeCard({ gasless }) {
   return (
-    <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[560px] border-l-4 border-amber-500 p-4 shadow-card">
+    <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] border-l-4 border-amber-500 p-4 shadow-card">
       <div className="flex items-start gap-3">
         <LocalGasStationIcon sx={{ color: '#b45309' }} />
 
@@ -217,7 +217,7 @@ function GasNoticeCard({ gasless }) {
           <ul className="mt-2 space-y-1">
             {gasless.map((deployment) => (
               <li key={deployment.network} className="flex items-center gap-2 text-sm">
-                <ItemDot itemKey={deployment.network} />
+                <AssetIcon assetKey={deployment.network} icon={deployment.icon} size={14} />
                 <Link
                   to={`/faucet/evm/${deployment.network}`}
                   className="font-medium text-[#78003F] underline"
@@ -266,10 +266,10 @@ function GasNoticeCard({ gasless }) {
 
 function ChainCard({ deployment, token, isCurrentChain, walletReady, needsGas, busy, alerts, onClaim, onShowInMetamask }) {
   return (
-    <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[560px] p-4 shadow-card">
+    <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
 
       <div className="mb-3 flex items-center gap-2">
-        <ItemDot itemKey={deployment.network} size={12} />
+        <AssetIcon assetKey={deployment.network} icon={deployment.icon} size={18} />
         <span className="text-lg font-bold text-[#78003F]">{deployment.full_name}</span>
         <span className="flex-1" />
         {isCurrentChain && (
@@ -349,7 +349,7 @@ function ChainCard({ deployment, token, isCurrentChain, walletReady, needsGas, b
 
 function ReturnAddressCard({ address, symbol }) {
   return (
-    <div className="card-surface mx-auto mb-5 w-full min-w-[320px] max-w-[560px] p-4 shadow-card">
+    <div className="card-surface mx-auto mb-5 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
       <div className="my-2 flex items-start gap-4">
         <span className="flex-1">
           Grąžinkite nebereikalingus <u><b>{symbol}</b></u> žetonus atgal:
@@ -382,16 +382,16 @@ function ReturnAddressCard({ address, symbol }) {
 function LoadingSkeleton() {
   return (
     <Box className="p-4">
-      <div className="mx-auto w-full min-w-[320px] max-w-[560px] px-4 pt-4">
+      <div className="mx-auto w-full min-w-[320px] max-w-[640px] px-4 pt-4">
         <Skeleton variant="text" height={48} width="70%" />
         <Skeleton variant="text" height={20} width="90%" />
       </div>
 
-      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[560px] p-4 shadow-card">
+      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
         <Skeleton variant="rectangular" height={60} />
       </div>
 
-      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[560px] p-4 shadow-card">
+      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
         <Stack spacing={2}>
           <Skeleton variant="text" height={28} width="50%" />
           <Skeleton variant="text" height={28} />
@@ -403,7 +403,7 @@ function LoadingSkeleton() {
         </Stack>
       </div>
 
-      <div className="card-surface mx-auto mb-5 w-full min-w-[320px] max-w-[560px] p-4 shadow-card">
+      <div className="card-surface mx-auto mb-5 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
         <Stack direction="row" spacing={2} alignItems="center">
           <Box sx={{ flex: 1 }}>
             <Skeleton variant="text" height={24} width="50%" />
@@ -522,7 +522,7 @@ export default function FaucetERC20() {
   if (error) {
     return (
       <Box className="p-4">
-        <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[560px] p-4 shadow-card">
+        <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
           <p className="text-center text-red-600">{error}</p>
         </div>
       </Box>
@@ -581,9 +581,9 @@ export default function FaucetERC20() {
 
       {/* Title — the token's identity dot matches its dot in
           the navbar picker */}
-      <div className="mx-auto w-full min-w-[320px] max-w-[560px] px-4 pt-4">
-        <h1 className="mb-3 flex items-center gap-3 text-[45px] font-bold text-[#78003F]">
-          <ItemDot itemKey={symbol} size={20} />
+      <div className="mx-auto w-full min-w-[320px] max-w-[640px] px-4 pt-4">
+        <h1 className="mb-3 text-center text-[45px] font-bold text-[#78003F]">
+          <AssetIcon assetKey={symbol} icon={token.icon} size={40} inline />
           {token.name} faucet&apos;as
         </h1>
         <p className="text-sm text-gray-700">
@@ -597,7 +597,7 @@ export default function FaucetERC20() {
           token's chains completes the network step. Gate
           errors and the connected-wallet line live here, with
           the gate. */}
-      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[560px] p-4 shadow-card">
+      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
         <MetamaskStepper
           activeStep={activeStep}
           steps={[
@@ -647,7 +647,7 @@ export default function FaucetERC20() {
           native balance (RPC unreachable) fails OPEN — the
           backend still enforces the gas rule. */}
       {deployments.length === 0 ? (
-        <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[560px] p-4 shadow-card">
+        <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
           <p className="text-sm text-gray-700">
             Šis žetonas kol kas nėra įdiegtas jokiame tinkle.
           </p>

@@ -35,8 +35,9 @@ import axios from 'axios';
 import { Button, Box, Skeleton, Stack, CircularProgress } from '@mui/material';
 import HubIcon from '@mui/icons-material/Hub';
 
-import useWallet from '../../hooks/useWallet';
-import { MetamaskStepper, WalletGateButton, FadingAlert, useAlerts } from '../../components/WalletFlow';
+import useWallet from '@/hooks/useWallet';
+import { MetamaskStepper, WalletGateButton, FadingAlert, useAlerts } from '@/components/WalletFlow';
+import AssetIcon from '@/components/AssetIcon';
 
 
 // How often the faucet balance repolls
@@ -106,16 +107,16 @@ function useFaucetInfo(network) {
 function LoadingSkeleton() {
   return (
     <Box className="p-4">
-      <div className="mx-auto w-full min-w-[320px] max-w-[560px] px-4 pt-4">
+      <div className="mx-auto w-full min-w-[320px] max-w-[640px] px-4 pt-4">
         <Skeleton variant="text" height={48} width="70%" />
         <Skeleton variant="text" height={20} width="90%" />
       </div>
 
-      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[560px] p-4 shadow-card">
+      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
         <Skeleton variant="rectangular" height={60} />
       </div>
 
-      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[560px] p-4 shadow-card">
+      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
         <Stack spacing={2}>
           <Skeleton variant="text" height={28} />
           <Skeleton variant="text" height={28} />
@@ -124,7 +125,7 @@ function LoadingSkeleton() {
         </Stack>
       </div>
 
-      <div className="card-surface mx-auto mb-5 w-full min-w-[320px] max-w-[560px] p-4 shadow-card">
+      <div className="card-surface mx-auto mb-5 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
         <Stack direction="row" spacing={2} alignItems="center">
           <Box sx={{ flex: 1 }}>
             <Skeleton variant="text" height={24} width="50%" />
@@ -211,8 +212,9 @@ export default function FaucetEVM() {
     <Box className="p-4">
 
       {/* Title */}
-      <div className="mx-auto w-full min-w-[320px] max-w-[560px] px-4 pt-4">
-        <h1 className="mb-3 text-[45px] font-bold text-[#78003F]">
+      <div className="mx-auto w-full min-w-[320px] max-w-[640px] px-4 pt-4">
+        <h1 className="mb-3 text-center text-[45px] font-bold text-[#78003F]">
+          <AssetIcon assetKey={network} icon={networkInfo.icon} size={40} inline />
           {networkInfo.full_name} ETH faucet&apos;as
         </h1>
         <p className="text-sm text-gray-700">
@@ -221,7 +223,7 @@ export default function FaucetEVM() {
       </div>
 
       {/* The four-step MetaMask flow */}
-      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[560px] p-4 shadow-card">
+      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
         <MetamaskStepper
           activeStep={wallet.step}
           steps={[
@@ -234,7 +236,7 @@ export default function FaucetEVM() {
       </div>
 
       {/* Balances, the claim button and its outcome alerts */}
-      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[560px] p-4 shadow-card">
+      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
 
         <div className="my-2 flex">
           <span className="flex-1">Jūsų Metamask balansas:</span>
@@ -282,7 +284,7 @@ export default function FaucetEVM() {
       </div>
 
       {/* Return address + the transaction graph shortcut */}
-      <div className="card-surface mx-auto mb-5 w-full min-w-[320px] max-w-[560px] p-4 shadow-card">
+      <div className="card-surface mx-auto mb-5 w-full min-w-[320px] max-w-[640px] p-4 shadow-card">
         <div className="my-2 flex items-start gap-4">
           <span className="flex-1">
             Grąžinkite nebereikalingą <u><b>{networkInfo.short_name}</b></u> krypto atgal:
