@@ -93,7 +93,6 @@ services:
     environment:
       # App Configuration
       # - APP_DEBUG=True                                                               # Dev
-      - DB_PATH=/data/database.db
 
       # Faucet Configs:
       - INFURA_PROJECT_ID=${INFURA_PROJECT_ID}

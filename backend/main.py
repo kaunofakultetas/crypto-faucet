@@ -35,6 +35,7 @@ import sys
 import importlib.util
 
 from flask import Flask, Response
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from app.database.db import get_db_connection
 from app.config_models import validate_configs
@@ -169,13 +170,21 @@ if __name__ == '__main__':
     APP_DEBUG = os.getenv('APP_DEBUG', 'false').lower() == 'true'
 
 
+
     # STEP 1: the SQLite schema (idempotent).
     # =======================================
     from app.database.db_init import init_db
     init_db()
 
 
-    # STEP 2: the feature blueprints — each import builds and
+
+    # STEP 2: ProxyFix for correct IP address detection.
+    # ==================================================
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+
+
+
+    # STEP 3: the feature blueprints — each import builds and
     # warms its faucet singletons, so the startup console report
     # happens here.
     # ==========================================================
@@ -195,7 +204,11 @@ if __name__ == '__main__':
     app.register_blueprint(bp_icons, url_prefix='')
 
 
-    # STEP 3: the dev server. Debug mode means hot reload AND
+    # STEP 4: the dev server. Debug mode means hot reload AND
     # the Werkzeug debugger — never expose it publicly.
     # =======================================================
     app.run(host='0.0.0.0', port=8000, debug=APP_DEBUG)
+
+
+
+

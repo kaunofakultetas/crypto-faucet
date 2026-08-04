@@ -48,7 +48,9 @@
         handle /etherpad/* {
             # Strip the prefix '/etherpad' before proxying
             uri strip_prefix /etherpad
-            reverse_proxy faucet-etherpad:9001
+            reverse_proxy faucet-etherpad:9001 {
+                header_up X-Forwarded-For {http.request.header.X-Forwarded-For}
+            }
         }
 
 
@@ -60,23 +62,31 @@
             # DAPPS HOSTING
             redir /dapps/hosting /dapps/hosting/
             handle /dapps/hosting/* {
-                reverse_proxy faucet-dapps-caddy:80
+                reverse_proxy faucet-dapps-caddy:80 {
+                    header_up X-Forwarded-For {http.request.header.X-Forwarded-For}
+                }
             }
 
             # DAPPS FILEBROWSER
             handle /dapps/* {
-                reverse_proxy faucet-dapps-filebrowser:80
+                reverse_proxy faucet-dapps-filebrowser:80 {
+                    header_up X-Forwarded-For {http.request.header.X-Forwarded-For}
+                }
             }
 
             # DBGATE
             redir /dbgate /dbgate/
             handle /dbgate/* {
-                reverse_proxy faucet-dbgate:3000
+                reverse_proxy faucet-dbgate:3000 {
+                    header_up X-Forwarded-For {http.request.header.X-Forwarded-For}
+                }
             }
 
             # BACKEND API
             handle /api/* {
-                reverse_proxy faucet-backend:8000
+                reverse_proxy faucet-backend:8000 {
+                    header_up X-Forwarded-For {http.request.header.X-Forwarded-For}
+                }
             }
 
             # VIDEOS
@@ -93,7 +103,9 @@
 
             # VITE
             handle /* {
-                reverse_proxy faucet-vite:80
+                reverse_proxy faucet-vite:80 {
+                    header_up X-Forwarded-For {http.request.header.X-Forwarded-For}
+                }
             }
         }
         ########################################
@@ -107,7 +119,9 @@
                 Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
                 Pragma "no-cache"
             }
-            reverse_proxy faucet-login:80
+            reverse_proxy faucet-login:80 {
+                header_up X-Forwarded-For {http.request.header.X-Forwarded-For}
+            }
         }
         ########################################
 
