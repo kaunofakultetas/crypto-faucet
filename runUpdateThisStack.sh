@@ -45,6 +45,7 @@ fi
 
 # STEP 4: Run the stack
 # =====================
+sudo docker network create --subnet=172.18.0.0/24 external
 sudo docker-compose down --timeout 60
 sudo docker-compose up -d --build
 
