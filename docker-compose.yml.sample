@@ -90,6 +90,7 @@ services:
     # build: ./backend
     
     user: 1000:1000
+    read_only: true
     environment:
       # App Configuration
       # - APP_DEBUG=True                                                               # Dev
