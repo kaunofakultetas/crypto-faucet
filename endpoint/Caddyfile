@@ -45,6 +45,7 @@
 
 
         ##### UNAUTHENTICATED: Etherpad Notes
+        redir /etherpad /etherpad/
         handle /etherpad/* {
             # Strip the prefix '/etherpad' before proxying
             uri strip_prefix /etherpad

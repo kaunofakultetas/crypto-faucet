@@ -129,10 +129,13 @@ services:
   faucet-etherpad:
     container_name: faucet-etherpad
     image: etherpad/etherpad:2.2.7
-    user: root
+    user: 1000:1000
+    read_only: true
     environment:
       - TITLE=Etherpad
       - DEFAULT_PAD_TEXT=KNF Faucet Notes
+    tmpfs:
+      - /tmp:uid=1000,gid=1000
     volumes:
       - ./_DATA/etherpad:/opt/etherpad-lite/var
     restart: unless-stopped
