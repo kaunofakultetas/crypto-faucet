@@ -28,7 +28,7 @@ def init_db_tables():
 
         ######################## Blockchain Simulator tables ########################
         conn.execute('''
-            CREATE TABLE IF NOT EXISTS [BlockchainSimulator_Blocks] ( 
+            CREATE TABLE IF NOT EXISTS [BlockchainSimulator_Blocks] (
                 [Height] TEXT NOT NULL,
                 [BlockHash] TEXT NOT NULL,
                 [PrevBlock] TEXT NOT NULL,
@@ -37,22 +37,22 @@ def init_db_tables():
                 CONSTRAINT [sqlite_autoindex_BlockchainSimulator_Blocks_1] UNIQUE ([Height], [BlockHash], [PrevBlock], [Nonce], [Transactions])
             );
         ''')
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS [addresses] (
-                [address] TEXT NULL,
-                [name] TEXT NULL,
-                [is_contract] INTEGER NULL,
-                [is_hub] INTEGER NULL,
-                CONSTRAINT [sqlite_autoindex_addresses_1] UNIQUE ([address])
-            );
-        ''')
         #####################################################################
 
 
 
         ######################## Faucet graph tables ########################
         conn.execute('''
-            CREATE TABLE IF NOT EXISTS [transactions] (
+            CREATE TABLE IF NOT EXISTS [Graph_Addresses] (
+                [address] TEXT NULL,
+                [name] TEXT NULL,
+                [is_contract] INTEGER NULL,
+                [is_hub] INTEGER NULL,
+                CONSTRAINT [sqlite_autoindex_Graph_Addresses_1] UNIQUE ([address])
+            );
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS [Graph_Transactions] (
                 [id] INTEGER AUTO_INCREMENT NULL,
                 [network] TEXT NULL,
                 [from_address] TEXT NULL,
@@ -62,7 +62,7 @@ def init_db_tables():
                 [block_number] INTEGER NULL,
                 [timestamp] INTEGER NULL,
                 PRIMARY KEY ([id]),
-                CONSTRAINT [sqlite_autoindex_transactions_1] UNIQUE ([network], [hash])
+                CONSTRAINT [sqlite_autoindex_Graph_Transactions_1] UNIQUE ([network], [hash])
             );
         ''')
         # The graph's date slider filters by a [from, to) unix range —
@@ -72,7 +72,7 @@ def init_db_tables():
         # column, which would bypass the index) — everything is
         # stored lowercase by store_transactions.
         conn.execute('''
-            CREATE INDEX IF NOT EXISTS idx_transactions_network_timestamp ON transactions(network, timestamp)
+            CREATE INDEX IF NOT EXISTS idx_graph_transactions_network_timestamp ON Graph_Transactions(network, timestamp)
         ''')
         #####################################################################
 

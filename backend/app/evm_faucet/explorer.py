@@ -24,7 +24,7 @@
 #  that address' GLOBAL history would otherwise flood the cache
 #  with thousands of unrelated strangers. Contracts are spotted
 #  by calldata, hubs by counterparty count — both are flagged
-#  in the addresses table and served from cache only.
+#  in the Graph_Addresses table and served from cache only.
 #
 #  Used by:
 #    - evm_routes.py — the graph endpoints
@@ -256,7 +256,7 @@ class EtherscanExplorer:
 
         with get_db_connection() as conn:
             conn.executemany('''
-                INSERT INTO transactions (network, from_address, to_address, value, hash, block_number, timestamp)
+                INSERT INTO Graph_Transactions (network, from_address, to_address, value, hash, block_number, timestamp)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(network, hash) DO UPDATE SET
                     from_address = excluded.from_address,
@@ -270,10 +270,10 @@ class EtherscanExplorer:
             # contract STAYS a contract, even if it was first seen as
             # a plain recipient — never the other way around.
             conn.executemany('''
-                INSERT INTO addresses (address, name, is_contract)
+                INSERT INTO Graph_Addresses (address, name, is_contract)
                 VALUES (?, ?, ?)
                 ON CONFLICT(address) DO UPDATE SET
-                    is_contract = MAX(COALESCE(addresses.is_contract, 0), excluded.is_contract)
+                    is_contract = MAX(COALESCE(Graph_Addresses.is_contract, 0), excluded.is_contract)
             ''', sorted(address_rows))
 
 
@@ -307,7 +307,7 @@ class EtherscanExplorer:
     def _refresh_address(self, network, address):
         with get_db_connection() as conn:
             row = conn.execute('''
-                SELECT MAX(block_number) FROM transactions
+                SELECT MAX(block_number) FROM Graph_Transactions
                 WHERE network = ?
                   AND (from_address = ? OR to_address = ?)
             ''', [network.lower(), address.lower(), address.lower()]).fetchone()
@@ -332,7 +332,7 @@ class EtherscanExplorer:
                 )
                 with get_db_connection() as conn:
                     conn.execute('''
-                        INSERT INTO addresses (address, name, is_contract, is_hub)
+                        INSERT INTO Graph_Addresses (address, name, is_contract, is_hub)
                         VALUES (?, '', 0, 1)
                         ON CONFLICT(address) DO UPDATE SET is_hub = 1
                     ''', [address.lower()])
@@ -392,14 +392,14 @@ class EtherscanExplorer:
 
         with get_db_connection() as conn:
             row = conn.execute(
-                'SELECT is_contract, is_hub FROM addresses WHERE address = ?', [address.lower()]
+                'SELECT is_contract, is_hub FROM Graph_Addresses WHERE address = ?', [address.lower()]
             ).fetchone()
             never_scrape = bool(row and (row[0] or row[1]))
 
             needs_first_fetch = False
             if not is_live_window:
                 seen = conn.execute('''
-                    SELECT 1 FROM transactions
+                    SELECT 1 FROM Graph_Transactions
                     WHERE network = ?
                       AND (from_address = ? OR to_address = ?)
                     LIMIT 1
@@ -440,7 +440,7 @@ class EtherscanExplorer:
                             from_address AS address,
                             MAX(timestamp) as timestamp
                         FROM
-                            transactions
+                            Graph_Transactions
                         WHERE network = ?
                         GROUP BY from_address
 
@@ -449,7 +449,7 @@ class EtherscanExplorer:
                             to_address AS address,
                             MAX(timestamp)
                         FROM
-                            transactions
+                            Graph_Transactions
                         WHERE network = ?
                         GROUP BY to_address
                     )
@@ -459,39 +459,39 @@ class EtherscanExplorer:
                 GetFlows AS (
                     SELECT
                         json_object(
-                            'from_address',         transactions.from_address,
+                            'from_address',         Graph_Transactions.from_address,
                             'from_name',            addr_from.name,
                             'from_timestamp',       latest_update_from.timestamp,
 
-                            'to_address',           transactions.to_address,
+                            'to_address',           Graph_Transactions.to_address,
                             'to_name',              addr_to.name,
                             'to_timestamp',         latest_update_to.timestamp,
                             'to_addr_contract',     addr_to.is_contract,
                             'from_addr_hub',        addr_from.is_hub,
                             'to_addr_hub',          addr_to.is_hub,
 
-                            'value',                SUM(transactions.value),
+                            'value',                SUM(Graph_Transactions.value),
                             'count',                COUNT(*)
                         ) as JSON
                     FROM
-                        transactions
+                        Graph_Transactions
 
-                    LEFT JOIN addresses AS addr_from
-                        ON addr_from.address = transactions.from_address
-                    LEFT JOIN addresses AS addr_to
-                        ON addr_to.address = transactions.to_address
+                    LEFT JOIN Graph_Addresses AS addr_from
+                        ON addr_from.address = Graph_Transactions.from_address
+                    LEFT JOIN Graph_Addresses AS addr_to
+                        ON addr_to.address = Graph_Transactions.to_address
 
                     LEFT JOIN GetLatestUpdate AS latest_update_from
-                        ON latest_update_from.address = transactions.from_address
+                        ON latest_update_from.address = Graph_Transactions.from_address
                     LEFT JOIN GetLatestUpdate AS latest_update_to
-                        ON latest_update_to.address = transactions.to_address
+                        ON latest_update_to.address = Graph_Transactions.to_address
 
                     WHERE
                         network = ? AND
                         (from_address = ? OR to_address = ?) AND
-                        transactions.timestamp >= ? AND
-                        transactions.timestamp < ?
-                    GROUP BY transactions.from_address, transactions.to_address
+                        Graph_Transactions.timestamp >= ? AND
+                        Graph_Transactions.timestamp < ?
+                    GROUP BY Graph_Transactions.from_address, Graph_Transactions.to_address
                 )
 
                 SELECT
@@ -548,7 +548,7 @@ class EtherscanExplorer:
         with get_db_connection() as conn:
             rows = conn.execute('''
                 SELECT date(timestamp + ?, 'unixepoch') AS day, COUNT(*) AS tx_count
-                FROM transactions
+                FROM Graph_Transactions
                 WHERE network = ?
                   AND (from_address = ? OR to_address = ?)
                 GROUP BY day
@@ -583,7 +583,7 @@ class EtherscanExplorer:
 
         with get_db_connection() as conn:
             conn.execute('''
-                INSERT INTO addresses (address, name, is_contract)
+                INSERT INTO Graph_Addresses (address, name, is_contract)
                 VALUES (?, ?, 0)
                 ON CONFLICT(address) DO UPDATE SET name = excluded.name
             ''', [address.lower(), name or ''])

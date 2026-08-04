@@ -58,14 +58,14 @@ class ExplorerPollutionTests(unittest.TestCase):
         os.close(handle)
         with sqlite3.connect(self.db_path) as conn:
             conn.execute('''
-                CREATE TABLE addresses (
+                CREATE TABLE Graph_Addresses (
                     address TEXT NULL, name TEXT NULL,
                     is_contract INTEGER NULL, is_hub INTEGER NULL,
                     UNIQUE (address)
                 )
             ''')
             conn.execute('''
-                CREATE TABLE transactions (
+                CREATE TABLE Graph_Transactions (
                     id INTEGER PRIMARY KEY,
                     network TEXT NULL, from_address TEXT NULL, to_address TEXT NULL,
                     value REAL NULL, hash TEXT NULL,
@@ -88,13 +88,13 @@ class ExplorerPollutionTests(unittest.TestCase):
     def address_flags(self, address):
         with sqlite3.connect(self.db_path) as conn:
             row = conn.execute(
-                'SELECT is_contract, is_hub FROM addresses WHERE address = ?',
+                'SELECT is_contract, is_hub FROM Graph_Addresses WHERE address = ?',
                 [address.lower()]).fetchone()
         return row
 
     def stored_tx_count(self):
         with sqlite3.connect(self.db_path) as conn:
-            return conn.execute('SELECT COUNT(*) FROM transactions').fetchone()[0]
+            return conn.execute('SELECT COUNT(*) FROM Graph_Transactions').fetchone()[0]
 
     def test_calldata_recipient_is_seeded_as_contract(self):
         # A token transfer is a tx TO the contract carrying calldata
@@ -145,7 +145,7 @@ class ExplorerPollutionTests(unittest.TestCase):
         # A live-window request for a contract or hub must serve the
         # cache without ever reaching for Etherscan
         with sqlite3.connect(self.db_path) as conn:
-            conn.execute("INSERT INTO addresses VALUES (?, '', 1, 0)", [TOKEN.lower()])
+            conn.execute("INSERT INTO Graph_Addresses VALUES (?, '', 1, 0)", [TOKEN.lower()])
         with patch.object(self.explorer, '_refresh_address',
                           side_effect=AssertionError('must not scrape')) as refresh:
             data, status = self.explorer.get_stored_transactions(

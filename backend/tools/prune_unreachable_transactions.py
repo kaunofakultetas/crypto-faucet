@@ -54,12 +54,12 @@ def main():
     # through.
     # ============================================================
     blocked = {row[0] for row in conn.execute(
-        "SELECT address FROM addresses WHERE COALESCE(is_contract, 0) = 1 OR COALESCE(is_hub, 0) = 1")}
+        "SELECT address FROM Graph_Addresses WHERE COALESCE(is_contract, 0) = 1 OR COALESCE(is_hub, 0) = 1")}
     roots = {row[0] for row in conn.execute(
-        "SELECT address FROM addresses WHERE name IS NOT NULL AND name != ''")}
+        "SELECT address FROM Graph_Addresses WHERE name IS NOT NULL AND name != ''")}
 
     rows = conn.execute(
-        "SELECT id, network, from_address, to_address FROM transactions").fetchall()
+        "SELECT id, network, from_address, to_address FROM Graph_Transactions").fetchall()
     adjacency = defaultdict(set)
     for row in rows:
         adjacency[row['from_address']].add(row['to_address'])
@@ -117,15 +117,15 @@ def main():
     # ones are kept unconditionally — a label is the operator's
     # deliberate act). VACUUM reclaims the space.
     # ============================================================
-    conn.executemany("DELETE FROM transactions WHERE id = ?",
+    conn.executemany("DELETE FROM Graph_Transactions WHERE id = ?",
                      [(row['id'],) for row in drop])
 
-    remaining = {row[0] for row in conn.execute("SELECT from_address FROM transactions")} | \
-                {row[0] for row in conn.execute("SELECT to_address FROM transactions")}
+    remaining = {row[0] for row in conn.execute("SELECT from_address FROM Graph_Transactions")} | \
+                {row[0] for row in conn.execute("SELECT to_address FROM Graph_Transactions")}
     orphans = [row[0] for row in conn.execute(
-                   "SELECT address FROM addresses WHERE name IS NULL OR name = ''")
+                   "SELECT address FROM Graph_Addresses WHERE name IS NULL OR name = ''")
                if row[0] not in remaining]
-    conn.executemany("DELETE FROM addresses WHERE address = ?",
+    conn.executemany("DELETE FROM Graph_Addresses WHERE address = ?",
                      [(address,) for address in orphans])
 
     conn.commit()
