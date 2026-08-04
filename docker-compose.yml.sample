@@ -35,6 +35,8 @@ services:
   faucet-login:
     container_name: faucet-login
     image: vuknf/simple-login-page:20260401
+    user: 1000:1000
+    read_only: true
     environment:
       VITE_SYSTEM_NAME: "KNF Testnet<br/>Kriptovaliutų Faucet'as"
     restart: unless-stopped
@@ -199,6 +201,8 @@ services:
   faucet-dbgate:
     container_name: faucet-dbgate
     image: dbgate/dbgate:7.2.0
+    user: root
+    read_only: true
     environment:
       WEB_ROOT: /dbgate
 
@@ -209,7 +213,7 @@ services:
       LABEL_con1: KNF Faucet DB
       FILE_con1: /data/database.db
       ENGINE_con1: sqlite@dbgate-plugin-sqlite
-    read_only: false
+
     volumes:
       - ./_DATA/backend:/data
     restart: unless-stopped
