@@ -94,8 +94,15 @@ class UtxoConfigTests(unittest.TestCase):
                 faucet = config['faucet']
                 self.assertGreater(float(faucet['chunk_size']), 0)
                 self.assertIn(faucet['network'], ('mainnet', 'testnet', 'regtest'))
-                self.assertRegex(faucet['hrp'], r'^[a-z]{2,8}$')
                 self.assertRegex(faucet['electrum_server'], r'^[\w.\-]+:\d+$')
+
+                # The coin + flavour must resolve in the registry, to
+                # exactly one address dialect (hrp XOR p2pkh_prefix)
+                from app.utxo_faucet.coins import coin_params
+                params = coin_params(faucet['coin'], faucet['network'])
+                self.assertNotEqual('hrp' in params, 'p2pkh_prefix' in params)
+                self.assertGreater(params['fee_rate'], 0)
+                self.assertGreater(params['dust_limit'], 0)
 
     def test_ids_unique(self):
         ids = [c['id'] for c in UTXO_NETWORK_CONFIGS.values()]

@@ -39,11 +39,17 @@
 # UTXO networks, same sectioning idea as the EVM config:
 #
 #   (top level)  — identity: id (picker order), names
-#   'faucet'     — what the BACKEND payout machinery uses:
-#                  payout size, mainnet/testnet flavour, the
-#                  bech32 HRP addresses are built with, and
-#                  the ElectrumX endpoint (host:port, SSL)
+#   'faucet'     — the OPERATOR's choices: which coin, which
+#                  network flavour, the payout size and the
+#                  ElectrumX endpoint (host:port, SSL)
 #   'explorer'   — where the UI links a transaction / address
+#
+# 'coin' names an entry of the backend's coin registry
+# (app/utxo_faucet/coins/): 'bitcoin', 'litecoin', 'knfcoin',
+# 'dogecoin'. Everything protocol-precise — address version
+# bytes, bech32 prefixes, fee rates, dust limits — lives in
+# that registry, not here. An unknown coin or flavour fails
+# the boot naming the known options.
 ############################################################
 
 UTXO_NETWORK_CONFIGS = {
@@ -52,9 +58,9 @@ UTXO_NETWORK_CONFIGS = {
         'short_name': "KNF",
         'full_name': 'KNF Coin',
         'faucet': {
-            'chunk_size': 1000,
+            'coin': 'knfcoin',
             'network': 'mainnet',
-            'hrp': 'knf',
+            'chunk_size': 1000,
             'electrum_server': '158.129.172.247:49002',
         },
         'explorer': {
@@ -66,9 +72,9 @@ UTXO_NETWORK_CONFIGS = {
         'short_name': "tLTC4",
         'full_name': 'Litecoin Testnet4',
         'faucet': {
-            'chunk_size': 1000,
+            'coin': 'litecoin',
             'network': 'testnet',
-            'hrp': 'tltc',
+            'chunk_size': 1000,
             'electrum_server': '158.129.172.247:50002',
         },
         'explorer': {
@@ -80,9 +86,9 @@ UTXO_NETWORK_CONFIGS = {
     #     'short_name': "tBTC3",
     #     'full_name': 'Bitcoin Testnet3',
     #     'faucet': {
-    #         'chunk_size': 0.005,
+    #         'coin': 'bitcoin',
     #         'network': 'testnet',
-    #         'hrp': 'tb',
+    #         'chunk_size': 0.005,
     #         'electrum_server': '158.129.172.247:51002',
     #     },
     #     'explorer': {
@@ -94,9 +100,9 @@ UTXO_NETWORK_CONFIGS = {
         'short_name': "tBTC4",
         'full_name': 'Bitcoin Testnet4',
         'faucet': {
-            'chunk_size': 0.01,
+            'coin': 'bitcoin',
             'network': 'testnet',
-            'hrp': 'tb',
+            'chunk_size': 0.01,
             'electrum_server': '158.129.172.247:52002',
         },
         'explorer': {
@@ -108,13 +114,13 @@ UTXO_NETWORK_CONFIGS = {
     #     'short_name': "tDOGE3",
     #     'full_name': 'Dogecoin Testnet3',
     #     'faucet': {
-    #         'chunk_size': 0.01,
+    #         'coin': 'dogecoin',
     #         'network': 'testnet',
-    #         'hrp': 'doge',
+    #         'chunk_size': 50,
     #         'electrum_server': '158.129.172.247:53002',
     #     },
     #     'explorer': {
-    #         'block_explorer': 'https://mempool.space/testnet3',
+    #         'block_explorer': 'https://blockexplorer.one/dogecoin/testnet',
     #     },
     # }
 }

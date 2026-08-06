@@ -12,15 +12,24 @@
 #
 #    1. The faucet key (shared with the EVM faucet, an
 #       Ethereum-style hex key) is converted into a Bitcoin
-#       key and turned into a native SegWit (p2wpkh, bech32)
-#       address.
+#       key and turned into the network's address flavour by
+#       its DIALECT object (dialects/): native SegWit
+#       (p2wpkh, bech32) on chains that have it, classic
+#       base58 p2pkh on legacy chains that never activated
+#       SegWit (Dogecoin). Which dialect a network speaks —
+#       and every precise constant behind it — comes from the
+#       in-code coin registry (coins/), keyed by the config's
+#       coin + network flavour, resolved once at startup.
 #    2. UTXOs and balances are fetched from the Electrum
 #       server for that address' scripthash.
-#    3. A transaction is built and BIP-143-signed with embit —
-#       ONE code path for every chain, KNF included, because
-#       embit takes network params as plain data instead of
-#       validating against a chain registry (the reason the
-#       previous engines needed a hand-rolled KNF path).
+#    3. A transaction is built with embit and signed by the
+#       dialect (BIP-143 witnesses vs legacy scriptSig).
+#       ONE builder for every chain, KNF included — every
+#       format difference lives behind the dialect's five
+#       methods, and embit takes network params as plain data
+#       instead of validating against a chain registry (the
+#       reason the previous engines needed a hand-rolled KNF
+#       path).
 #    4. The raw transaction is broadcast through the same
 #       Electrum connection.
 #
@@ -51,23 +60,37 @@ import logging
 import threading
 
 from embit import ec as embit_ec
-from embit import script as embit_script
-from embit import bech32 as embit_bech32
-from embit.transaction import Transaction, TransactionInput, TransactionOutput, Witness, SIGHASH
+from embit.transaction import Transaction, TransactionInput, TransactionOutput
 
+from .coins import coin_params
+from .dialects import dialect_for
 from .electrum_client import ElectrumClient
 from ..cooldown import CooldownTable
 from ..icons import icon_url
 
 
-# Outputs below this value (in satoshis) are considered dust and
-# not worth creating — the would-be change is left to the miners.
-DUST_LIMIT_SAT = 546
-
 # How long a polled faucet balance is served from cache. The page
 # polls every few seconds per open browser tab; payouts drop the
 # cached entry, so a claim shows up immediately regardless.
 BALANCE_CACHE_TTL = 10
+
+
+
+
+############################################################
+# _electrum_scripthash
+############################################################
+#
+# The Electrum protocol's script identifier: sha256 of the
+# scriptPubKey, reversed, hex — the same formula for every
+# dialect.
+#
+# Used by:
+#   - UTXOFaucet — warmup and per-request identity
+############################################################
+
+def _electrum_scripthash(script) -> str:
+    return hashlib.sha256(script.data).digest()[::-1].hex()
 
 
 
@@ -94,15 +117,32 @@ BALANCE_CACHE_TTL = 10
 
 class NetworkContext:
 
+
+
+
+    ############################################################
+    # __init__
+    ############################################################
+    #
+    # Plain fields only — the values are filled in by
+    # _setup_wallet_for_network; the per-field comments below
+    # are the contract.
+    #
+    # Used by:
+    #   - UTXOFaucet._setup_wallet_for_network (below)
+    ############################################################
+
     def __init__(self):
         self.network_key = None     # config key: 'btc4', 'ltc4', 'knf', ...
-        self.hrp = None             # bech32 prefix from the config: 'tb', 'knf', ...
+        self.dialect = None         # the network's SHARED address-dialect object (dialects/)
         self.key = None             # embit PrivateKey holding the faucet key
-        self.script_pubkey = None   # the faucet's own p2wpkh script
-        self.address = None         # faucet bech32 address on this network
-        self.scripthash = None      # Electrum scripthash of that address
+        self.script_pubkey = None   # the faucet's own script on this network (from the dialect)
+        self.address = None         # faucet address on this network (bech32 or base58)
+        self.scripthash = None      # Electrum scripthash of that script
         self.electrum = None        # the network's SHARED ElectrumClient — never closed here
         self.chunk_size_btc = None  # payout size for this network, in coins
+        self.fee_rate = None        # sat/vB — per-network config override or the global default
+        self.dust_limit = None      # sats below which change is left to the miners
 
 
 
@@ -119,7 +159,8 @@ class NetworkContext:
 # state lives in NetworkContext. Methods in groups:
 #
 #   setup       — __init__, _warm_up_networks
-#   keys        — _convert_ethereum_key_to_bitcoin, _get_hrp
+#   keys        — _convert_ethereum_key_to_bitcoin,
+#                 _faucet_scripthash_for
 #   resolution  — _setup_wallet_for_network
 #   queries     — _faucet_balance
 #   building    — _estimate_fee,
@@ -170,7 +211,6 @@ class UTXOFaucet:
         # covers every chain the site offers.
         self.faucet_private_key = os.getenv('FAUCET_PRIVATE_KEY')
         self.default_amount_btc = float(os.getenv('DEFAULT_WALLET_BTC_AMOUNT', '0.001'))
-        self.fee_rate_sat_per_byte = int(os.getenv('BTC_FEE_RATE_SATVB', '10'))
         self.app_debug = os.getenv('APP_DEBUG', 'false').lower() == 'true'
 
         # Per-(network, address) cooldown between payouts (matches
@@ -179,22 +219,33 @@ class UTXOFaucet:
         # app/cooldown.py for the in-memory trade-offs).
         self.cooldowns = CooldownTable(int(os.getenv('UTXO_COOLDOWN_SECONDS', '60')))
 
-        # The faucet identity is the same on every chain (same key,
-        # same p2wpkh script, same scripthash — only the address HRP
-        # differs), so it's derived ONCE here. A missing or broken
-        # key leaves it None and every payout path answers with a
-        # config error instead of crashing the import (the same
-        # pattern EVMFaucet uses).
+        # The faucet identity is the same KEY on every chain; how it
+        # becomes a script and an address is each network's dialect's
+        # business (resolved below). A missing or broken key leaves
+        # this None and every payout path answers with a config
+        # error instead of crashing the import (the same pattern
+        # EVMFaucet uses).
         self.faucet_key = None
-        self.faucet_script = None
-        self.faucet_scripthash = None
         if self.faucet_private_key:
             try:
                 self.faucet_key = embit_ec.PrivateKey(self._convert_ethereum_key_to_bitcoin(self.faucet_private_key))
-                self.faucet_script = embit_script.p2wpkh(self.faucet_key.get_public_key())
-                self.faucet_scripthash = hashlib.sha256(self.faucet_script.data).digest()[::-1].hex()
             except Exception:
                 logging.exception("Invalid FAUCET_PRIVATE_KEY for the UTXO faucet")
+
+        # network_key -> the coin's protocol params and its address
+        # dialect, both resolved ONCE at startup: the operator's
+        # config names a coin and a network flavour; the in-code
+        # registry (coins/) supplies the precise facts — address
+        # version bytes / bech32 HRP, fee rate, dust limit — and the
+        # dialect object built from them answers every format
+        # question the payout path asks.
+        self._coin_params = {}
+        self._dialects = {}
+        for network_key, config in self.network_configs.items():
+            faucet_config = config.get('faucet', {})
+            params = coin_params(faucet_config.get('coin', ''), faucet_config.get('network', ''))
+            self._coin_params[network_key] = params
+            self._dialects[network_key] = dialect_for(params)
 
         # network_key -> the lock serializing that chain's payouts:
         # two concurrent claims would otherwise select the same UTXOs
@@ -251,8 +302,9 @@ class UTXOFaucet:
             try:
                 client.connect()
 
-                if self.faucet_scripthash:
-                    balance = client.get_balance(self.faucet_scripthash)
+                scripthash = self._faucet_scripthash_for(network_key)
+                if scripthash:
+                    balance = client.get_balance(scripthash)
                     self._balance_cache[network_key] = (int(time.time()), balance)
                     print(f"[UTXO] {network_key} ready — faucet balance {balance['confirmed']} confirmed")
                 else:
@@ -303,24 +355,23 @@ class UTXOFaucet:
 
 
     ############################################################
-    # _get_hrp
+    # _faucet_scripthash_for
     ############################################################
     #
-    # The bech32 Human Readable Part ('tb', 'tltc', 'knf', ...)
-    # comes straight from the network config — guessing it from
-    # the coin name would silently produce addresses for the
-    # wrong chain.
+    # The faucet's Electrum scripthash on one network — the
+    # dialect's script for our key, hashed the Electrum way.
+    # None when no faucet key is configured.
     #
     # Used by:
-    #   - _setup_wallet_for_network (below)
+    #   - _warm_up_networks (above)
     ############################################################
 
-    def _get_hrp(self, network_key: str) -> str:
-        config_hrp = self.network_configs.get(network_key, {}).get('faucet', {}).get('hrp')
-        if config_hrp:
-            return config_hrp
+    def _faucet_scripthash_for(self, network_key: str):
+        if not self.faucet_key:
+            return None
 
-        raise ValueError(f"No HRP configured for network: {network_key}")
+        script = self._dialects[network_key].faucet_script(self.faucet_key.get_public_key())
+        return _electrum_scripthash(script)
 
 
 
@@ -348,15 +399,13 @@ class UTXOFaucet:
 
         # STEP 1: resolve the network from the config's faucet
         # section (payout + connection settings live there). The
-        # network IS just its HRP here — embit has no chain registry
-        # to satisfy, so KNF needs nothing special.
+        # network IS just its address params here — embit has no
+        # chain registry to satisfy, so KNF needs nothing special.
         # ==========================================================
         config = self.network_configs.get(network_key)
         if not config:
             raise ValueError(f'Unknown UTXO network: {network_key}')
         faucet_config = config.get('faucet', {})
-
-        ctx.hrp = self._get_hrp(network_key)
 
 
         # STEP 2: the network's long-lived Electrum client — created
@@ -365,19 +414,27 @@ class UTXOFaucet:
         ctx.electrum = self._electrum_clients[network_key]
 
 
-        # STEP 3: the faucet identity, derived once in __init__ —
-        # the same key and scripthash on every chain, only the
-        # bech32 address differs by HRP.
-        # =======================================================
+        # STEP 3: the faucet identity on this chain — the network's
+        # dialect turns the shared key into the script, address and
+        # Electrum scripthash it has here.
+        # =========================================================
         if not self.faucet_key:
             raise ValueError('Faucet private key not configured')
 
         ctx.key = self.faucet_key
-        ctx.script_pubkey = self.faucet_script
-        ctx.scripthash = self.faucet_scripthash
-        ctx.address = self.faucet_script.address({'bech32': ctx.hrp})
+        ctx.dialect = self._dialects[network_key]
+
+        pub = self.faucet_key.get_public_key()
+        ctx.script_pubkey = ctx.dialect.faucet_script(pub)
+        ctx.scripthash = _electrum_scripthash(ctx.script_pubkey)
+        ctx.address = ctx.dialect.faucet_address(pub)
 
         ctx.chunk_size_btc = float(faucet_config.get('chunk_size', self.default_amount_btc))
+
+        # Relay economics are the COIN's facts, from the registry
+        params = self._coin_params[network_key]
+        ctx.fee_rate = params['fee_rate']
+        ctx.dust_limit = params['dust_limit']
 
         return ctx
 
@@ -420,17 +477,20 @@ class UTXOFaucet:
     # _estimate_fee
     ############################################################
     #
-    # Conservative vsize estimate for a p2wpkh transaction:
-    # ~91 vbytes per input, ~31 per output, ~10 of overhead,
-    # times the configured sat/vB rate.
+    # Conservative size estimate times the network's sat/vB
+    # rate. The per-input/per-output sizes are the dialect's
+    # constants (SegWit ~91/31 vbytes, legacy ~148/34 bytes);
+    # the rate comes from the context — legacy chains like
+    # Dogecoin need ~100x Bitcoin's rate to clear their relay
+    # minimums.
     #
     # Used by:
     #   - _create_and_broadcast_transaction (below)
     ############################################################
 
-    def _estimate_fee(self, num_inputs: int, num_outputs: int) -> int:
-        estimated_size = (num_inputs * 91) + (num_outputs * 31) + 10
-        return estimated_size * self.fee_rate_sat_per_byte
+    def _estimate_fee(self, ctx: NetworkContext, num_inputs: int, num_outputs: int) -> int:
+        estimated_size = (num_inputs * ctx.dialect.INPUT_SIZE) + (num_outputs * ctx.dialect.OUTPUT_SIZE) + 10
+        return estimated_size * ctx.fee_rate
 
 
 
@@ -442,12 +502,11 @@ class UTXOFaucet:
     ############################################################
     #
     # Builds, signs and broadcasts a payout with embit: ONE
-    # code path for every chain, KNF included — the BIP-141
-    # transaction format is identical across them, only the
-    # bech32 HRP differs and that comes from the config.
-    # Signatures use deterministic RFC-6979 nonces, and the
-    # recipient address is checksum-validated and accepted as
-    # any witness program (p2wpkh, p2wsh, taproot).
+    # code path for every chain. Every format difference — how
+    # a recipient address becomes a scriptPubKey, which sighash
+    # and unlocking format sign the inputs, the transaction
+    # version — is the dialect's answer, not a branch here.
+    # Signatures use deterministic RFC-6979 nonces.
     #
     # Used by:
     #   - request_crypto (below)
@@ -470,57 +529,42 @@ class UTXOFaucet:
         for utxo in utxos:
             selected_utxos.append(utxo)
             total_input += utxo['value']
-            if total_input >= amount_sat + self._estimate_fee(len(selected_utxos), 2):
+            if total_input >= amount_sat + self._estimate_fee(ctx, len(selected_utxos), 2):
                 break
 
-        fee = self._estimate_fee(len(selected_utxos), 2)
+        fee = self._estimate_fee(ctx, len(selected_utxos), 2)
         if total_input < amount_sat + fee:
             raise ValueError("Insufficient funds")
 
         change = total_input - amount_sat - fee
 
 
-        # STEP 3: outputs. The recipient decodes against this
-        # network's HRP (full checksum check) into a witness-program
-        # scriptPubKey: version opcode (OP_0, or OP_1..OP_16 =
-        # 0x50 + n) followed by the pushed program.
-        # ==========================================================
-        witver, witprog = embit_bech32.decode(ctx.hrp, to_address)
-        if witver is None or witprog is None:
-            raise ValueError("Invalid recipient address")
-        witprog = bytes(witprog)
-
-        version_opcode = bytes([0x50 + witver if witver else 0])
-        to_script = embit_script.Script(version_opcode + bytes([len(witprog)]) + witprog)
+        # STEP 3: outputs. The dialect decodes the recipient (full
+        # checksum check) into this chain's scriptPubKey flavour and
+        # raises ValueError on anything that isn't valid here.
+        # ===========================================================
+        to_script = ctx.dialect.recipient_script(to_address)
 
         outputs = [TransactionOutput(amount_sat, to_script)]
-        if change > DUST_LIMIT_SAT:
+        if change > ctx.dust_limit:
             outputs.append(TransactionOutput(change, ctx.script_pubkey))
         # sub-dust change is simply left to the miners as extra fee
 
 
         # STEP 4: build and sign. Electrum reports tx_hash in display
-        # order — the wire format wants it reversed. Per input the
-        # witness stack is <DER signature + SIGHASH_ALL byte>
-        # <compressed pubkey>; embit does the BIP-143 sighash math.
+        # order — the wire format wants it reversed. The dialect owns
+        # the transaction version and signs each input in place
+        # (BIP-143 witness or legacy scriptSig).
         # ===========================================================
         tx = Transaction(
-            version=2,
+            version=ctx.dialect.TX_VERSION,
             vin=[TransactionInput(bytes.fromhex(u['tx_hash'])[::-1], u['tx_pos']) for u in selected_utxos],
             vout=outputs,
             locktime=0,
         )
 
-        # scriptCode for p2wpkh per BIP-143: the classic p2pkh script
-        # over our pubkey hash — which is exactly the last 20 bytes
-        # of the p2wpkh script (OP_0 PUSH20 <hash160>)
-        pub = ctx.key.get_public_key()
-        script_code = embit_script.Script(b'\x76\xa9\x14' + ctx.script_pubkey.data[2:] + b'\x88\xac')
-
         for i, utxo in enumerate(selected_utxos):
-            sighash = tx.sighash_segwit(i, script_code, utxo['value'])
-            der_sig = ctx.key.sign(sighash).serialize() + bytes([SIGHASH.ALL])
-            tx.vin[i].witness = Witness([der_sig, pub.serialize()])
+            ctx.dialect.sign_input(tx, i, ctx.key, ctx.script_pubkey, utxo['value'])
 
 
         # STEP 5: broadcast over the same Electrum connection.
@@ -536,10 +580,10 @@ class UTXOFaucet:
     # _validate_address
     ############################################################
     #
-    # Cheap sanity check: the address must carry this network's
-    # HRP ('tb1...', 'tltc1...', 'knf1...'). Full checksum
-    # validation happens in _create_and_broadcast_transaction,
-    # where the address is bech32-decoded for real.
+    # The dialect's verdict on a recipient address — a cheap
+    # HRP prefix check on SegWit chains (the full decode
+    # happens at recipient_script), a full base58check decode
+    # on legacy ones.
     #
     # Used by:
     #   - request_crypto (below)
@@ -549,7 +593,7 @@ class UTXOFaucet:
         if not address:
             return False
 
-        return address.lower().startswith(ctx.hrp + '1')
+        return ctx.dialect.validate_address(address)
 
 
 

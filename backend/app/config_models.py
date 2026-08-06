@@ -23,7 +23,11 @@
 
 from typing import Optional, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+
+
+
 
 
 
@@ -46,6 +50,10 @@ class StrictModel(BaseModel):
 
 
 
+
+
+
+
 ############################################################
 # EvmNativeCurrency
 ############################################################
@@ -62,6 +70,10 @@ class EvmNativeCurrency(StrictModel):
     name: str = Field(min_length=1)
     symbol: str = Field(min_length=1, max_length=12)
     decimals: int = Field(ge=0, le=36)
+
+
+
+
 
 
 
@@ -87,6 +99,10 @@ class EvmFaucetSection(StrictModel):
 
 
 
+
+
+
+
 ############################################################
 # EvmMetamaskSection
 ############################################################
@@ -108,6 +124,10 @@ class EvmMetamaskSection(StrictModel):
 
 
 
+
+
+
+
 ############################################################
 # EvmExplorerSection
 ############################################################
@@ -121,6 +141,10 @@ class EvmMetamaskSection(StrictModel):
 
 class EvmExplorerSection(StrictModel):
     etherscan_api_url: str = Field(pattern=r'^https?://')
+
+
+
+
 
 
 
@@ -146,6 +170,10 @@ class EvmNetworkConfig(StrictModel):
 
 
 
+
+
+
+
 ############################################################
 # Erc20TokenConfig
 ############################################################
@@ -164,6 +192,21 @@ class Erc20TokenConfig(StrictModel):
     chunk_size: float = Field(gt=0)
     deployments: dict[str, str]
 
+
+
+
+    ############################################################
+    # addresses_are_contracts
+    ############################################################
+    #
+    # Every deployment value must be a well-formed 0x…40-hex
+    # contract address — the network-key side is cross-checked
+    # against the EVM map later, in validate_configs.
+    #
+    # Used by:
+    #   - pydantic — automatically on model validation
+    ############################################################
+
     @field_validator('deployments')
     @classmethod
     def addresses_are_contracts(cls, deployments):
@@ -176,23 +219,61 @@ class Erc20TokenConfig(StrictModel):
 
 
 
+
+
+
+
 ############################################################
 # UtxoFaucetSection
 ############################################################
 #
-# What the UTXO payout machinery uses: payout size, chain
-# flavour, the bech32 HRP addresses are built with, and the
+# The OPERATOR's choices for one UTXO network — and nothing
+# more: which coin ('bitcoin', 'litecoin', 'knfcoin',
+# 'dogecoin'), which network flavour, the payout size and the
 # ElectrumX endpoint (host:port, SSL).
+#
+# Everything protocol-precise — address version bytes, bech32
+# HRPs, fee rates, dust limits — is a fact about the coin,
+# not a choice, and resolves from the in-code registry
+# (app/utxo_faucet/coins/) at startup. The validator below
+# confirms the coin + flavour combination exists there, so a
+# typo names the known options at boot.
 #
 # Used by:
 #   - UtxoNetworkConfig (below)
 ############################################################
 
 class UtxoFaucetSection(StrictModel):
+    coin: str = Field(min_length=1)
     chunk_size: float = Field(gt=0)
     network: Literal['mainnet', 'testnet', 'regtest']
-    hrp: str = Field(pattern=r'^[a-z]{2,8}$')
     electrum_server: str = Field(pattern=r'^[\w.\-]+:\d+$')
+
+
+
+
+    ############################################################
+    # coin_and_flavour_exist
+    ############################################################
+    #
+    # The coin + network flavour must resolve in the in-code
+    # registry — coin_params raises a ValueError that names
+    # the known coins / available flavours, and that message
+    # surfaces verbatim in the boot error.
+    #
+    # Used by:
+    #   - pydantic — automatically on model validation
+    ############################################################
+
+    @model_validator(mode='after')
+    def coin_and_flavour_exist(self):
+        from app.utxo_faucet.coins import coin_params
+        coin_params(self.coin, self.network)  # raises ValueError naming the options
+        return self
+
+
+
+
 
 
 
@@ -213,6 +294,10 @@ class UtxoExplorerSection(StrictModel):
 
 
 
+
+
+
+
 ############################################################
 # UtxoNetworkConfig
 ############################################################
@@ -229,6 +314,10 @@ class UtxoNetworkConfig(StrictModel):
     full_name: str = Field(min_length=1)
     faucet: UtxoFaucetSection
     explorer: Optional[UtxoExplorerSection] = None
+
+
+
+
 
 
 
@@ -294,3 +383,7 @@ def validate_configs(evm_configs, erc20_configs, utxo_configs):
         {key: model.model_dump(exclude_none=True) for key, model in erc20.items()},
         {key: model.model_dump(exclude_none=True) for key, model in utxo.items()},
     )
+
+
+
+

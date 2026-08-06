@@ -45,7 +45,7 @@ class UtxoEngineTests(unittest.TestCase):
 
         if to_address is None:
             prv = ec.PrivateKey(bytes.fromhex(helpers.RECIPIENT_PRIVATE_KEY))
-            to_address = embit_script.p2wpkh(prv.get_public_key()).address({'bech32': ctx.hrp})
+            to_address = embit_script.p2wpkh(prv.get_public_key()).address({'bech32': ctx.dialect.hrp})
 
         faucet._create_and_broadcast_transaction(ctx, to_address, amount)
         return Transaction.from_string(captured['raw']), ctx
@@ -126,6 +126,107 @@ class UtxoEngineTests(unittest.TestCase):
         self.assertEqual(ctx_knf.scripthash, expected)
         self.assertEqual(ctx_btc.scripthash, expected)
         self.assertNotEqual(ctx_knf.address, ctx_btc.address)
+
+
+
+
+############################################################
+# UtxoLegacyDialectTests
+############################################################
+#
+# The legacy (pre-SegWit, base58/p2pkh) dialect on the doge3
+# test network: address derivation and validation, the p2pkh
+# payout build (scriptSig unlocking, no witnesses, legacy
+# wire format) and the legacy sighash signatures.
+############################################################
+
+class UtxoLegacyDialectTests(unittest.TestCase):
+
+    def build_payout(self, utxos=None, amount=helpers.ANCHOR_DOGE_AMOUNT_SAT, to_address=None):
+        faucet = helpers.make_utxo_faucet()
+        captured = helpers.fake_electrum(faucet, 'doge3', utxos or helpers.ANCHOR_DOGE_UTXOS)
+        ctx = faucet._setup_wallet_for_network('doge3')
+
+        faucet._create_and_broadcast_transaction(
+            ctx, to_address or helpers.ANCHOR_DOGE_RECIPIENT, amount)
+        return Transaction.from_string(captured['raw']), ctx
+
+    def test_legacy_faucet_address_anchor(self):
+        # Same key must always derive the same base58 doge address
+        from app.utxo_faucet.dialects import LegacyDialect
+        faucet = helpers.make_utxo_faucet()
+        ctx = faucet._setup_wallet_for_network('doge3')
+        self.assertIsInstance(ctx.dialect, LegacyDialect)
+        self.assertEqual(ctx.address, helpers.ANCHOR_DOGE_ADDRESS)
+
+    def test_legacy_scripthash_differs_from_segwit(self):
+        # p2pkh and p2wpkh identities are different Electrum scripthashes
+        faucet = helpers.make_utxo_faucet()
+        ctx_doge = faucet._setup_wallet_for_network('doge3')
+        ctx_knf = faucet._setup_wallet_for_network('knf')
+        expected = hashlib.sha256(ctx_doge.script_pubkey.data).digest()[::-1].hex()
+        self.assertEqual(ctx_doge.scripthash, expected)
+        self.assertNotEqual(ctx_doge.scripthash, ctx_knf.scripthash)
+
+    def test_legacy_payout_wire_format(self):
+        # No witnesses, non-empty scriptSigs, version 1, and the
+        # payout output is the recipient's p2pkh script
+        tx, _ = self.build_payout()
+        self.assertFalse(tx.is_segwit)
+        self.assertEqual(tx.version, 1)
+        for vin in tx.vin:
+            self.assertTrue(len(vin.script_sig.data) > 0)
+            self.assertEqual(len(vin.witness.items), 0)
+        self.assertEqual(tx.vout[0].script_pubkey.data[:3], b'\x76\xa9\x14')
+        self.assertEqual(tx.vout[0].script_pubkey.data[-2:], b'\x88\xac')
+
+    def test_legacy_signatures_verify(self):
+        # Every scriptSig is <DER sig + SIGHASH_ALL> <pubkey> and the
+        # signature verifies against the legacy sighash
+        tx, ctx = self.build_payout()
+        pub = ctx.key.get_public_key()
+
+        for i in range(len(tx.vin)):
+            data = tx.vin[i].script_sig.data
+            sig_len = data[0]
+            der_sig, rest = data[1:1 + sig_len], data[1 + sig_len:]
+            self.assertEqual(rest[0], len(rest) - 1)  # pubkey push
+            self.assertEqual(rest[1:], pub.serialize())
+            self.assertEqual(der_sig[-1], 1)  # SIGHASH_ALL byte
+
+            unsigned = Transaction(version=tx.version, vin=[
+                type(vin)(vin.txid, vin.vout) for vin in tx.vin
+            ], vout=tx.vout, locktime=tx.locktime)
+            sighash = unsigned.sighash_legacy(i, ctx.script_pubkey)
+            sig = ec.Signature.parse(der_sig[:-1])
+            self.assertTrue(pub.verify(sig, sighash), f'bad signature on input {i}')
+
+    def test_legacy_change_returns_to_faucet_p2pkh(self):
+        tx, ctx = self.build_payout()
+        self.assertEqual(len(tx.vout), 2)
+        self.assertEqual(tx.vout[1].script_pubkey.data, ctx.script_pubkey.data)
+
+    def test_legacy_address_validation(self):
+        faucet = helpers.make_utxo_faucet()
+        ctx = faucet._setup_wallet_for_network('doge3')
+
+        self.assertTrue(faucet._validate_address(ctx, helpers.ANCHOR_DOGE_RECIPIENT))
+        # bech32 addresses do not exist on a legacy chain
+        self.assertFalse(faucet._validate_address(ctx, 'tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx'))
+        # right alphabet, wrong version byte (Bitcoin mainnet P2PKH)
+        from embit import base58 as embit_base58
+        btc_style = embit_base58.encode_check(b'\x00' + b'\x11' * 20)
+        self.assertFalse(faucet._validate_address(ctx, btc_style))
+        # corrupted checksum
+        self.assertFalse(faucet._validate_address(ctx, helpers.ANCHOR_DOGE_RECIPIENT[:-1] + 'x'))
+        # p2sh recipient accepted (p2sh_prefix configured)
+        p2sh_style = embit_base58.encode_check(b'\xc4' + b'\x22' * 20)
+        self.assertTrue(faucet._validate_address(ctx, p2sh_style))
+
+    def test_segwit_networks_reject_legacy_addresses(self):
+        faucet = helpers.make_utxo_faucet()
+        ctx = faucet._setup_wallet_for_network('knf')
+        self.assertFalse(faucet._validate_address(ctx, helpers.ANCHOR_DOGE_RECIPIENT))
 
 
 if __name__ == '__main__':
