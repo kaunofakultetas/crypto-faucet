@@ -82,9 +82,9 @@ class ConfigModelTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_configs(self.evm(mutate), {}, {})
 
-    def test_bad_hrp_is_rejected(self):
+    def test_unknown_coin_is_rejected(self):
         utxo = copy.deepcopy(helpers.UTXO_TEST_CONFIGS)
-        utxo['knf']['faucet']['hrp'] = 'KNF'  # bech32 HRPs are lowercase
+        utxo['knf']['faucet']['coin'] = 'shibacoin'  # not in the registry
         with self.assertRaises(ValueError):
             validate_configs({}, {}, utxo)
 

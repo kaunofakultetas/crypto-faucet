@@ -1,8 +1,15 @@
 ############################################################
-# Author:           Tomas Vanagas
-# Updated:          2025-07-27
-# Version:          1.0
-# Description:      Database initialization
+#  [*] Database initialization
+#
+#  The idempotent SQLite schema: every feature's tables
+#  (blockchain simulator, faucet transaction graph, reorg
+#  attack) created IF NOT EXISTS on every boot, plus the
+#  pre-mined demo chain the simulator page starts from.
+#  Nothing here migrates or drops — a fresh volume gets the
+#  full schema, an existing one is left untouched.
+#
+#  Used by:
+#    - main.py — init_db() in the __main__ block, STEP 1
 ############################################################
 
 
@@ -14,6 +21,19 @@ from .db import get_db_connection
 
 
 
+
+
+
+############################################################
+# init_db
+############################################################
+#
+# The single entry point: schema first, then the seed data.
+#
+# Used by:
+#   - main.py — once at startup
+############################################################
+
 def init_db():
     init_db_tables()
 
@@ -21,6 +41,21 @@ def init_db():
 
 
 
+
+
+
+
+
+############################################################
+# init_db_tables
+############################################################
+#
+# Every table, grouped by feature. All CREATEs are IF NOT
+# EXISTS — safe to run on every boot.
+#
+# Used by:
+#   - init_db (above)
+############################################################
 
 def init_db_tables():
     with get_db_connection() as conn:
@@ -118,10 +153,21 @@ def init_db_tables():
             )
         ''')
         #####################################################################
-            
 
 
 
+
+############################################################
+# init_default_data
+############################################################
+#
+# The blockchain simulator's pre-mined demo chain (10 blocks,
+# Lithuanian sample transactions) — INSERT OR IGNORE, so a
+# database that already has them is untouched.
+#
+# Used by:
+#   - init_db (above)
+############################################################
 
 def init_default_data():
 

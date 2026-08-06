@@ -50,18 +50,39 @@ ANCHOR_UTXOS = [
 ]
 ANCHOR_AMOUNT_SAT = 250000
 
+# Legacy (p2pkh, base58) anchors for the doge3 test network:
+# TEST_PRIVATE_KEY / RECIPIENT_PRIVATE_KEY under Dogecoin's
+# testnet P2PKH version byte 0x71.
+ANCHOR_DOGE_ADDRESS = 'nXPtcJMdE3WEj63KpzXpm2zUsmXgCGqEeA'
+ANCHOR_DOGE_RECIPIENT = 'nhbxsJJws6k39TiDyS12kkbjSvYZG4T4kH'
+
+# Doge-scale UTXOs/amount (koinu) — the doge3 test config's fee
+# rate and dust limit are ~100x the Bitcoin-style anchors above
+ANCHOR_DOGE_UTXOS = [
+    {'tx_hash': '33' * 32, 'tx_pos': 0, 'value': 6_000_000_000},
+    {'tx_hash': '44' * 32, 'tx_pos': 1, 'value': 1_000_000_000},
+]
+ANCHOR_DOGE_AMOUNT_SAT = 5_000_000_000  # 50 tDOGE
+
 
 # ---- Minimal test configs -----------------------------------
 
 UTXO_TEST_CONFIGS = {
     'knf': {
         'id': 1, 'short_name': 'KNF', 'full_name': 'KNF Coin',
-        'faucet': {'chunk_size': 1000, 'network': 'mainnet', 'hrp': 'knf',
+        'faucet': {'coin': 'knfcoin', 'network': 'mainnet', 'chunk_size': 1000,
                    'electrum_server': '127.0.0.1:9999'},
     },
     'btc4': {
         'id': 4, 'short_name': 'tBTC4', 'full_name': 'Bitcoin Testnet4',
-        'faucet': {'chunk_size': 0.01, 'network': 'testnet', 'hrp': 'tb',
+        'faucet': {'coin': 'bitcoin', 'network': 'testnet', 'chunk_size': 0.01,
+                   'electrum_server': '127.0.0.1:9999'},
+    },
+    # Legacy (pre-SegWit) dialect — the coin registry supplies the
+    # base58 version bytes and doge-scale fee/dust
+    'doge3': {
+        'id': 5, 'short_name': 'tDOGE3', 'full_name': 'Dogecoin Testnet3',
+        'faucet': {'coin': 'dogecoin', 'network': 'testnet', 'chunk_size': 50,
                    'electrum_server': '127.0.0.1:9999'},
     },
 }

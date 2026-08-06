@@ -1,8 +1,17 @@
 ############################################################
-# Author:           Tomas Vanagas
-# Updated:          2025-09-04
-# Version:          1.0
-# Description:      Reorg attack manager for blockchain 
+#  [*] Reorg attack — manager & database helpers
+#
+#  The backend half of the 51% attack tool: ReorgDatabase
+#  wraps the Blockchain_* tables (blocks mirrored from the
+#  fullnodes, tracked transactions and the blocks they were
+#  sighted in), ReorgAttackManager drives the attack view —
+#  one FullNodeRPC client per side (the PUBLIC network node
+#  and the student-controlled PRIVATE one, fullnode_rpc.py)
+#  plus the peer-connection switch that splits and heals the
+#  two networks.
+#
+#  Used by:
+#    - routes.py — the Flask endpoints under /api/reorg/*
 ############################################################
 
 
@@ -15,17 +24,43 @@ from .fullnode_rpc import FullNodeRPC, FullNodeConnections
 
 
 
-class ReorgDatabase:
-    """
-    Database operations for reorg attack system
-    """
 
+
+
+
+############################################################
+# ReorgDatabase
+############################################################
+#
+# Static read helpers over the Blockchain_* tables — no
+# state, no RPC; every method opens its own connection.
+#
+# Used by:
+#   - ReorgAttackManager (below) and routes.py
+############################################################
+
+class ReorgDatabase:
+
+
+
+
+
+
+    ############################################################
+    # get_existing_block_hashes
+    ############################################################
+    #
+    # The stored block hashes of one 'YYYY-MM-DD' date
+    # (default: today), as a plain list — meant as a cheap
+    # duplicate check before inserting synced blocks.
+    #
+    # Used by:
+    #   - nothing calls this at the moment — the sync path in
+    #     fullnode_rpc.py checks duplicates its own way
+    ############################################################
 
     @staticmethod
     def get_existing_block_hashes(date=None) -> set:
-        """
-        Get a set of existing block hashes for efficient duplicate checking
-        """
         dateNow = datetime.now().strftime("%Y-%m-%d")
         target_date = date or dateNow
 
@@ -39,51 +74,76 @@ class ReorgDatabase:
             ''', [target_date])
             results = sqlFetchData.fetchone()[0]
             return json.loads(results)
-            
 
 
+
+
+
+
+    ############################################################
+    # get_all_tracked_transactions
+    ############################################################
+    #
+    # Every tracked transaction as {txid, color, blocks}: the
+    # student-assigned color (empty column falls back to
+    # 'blue') and the hashes of every block the tx was sighted
+    # in — one extra query per transaction, fine for the
+    # handful a class tracks.
+    #
+    # Used by:
+    #   - ReorgAttackManager.get_blockchain_data (below)
+    #   - routes.py — the transaction list endpoint
+    ############################################################
 
     @staticmethod
     def get_all_tracked_transactions():
-        """
-        Get all tracked transactions with their associated blocks
-        """
-        with get_db_connection() as conn:            
+        with get_db_connection() as conn:
             sqlFetchData = conn.execute('''
                 SELECT DISTINCT t.TXID, t.Inputs, t.Outputs, t.Color
                 FROM Blockchain_Transactions t
             ''')
-            
+
             transactions = []
             for row in sqlFetchData.fetchall():
                 txid = row[0]
-                color = row[3] if row[3] else 'blue'  # Use stored color or default to blue
-                
-                # Get blocks associated with this transaction
+                color = row[3] if row[3] else 'blue'
+
                 sqlFetchData = conn.execute('''
                     SELECT BlockHash FROM Blockchain_TxInBlocks WHERE TXID = ?
                 ''', (txid,))
-                
+
                 blocks = [block[0] for block in sqlFetchData.fetchall()]
-                
+
                 transactions.append({
                     'txid': txid,
                     'color': color,
                     'blocks': blocks
                 })
-            
+
             return transactions
-            
 
 
+
+
+
+
+    ############################################################
+    # get_blocks_summary
+    ############################################################
+    #
+    # Two views of the stored blocks: the overall count /
+    # height range / date range, and the same broken down by
+    # coinbase message — the coinbase is what distinguishes
+    # which network (public vs the students' private chain)
+    # mined a block.
+    #
+    # Used by:
+    #   - ReorgAttackManager.get_network_status (below)
+    ############################################################
 
     @staticmethod
     def get_blocks_summary():
-        """
-        Get a summary of blocks in the database
-        """
-        with get_db_connection() as conn:            
-            # Get overall summary
+        with get_db_connection() as conn:
             sqlFetchData = conn.execute('''
                 SELECT 
                     COUNT(*) as total_count,
@@ -93,10 +153,9 @@ class ReorgDatabase:
                     MAX(Date) as latest_date
                 FROM Blockchain_Blocks
             ''')
-            
+
             overall = sqlFetchData.fetchone()
-            
-            # Get summary by coinbase message patterns (to distinguish networks)
+
             sqlFetchData = conn.execute('''
                 SELECT 
                     CoinbaseMessage,
@@ -107,9 +166,9 @@ class ReorgDatabase:
                 GROUP BY CoinbaseMessage
                 ORDER BY count DESC
             ''')
-            
+
             by_coinbase = sqlFetchData.fetchall()
-            
+
             summary = {
                 'total': {
                     'count': overall[0] if overall else 0,
@@ -118,29 +177,63 @@ class ReorgDatabase:
                 },
                 'by_coinbase': {}
             }
-            
+
             for row in by_coinbase:
                 summary['by_coinbase'][row[0]] = {
                     'count': row[1],
                     'height_range': f"{row[2]}-{row[3]}"
                 }
-            
+
             return summary
-            
 
 
 
+
+
+
+
+
+############################################################
+# ReorgAttackManager
+############################################################
+#
+# The attack orchestrator: one FullNodeRPC per side (public /
+# private, from the config's connection settings) plus the
+# FullNodeConnections switch on the private node. Methods:
+#
+#   view     — get_blockchain_data, get_network_status
+#   actions  — send_raw_transaction, track_transaction,
+#              remove_transaction_tracking
+#
+# Used by:
+#   - routes.py — the single shared instance
+############################################################
 
 class ReorgAttackManager:
-    """
-    Main manager for reorg attack operations
-    """
-    
+
+
+
+
+
+
+    ############################################################
+    # __init__
+    ############################################################
+    #
+    # Builds both RPC clients from the config dict
+    # ('publicside' / 'privateside' connection settings) and
+    # the peer-connection switch on the private node.
+    # depth_per_sync caps how many recent blocks each view
+    # refresh pulls from each node.
+    #
+    # Used by:
+    #   - routes.py — at import time, the single instance
+    ############################################################
+
     def __init__(self, config: Dict):
         self.config = config
         self.depth_per_sync = 100
-        
-        # Initialize RPC clients
+
         self.public_rpc = FullNodeRPC(self.config['publicside'])
         self.private_rpc = FullNodeRPC(self.config['privateside'])
         self.fullnode_connections = FullNodeConnections(self.private_rpc)
@@ -148,20 +241,39 @@ class ReorgAttackManager:
 
 
 
+
+
+    ############################################################
+    # get_blockchain_data
+    ############################################################
+    #
+    # The attack view in one payload: syncs the recent blocks
+    # of BOTH nodes into the database, serves the picked
+    # date's blocks (default today), refreshes every tracked
+    # transaction's block sightings on both sides, and returns
+    # blocks + the two chain tips + the tracked transactions.
+    #
+    # Used by:
+    #   - routes.py — the visualization's poll endpoint
+    ############################################################
+
     def get_blockchain_data(self, date) -> Dict:
-        """
-        Get blockchain visualization data with improved efficiency
-        """
         dateNow = datetime.now().strftime("%Y-%m-%d")
         target_date = date or dateNow
 
-        # Step 1: Sync recent data before returning
+
+        # STEP 1: pull each node's newest blocks into the DB, so
+        # the view below reads fresh data.
+        # ======================================================
         self.private_rpc.sync_recent_blocks(self.depth_per_sync)
         self.public_rpc.sync_recent_blocks(self.depth_per_sync)
 
 
-
-        # Step 2: Get blocks from database
+        # STEP 2: the picked date's blocks. A date with fewer than
+        # 100 stored blocks (fresh install, quiet day) falls back
+        # to the newest 100 overall, so the view never renders
+        # near-empty.
+        # ========================================================
         all_blocks = []
         with get_db_connection() as conn:
             sqlFetchData = conn.execute('''
@@ -183,8 +295,7 @@ class ReorgAttackManager:
                 ORDER BY Height ASC
             ''', [target_date])
             all_blocks = json.loads(sqlFetchData.fetchone()[0])
-            
-            # If there are very few blocks (less than 100), fetch the last 100 blocks instead
+
             if len(all_blocks) < 100:
                 sqlFetchData = conn.execute('''
                     SELECT
@@ -210,8 +321,9 @@ class ReorgAttackManager:
                 all_blocks = json.loads(sqlFetchData.fetchone()[0])
 
 
-
-        # Step 3: Sync tracked transactions
+        # STEP 3: refresh every tracked transaction's block
+        # sightings on both networks.
+        # =================================================
         all_tracked_txids = []
         with get_db_connection() as conn:
             sqlFetchData = conn.execute('''
@@ -222,19 +334,14 @@ class ReorgAttackManager:
         self.private_rpc.sync_tracked_transactions(all_tracked_txids)
 
 
-
-        # Step 4: Get tracked transactions
+        # STEP 4: assemble — tracked transactions, both tips, the
+        # blocks.
+        # =======================================================
         tracked_transactions = ReorgDatabase.get_all_tracked_transactions()
 
-
-
-        # Step 5: Get tips
         public_tip = self.public_rpc.get_tip_info()
         private_tip = self.private_rpc.get_tip_info()
 
-
-
-        # Step 6: Return data
         return {
             'success': True,
             'data': {
@@ -249,42 +356,63 @@ class ReorgAttackManager:
 
 
 
+
+
+
+    ############################################################
+    # get_network_status
+    ############################################################
+    #
+    # The private node's peer-connection status, enriched —
+    # when that call succeeded — with the public tip and the
+    # stored-blocks summary.
+    #
+    # Used by:
+    #   - routes.py — the network status endpoint
+    ############################################################
+
     def get_network_status(self) -> Dict:
-        """
-        Get comprehensive network status including tips
-        """
-        # Get connection status from full node
         connection_status = self.fullnode_connections.get_connection_status()
-        
-        # Get public tip with better error handling
+
         public_tip = self.public_rpc.get_tip_info()
-        
-        # Get database summary
+
         blocks_summary = ReorgDatabase.get_blocks_summary()
-        
-        # Merge the data
+
         if connection_status['success']:
             connection_status['status']['publicTip'] = public_tip
             connection_status['status']['blocksSummary'] = blocks_summary
-            
-        return connection_status
-        
 
+        return connection_status
+
+
+
+
+
+
+    ############################################################
+    # send_raw_transaction
+    ############################################################
+    #
+    # Broadcasts a raw transaction to the PRIVATE node and
+    # auto-tracks it under the given color. Tracking is
+    # best-effort: the broadcast already happened, so a
+    # tracking failure only warns instead of failing the
+    # request.
+    #
+    # Used by:
+    #   - routes.py — the send endpoint
+    ############################################################
 
     def send_raw_transaction(self, raw_tx: str, color: str = 'blue') -> Dict:
-        """
-        Send raw transaction to private network and automatically track it
-        """
         try:
             txid = self.private_rpc.send_raw_transaction(raw_tx)
-            
-            # Automatically track the transaction with the specified color
+
+            # Log tracking errors but don't fail the transaction send
             try:
                 self.track_transaction(txid, color)
             except Exception as track_err:
-                # Log tracking error but don't fail the transaction send
                 print(f"Warning: Failed to track transaction {txid}: {str(track_err)}")
-            
+
             return {
                 'success': True,
                 'message': 'Transaction sent successfully',
@@ -298,17 +426,34 @@ class ReorgAttackManager:
 
 
 
+
+
+
+    ############################################################
+    # track_transaction
+    ############################################################
+    #
+    # Starts (or refreshes) tracking one transaction: asks
+    # BOTH networks about it — the first answer supplies the
+    # inputs/outputs, every answer may add a block sighting —
+    # and upserts the result. A tx in no block yet is stored
+    # anyway (INSERT OR REPLACE also refreshes the color on
+    # re-track).
+    #
+    # Used by:
+    #   - send_raw_transaction (above) — auto-track
+    #   - routes.py — the manual track endpoint
+    ############################################################
+
     def track_transaction(self, txid: str, color: str = 'blue') -> Dict:
-        """
-        Track a transaction
-        """
-        
+
         inputs_json = None
         outputs_json = None
         found_blocks = []
 
 
-        # Step 1: Get transaction info from private network
+        # STEP 1: the private network's view of the tx.
+        # =============================================
         try:
             private_tx_info = self.private_rpc.get_raw_transaction(txid)
             if(inputs_json is None and outputs_json is None):
@@ -320,8 +465,8 @@ class ReorgAttackManager:
             print(f"Note: Could not get transaction from private network: {str(e)}")
 
 
-
-        # Step 2: Get transaction info from public network
+        # STEP 2: the public network's view.
+        # ==================================
         try:
             public_tx_info = self.public_rpc.get_raw_transaction(txid)
             if(inputs_json is None and outputs_json is None):
@@ -331,16 +476,17 @@ class ReorgAttackManager:
                 found_blocks.append(public_tx_info["blockhash"])
         except Exception as e:
             print(f"Note: Could not get transaction from public network: {str(e)}")
-                    
-        
 
-        # Step 3: Store transaction data (even if it's not in a block yet)
+
+        # STEP 3: store the tx (even when it's in no block yet)
+        # and each block sighting.
+        # =====================================================
         with get_db_connection() as conn:
             conn.execute('''
                 INSERT OR REPLACE INTO Blockchain_Transactions (TXID, Inputs, Outputs, Color)
                 VALUES (?, ?, ?, ?)
             ''', (txid, inputs_json, outputs_json, color))
-            
+
             for block_hash in found_blocks:
                 conn.execute('''
                     INSERT OR IGNORE INTO Blockchain_TxInBlocks (TXID, BlockHash)
@@ -361,15 +507,24 @@ class ReorgAttackManager:
 
 
 
+
+    ############################################################
+    # remove_transaction_tracking
+    ############################################################
+    #
+    # Stops tracking one transaction: its block sightings and
+    # the transaction row itself.
+    #
+    # Used by:
+    #   - routes.py — the untrack endpoint
+    ############################################################
+
     def remove_transaction_tracking(self, txid: str) -> Dict:
-        """
-        Remove a transaction from tracking
-        """
         with get_db_connection() as conn:
             conn.execute('DELETE FROM Blockchain_TxInBlocks WHERE TXID = ?', (txid,))
             conn.execute('DELETE FROM Blockchain_Transactions WHERE TXID = ?', (txid,))
             conn.commit()
-        
+
         return {
             'success': True,
             'message': 'Transaction tracking removed successfully'
