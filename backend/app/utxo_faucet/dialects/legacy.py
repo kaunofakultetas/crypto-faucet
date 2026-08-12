@@ -14,6 +14,10 @@
 #  Used by:
 #    - dialects/__init__.py — dialect_for()
 #    - utxo_faucet.py — through the NetworkContext
+#    - segwit.py — composed in as the RECIPIENT codec on
+#      SegWit coins that also accept old base58 addresses
+#      (only validate_address / recipient_script are called
+#      in that role)
 ############################################################
 
 

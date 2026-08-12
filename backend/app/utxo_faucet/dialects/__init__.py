@@ -5,8 +5,10 @@
 #  class serves every network of its kind, instantiated with
 #  that network's parameters from the config's faucet section.
 #
-#    segwit.py — SegwitDialect(hrp): bech32 addresses, p2wpkh
-#                spending, BIP-143 witness signing
+#    segwit.py — SegwitDialect(hrp, p2pkh?, p2sh?): bech32
+#                addresses, p2wpkh spending, BIP-143 witness
+#                signing; when the coin lists base58 version
+#                bytes, legacy RECIPIENTS are accepted too
 #                (knf, ltc4, btc4)
 #    legacy.py — LegacyDialect(p2pkh_prefix, p2sh_prefix):
 #                base58 addresses, p2pkh spending,
@@ -35,18 +37,21 @@ from .legacy import LegacyDialect
 ############################################################
 #
 # The single decision point turning a coin's resolved params
-# (coins/ registry) into its dialect object: a 'p2pkh_prefix'
-# marks a legacy pre-SegWit coin, an 'hrp' a SegWit one.
+# (coins/ registry) into its dialect object. An 'hrp' marks a
+# SegWit coin — its optional base58 version bytes then only
+# widen RECIPIENT acceptance. No hrp but a 'p2pkh_prefix'
+# marks a legacy pre-SegWit coin.
 #
 # Used by:
 #   - utxo_faucet.py — UTXOFaucet.__init__, once per network
 ############################################################
 
 def dialect_for(params: dict):
+    hrp = params.get('hrp')
+    if hrp:
+        return SegwitDialect(hrp, params.get('p2pkh_prefix'), params.get('p2sh_prefix'))
+
     if 'p2pkh_prefix' in params:
         return LegacyDialect(params['p2pkh_prefix'], params.get('p2sh_prefix'))
 
-    hrp = params.get('hrp')
-    if not hrp:
-        raise ValueError("coin params need 'hrp' (SegWit) or 'p2pkh_prefix' (legacy)")
-    return SegwitDialect(hrp)
+    raise ValueError("coin params need 'hrp' (SegWit) or 'p2pkh_prefix' (legacy)")

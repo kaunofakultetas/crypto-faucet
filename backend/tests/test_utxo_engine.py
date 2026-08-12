@@ -127,6 +127,35 @@ class UtxoEngineTests(unittest.TestCase):
         self.assertEqual(ctx_btc.scripthash, expected)
         self.assertNotEqual(ctx_knf.address, ctx_btc.address)
 
+    def test_legacy_recipient_on_segwit_chain(self):
+        # btc4 pays an old-wallet base58 recipient: p2pkh output,
+        # inputs still witness-signed
+        from embit import base58 as embit_base58, hashes as embit_hashes
+        prv = ec.PrivateKey(bytes.fromhex(helpers.RECIPIENT_PRIVATE_KEY))
+        keyhash = embit_hashes.hash160(prv.get_public_key().serialize())
+        legacy_addr = embit_base58.encode_check(b'\x6f' + keyhash)
+
+        tx, _ = self.build_payout(network='btc4', to_address=legacy_addr)
+        self.assertEqual(tx.vout[0].script_pubkey.data[:3], b'\x76\xa9\x14')
+        self.assertEqual(tx.vout[0].script_pubkey.data[3:23], keyhash)
+        self.assertTrue(tx.is_segwit)
+
+    def test_segwit_chain_legacy_recipient_validation(self):
+        # btc4 accepts its own legacy p2pkh/p2sh recipients, rejects
+        # other chains' version bytes; KNF (no prefixes) rejects all
+        from embit import base58 as embit_base58
+        faucet = helpers.make_utxo_faucet()
+        ctx_btc = faucet._setup_wallet_for_network('btc4')
+        ctx_knf = faucet._setup_wallet_for_network('knf')
+
+        btc_p2pkh = embit_base58.encode_check(b'\x6f' + b'\x11' * 20)
+        btc_p2sh = embit_base58.encode_check(b'\xc4' + b'\x22' * 20)
+        self.assertTrue(faucet._validate_address(ctx_btc, btc_p2pkh))
+        self.assertTrue(faucet._validate_address(ctx_btc, btc_p2sh))
+        # doge testnet p2pkh (0x71) must not pass as btc (0x6f)
+        self.assertFalse(faucet._validate_address(ctx_btc, helpers.ANCHOR_DOGE_RECIPIENT))
+        self.assertFalse(faucet._validate_address(ctx_knf, btc_p2pkh))
+
 
 
 

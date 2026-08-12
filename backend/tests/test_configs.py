@@ -96,11 +96,13 @@ class UtxoConfigTests(unittest.TestCase):
                 self.assertIn(faucet['network'], ('mainnet', 'testnet', 'regtest'))
                 self.assertRegex(faucet['electrum_server'], r'^[\w.\-]+:\d+$')
 
-                # The coin + flavour must resolve in the registry, to
-                # exactly one address dialect (hrp XOR p2pkh_prefix)
+                # The coin + flavour must resolve in the registry to a
+                # spendable dialect: an hrp (SegWit — may ALSO carry
+                # base58 prefixes for legacy recipients) or, without
+                # one, a p2pkh_prefix (legacy chain)
                 from app.utxo_faucet.coins import coin_params
                 params = coin_params(faucet['coin'], faucet['network'])
-                self.assertNotEqual('hrp' in params, 'p2pkh_prefix' in params)
+                self.assertTrue('hrp' in params or 'p2pkh_prefix' in params)
                 self.assertGreater(params['fee_rate'], 0)
                 self.assertGreater(params['dust_limit'], 0)
 

@@ -9,6 +9,14 @@
 #  Recipients are accepted as ANY witness program (p2wpkh,
 #  p2wsh, taproot): the scriptPubKey is version opcode (OP_0,
 #  or OP_1..OP_16 = 0x50 + n) followed by the pushed program.
+#  When the coin lists base58 version bytes, LEGACY recipients
+#  (p2pkh / p2sh) are accepted too — SegWit chains never
+#  abolished them, and students' older wallets still hand
+#  them out. That is recipient-side ONLY: a LegacyDialect is
+#  composed in purely as the base58 codec, while the faucet's
+#  own wallet, address and signing stay SegWit (a
+#  witness-signed transaction paying a p2pkh output is
+#  perfectly standard).
 #
 #  Used by:
 #    - dialects/__init__.py — dialect_for()
@@ -20,6 +28,8 @@ from embit import script as embit_script
 from embit import bech32 as embit_bech32
 from embit.transaction import Witness, SIGHASH
 
+from .legacy import LegacyDialect
+
 
 
 
@@ -30,14 +40,23 @@ from embit.transaction import Witness, SIGHASH
 class SegwitDialect:
 
     # Version-2 transactions, and the conservative fee-estimate
-    # vsizes: ~91 vbytes per p2wpkh input, ~31 per output
+    # vsizes: ~91 vbytes per p2wpkh input, ~31 per output (a
+    # legacy p2pkh output is 34 — the 3-byte difference sits
+    # comfortably inside the input over-estimate)
     TX_VERSION = 2
     INPUT_SIZE = 91
     OUTPUT_SIZE = 31
 
 
-    def __init__(self, hrp: str):
+    def __init__(self, hrp: str, p2pkh_prefix=None, p2sh_prefix=None):
         self.hrp = hrp
+
+        # Recipient-side ONLY: when the coin lists base58 version
+        # bytes, a LegacyDialect serves as the codec for old-wallet
+        # recipient addresses. None = bech32 recipients only (KNF).
+        self._legacy_recipients = (
+            LegacyDialect(p2pkh_prefix, p2sh_prefix) if p2pkh_prefix is not None else None
+        )
 
 
 
@@ -69,17 +88,24 @@ class SegwitDialect:
     # validate_address
     ############################################################
     #
-    # Cheap sanity check — the address must carry this
-    # network's HRP ('tb1...', 'knf1...'). The FULL checksum
-    # validation happens in recipient_script, where the
-    # address is bech32-decoded for real.
+    # bech32: a cheap prefix check ('tb1...', 'knf1...') — the
+    # FULL checksum validation happens in recipient_script,
+    # where the address is bech32-decoded for real. Anything
+    # else falls through to the legacy codec (full base58check
+    # verdict) when the coin has one.
     #
     # Used by:
     #   - utxo_faucet.py — request_crypto's input validation
     ############################################################
 
     def validate_address(self, address: str) -> bool:
-        return address.lower().startswith(self.hrp + '1')
+        if address.lower().startswith(self.hrp + '1'):
+            return True
+
+        if self._legacy_recipients is not None:
+            return self._legacy_recipients.validate_address(address)
+
+        return False
 
 
 
@@ -89,8 +115,10 @@ class SegwitDialect:
     ############################################################
     #
     # bech32-decode (full checksum check) into a
-    # witness-program scriptPubKey. Raises ValueError on
-    # anything that doesn't decode under this HRP.
+    # witness-program scriptPubKey; an address that doesn't
+    # decode under this HRP is handed to the legacy codec
+    # (p2pkh / p2sh) when the coin has one. Raises ValueError
+    # when neither accepts it.
     #
     # Used by:
     #   - utxo_faucet.py — the payout's recipient output
@@ -98,12 +126,15 @@ class SegwitDialect:
 
     def recipient_script(self, address: str) -> embit_script.Script:
         witver, witprog = embit_bech32.decode(self.hrp, address)
-        if witver is None or witprog is None:
-            raise ValueError("Invalid recipient address")
-        witprog = bytes(witprog)
+        if witver is not None and witprog is not None:
+            witprog = bytes(witprog)
+            version_opcode = bytes([0x50 + witver if witver else 0])
+            return embit_script.Script(version_opcode + bytes([len(witprog)]) + witprog)
 
-        version_opcode = bytes([0x50 + witver if witver else 0])
-        return embit_script.Script(version_opcode + bytes([len(witprog)]) + witprog)
+        if self._legacy_recipients is not None:
+            return self._legacy_recipients.recipient_script(address)
+
+        raise ValueError("Invalid recipient address")
 
 
 
