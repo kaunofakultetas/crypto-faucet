@@ -303,7 +303,7 @@ EVM_NETWORK_CONFIGS = {
             'short_name': "POL",
             'full_name': 'Polygon Amoy',
             'rpc_url': 'https://polygon-amoy.infura.io/v3/<INFURA_PROJECT_ID>',
-            'chunk_size': 0.2,
+            'chunk_size': 0.05,
         },
         'metamask': {
             'chain_name': 'Amoy',
