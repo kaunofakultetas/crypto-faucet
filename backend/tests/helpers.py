@@ -204,3 +204,184 @@ def make_erc20_faucet(evm_faucet=None, token_configs=None):
     evm = evm_faucet or make_evm_faucet()
     with mock.patch.object(ERC20Faucet, '_warm_up_tokens', lambda self: None):
         return ERC20Faucet(evm, token_configs or ERC20_TEST_CONFIGS)
+
+
+
+
+############################################################
+# sign_claim
+############################################################
+#
+#   address, signature, nonce = sign_claim()
+#
+# A REAL signature over the exact message the faucets verify
+# — same wording as useWallet.js. Signing with a different
+# key than the claimed address is how the 403 path is tested
+# (pass signer_key).
+#
+# Used by:
+#   - test_request_flows.py — every EVM / ERC-20 claim
+############################################################
+
+CLAIM_MESSAGE = 'Pasirašykite žinutę kad patvirtintumėte jog naudojate šią piniginę. Nonce: {nonce}'
+
+
+def sign_claim(nonce='1785666345742', address_key=RECIPIENT_PRIVATE_KEY, signer_key=None):
+    from eth_account import Account
+    from eth_account.messages import encode_defunct
+
+    address = Account.from_key(bytes.fromhex(address_key)).address
+    signer = Account.from_key(bytes.fromhex(signer_key or address_key))
+    signature = signer.sign_message(encode_defunct(text=CLAIM_MESSAGE.format(nonce=nonce))).signature.hex()
+
+    return address, signature, nonce
+
+
+
+
+############################################################
+# FakeEth
+############################################################
+#
+# Stands in for w3.eth: the handful of calls a payout makes
+# are canned, EVERYTHING else (notably .account, which does
+# the real signature recovery) delegates to the genuine
+# module — so tests exercise real crypto and only the network
+# is faked. broadcast_error makes the send raise, which is
+# how the release-the-cooldown paths are tested.
+#
+# Used by:
+#   - fake_web3 (below)
+############################################################
+
+class FakeEth:
+
+    def __init__(self, real_eth, balances, gas_price=1, broadcast_error=None, balance_error=None):
+        self._real = real_eth
+        self._balances = balances
+        self.gas_price = gas_price
+        self.broadcast_error = broadcast_error
+        self.balance_error = balance_error
+        self.sent = []
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+    def get_balance(self, address, *args, **kwargs):
+        if self.balance_error:
+            raise RuntimeError(self.balance_error)
+        return self._balances.get(address.lower(), 0)
+
+    def send_transaction(self, tx):
+        if self.broadcast_error:
+            raise RuntimeError(self.broadcast_error)
+        self.sent.append(tx)
+        return bytes.fromhex('ab' * 32)
+
+
+
+
+############################################################
+# fake_web3
+############################################################
+#
+#   eth = fake_web3(faucet, 'testchain', balances={addr: wei})
+#
+# Swaps one network's w3.eth for a FakeEth and returns it, so
+# a test can assert on eth.sent afterwards. Balance keys are
+# lowercased addresses; anything absent reads as 0.
+#
+# Used by:
+#   - test_request_flows.py — the EVM and ERC-20 flows
+############################################################
+
+def fake_web3(faucet, network, balances=None, **kwargs):
+    w3 = faucet.w3_instances[network]
+    eth = FakeEth(w3.eth, {k.lower(): v for k, v in (balances or {}).items()}, **kwargs)
+    w3.eth = eth
+    return eth
+
+
+
+
+############################################################
+# FakeErc20Contract
+############################################################
+#
+# Stands in for the token contract: balanceOf reads a canned
+# map, transfer records the call and returns a tx hash.
+# transfer_error / estimate_error drive the failure paths
+# (the engine falls back to a fixed gas limit when the
+# estimate raises).
+#
+# Used by:
+#   - fake_token_contract (below)
+############################################################
+
+class FakeErc20Contract:
+
+    def __init__(self, balances, transfer_error=None, estimate_error=None, balance_error=None):
+        self._balances = balances
+        self.transfer_error = transfer_error
+        self.estimate_error = estimate_error
+        self.balance_error = balance_error
+        self.transfers = []
+        self.functions = self
+
+    def balanceOf(self, address):
+        contract = self
+
+        class Call:
+            def call(self):
+                if contract.balance_error:
+                    raise RuntimeError(contract.balance_error)
+                return contract._balances.get(address.lower(), 0)
+
+        return Call()
+
+    def transfer(self, to_address, amount):
+        contract = self
+
+        class Transfer:
+            def estimate_gas(self, tx):
+                if contract.estimate_error:
+                    raise RuntimeError(contract.estimate_error)
+                return 60000
+
+            def transact(self, tx):
+                if contract.transfer_error:
+                    raise RuntimeError(contract.transfer_error)
+                contract.transfers.append((to_address, amount, tx))
+                return bytes.fromhex('cd' * 32)
+
+        return Transfer()
+
+
+
+
+############################################################
+# fake_token_contract
+############################################################
+#
+#   with fake_token_contract(balances={...}) as contract:
+#       faucet.request_tokens(...)
+#
+# Patches the module-level get_erc20_contract the ERC-20
+# faucet calls, so every token read/write in the block hits
+# the fake. Yields the contract for assertions.
+#
+# Used by:
+#   - test_request_flows.py — the ERC-20 flows
+############################################################
+
+def fake_token_contract(balances=None, **kwargs):
+    import contextlib
+
+    contract = FakeErc20Contract({k.lower(): v for k, v in (balances or {}).items()}, **kwargs)
+
+    @contextlib.contextmanager
+    def patched():
+        with mock.patch('app.erc_faucet.erc20_faucet.get_erc20_contract', return_value=contract):
+            yield contract
+
+    return patched()

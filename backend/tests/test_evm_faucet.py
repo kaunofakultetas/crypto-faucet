@@ -70,5 +70,75 @@ class EvmFaucetTests(unittest.TestCase):
         self.assertIsNot(faucet.send_lock_for('testchain'), faucet.send_lock_for('other'))
 
 
+
+
+############################################################
+# SignatureVerificationTests
+############################################################
+#
+# verify_signature is the ONLY thing standing between a
+# student and claiming to another wallet's address — the EVM
+# and ERC-20 payouts both gate on it. The flows in
+# test_request_flows.py cover it end to end; these pin the
+# method itself, including the edges a request can't reach.
+############################################################
+
+class SignatureVerificationTests(unittest.TestCase):
+
+    # None is a VALUE under test here, so the "keep the default"
+    # sentinel has to be something else
+    UNSET = object()
+
+    def setUp(self):
+        self.faucet = helpers.make_evm_faucet()
+        self.address, self.signature, self.nonce = helpers.sign_claim()
+        self.message = helpers.CLAIM_MESSAGE.format(nonce=self.nonce)
+
+    def verify(self, address=UNSET, message=UNSET, signature=UNSET):
+        return self.faucet.verify_signature(
+            'testchain',
+            self.address if address is self.UNSET else address,
+            self.message if message is self.UNSET else message,
+            self.signature if signature is self.UNSET else signature,
+        )
+
+    def test_valid_signature_is_accepted(self):
+        self.assertTrue(self.verify())
+
+    def test_address_comparison_is_case_insensitive(self):
+        # MetaMask sends lowercase, the backend checksums — both must
+        # recover to the same wallet
+        self.assertTrue(self.verify(address=self.address.lower()))
+        self.assertTrue(self.verify(address=self.address.upper().replace('0X', '0x')))
+
+    def test_signature_from_another_wallet_is_rejected(self):
+        # The whole point: signing with key A must not prove ownership
+        # of address B
+        other = Account.from_key(bytes.fromhex(helpers.TEST_PRIVATE_KEY)).address
+        self.assertFalse(self.verify(address=other))
+
+    def test_different_message_is_rejected(self):
+        # The signature commits to the nonce — replaying it under a
+        # different one must fail recovery
+        self.assertFalse(self.verify(message=helpers.CLAIM_MESSAGE.format(nonce='999')))
+        self.assertFalse(self.verify(message='Something else entirely'))
+
+    def test_malformed_input_returns_false_and_never_raises(self):
+        # A student pasting junk gets a clean 403, not a 500
+        for bad_signature in ('', '0x', '0xdeadbeef', 'not-hex', None):
+            self.assertFalse(self.verify(signature=bad_signature))
+
+    def test_missing_address_returns_false(self):
+        for bad_address in ('', None):
+            self.assertFalse(self.verify(address=bad_address))
+
+    def test_unknown_network_raises_so_callers_must_gate_first(self):
+        # Documents a real contract, not a wish: the w3 lookup sits
+        # OUTSIDE the try, so both payout paths check
+        # is_supported_network / is_supported before calling this
+        with self.assertRaises(KeyError):
+            self.faucet.verify_signature('nosuchnet', self.address, self.message, self.signature)
+
+
 if __name__ == '__main__':
     unittest.main()
