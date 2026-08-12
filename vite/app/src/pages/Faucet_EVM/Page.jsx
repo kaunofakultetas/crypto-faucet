@@ -215,10 +215,10 @@ export default function FaucetEVM() {
       <div className="mx-auto w-full min-w-[320px] max-w-[640px] px-4 pt-4">
         <h1 className="mb-3 text-center text-[45px] font-bold text-[#78003F]">
           <AssetIcon assetKey={network} icon={networkInfo.icon} size={40} inline />
-          {networkInfo.full_name} ETH faucet&apos;as
+          {networkInfo.full_name} faucet&apos;as
         </h1>
         <p className="text-sm text-gray-700">
-          Šiuo įrankiu galite gauti <u>{networkInfo.full_name}</u> ETH testinės kriptovaliutos laboratoriniams darbams.
+          Šiuo įrankiu galite gauti <u>{networkInfo.full_name}</u> testinės kriptovaliutos laboratoriniams darbams.
         </p>
       </div>
 
@@ -271,7 +271,7 @@ export default function FaucetEVM() {
             >
               {claiming
                 ? <CircularProgress size={22} color="inherit" />
-                : `Gauti ${networkInfo.full_name} ETH valiutos`}
+                : `Gauti ${networkInfo.full_name} valiutos`}
             </Button>
           )}
         </div>

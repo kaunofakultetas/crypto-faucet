@@ -165,7 +165,7 @@ EVM_NETWORK_CONFIGS = {
         'chain_id': 11155111,
         'faucet': {
             'short_name': "SepETH",
-            'full_name': 'Sepolia',
+            'full_name': 'Ethereum Sepolia',
             'rpc_url': 'https://sepolia.infura.io/v3/<INFURA_PROJECT_ID>',
             'chunk_size': 0.2,
         },
@@ -188,7 +188,7 @@ EVM_NETWORK_CONFIGS = {
         'chain_id': 300,
         'faucet': {
             'short_name': "ETH",
-            'full_name': 'zkSync Sepolia Testnet',
+            'full_name': 'zkSync Sepolia',
             'rpc_url': 'https://zksync-sepolia.infura.io/v3/<INFURA_PROJECT_ID>',
             'chunk_size': 0.05,
         },
@@ -206,29 +206,29 @@ EVM_NETWORK_CONFIGS = {
             'etherscan_api_url': 'https://block-explorer-api.sepolia.zksync.dev/api',
         },
     },
-    'polygonZkEvm': {
-        'id': 4,
-        'chain_id': 2442,
-        'faucet': {
-            'short_name': "ETH",
-            'full_name': 'Polygon zkEVM Cardona Testnet',
-            'rpc_url': 'https://rpc.cardona.zkevm-rpc.com',
-            'chunk_size': 0.05,
-        },
-        'metamask': {
-            'chain_name': 'Polygon zkEVM Cardona Testnet',
-            'native_currency': {
-                'name': 'Ethereum',
-                'symbol': 'ETH',
-                'decimals': 18
-            },
-            'rpc_urls': ['https://rpc.cardona.zkevm-rpc.com'],
-            'block_explorer_urls': ['https://explorer-ui.cardona.zkevm-rpc.com'],
-        },
-        'explorer': {
-            'etherscan_api_url': 'https://api-cardona-zkevm.polygonscan.com/api',
-        },
-    },
+    # 'polygonZkEvm': {
+    #     'id': 4,
+    #     'chain_id': 2442,
+    #     'faucet': {
+    #         'short_name': "ETH",
+    #         'full_name': 'Polygon zkEVM Cardona',
+    #         'rpc_url': 'https://rpc.cardona.zkevm-rpc.com',
+    #         'chunk_size': 0.05,
+    #     },
+    #     'metamask': {
+    #         'chain_name': 'Polygon zkEVM Cardona Testnet',
+    #         'native_currency': {
+    #             'name': 'Ethereum',
+    #             'symbol': 'ETH',
+    #             'decimals': 18
+    #         },
+    #         'rpc_urls': ['https://rpc.cardona.zkevm-rpc.com'],
+    #         'block_explorer_urls': ['https://explorer-ui.cardona.zkevm-rpc.com'],
+    #     },
+    #     'explorer': {
+    #         'etherscan_api_url': 'https://api-cardona-zkevm.polygonscan.com/api',
+    #     },
+    # },
     'lineaSepolia': {
         'id': 5,
         'chain_id': 59141,
@@ -295,6 +295,30 @@ EVM_NETWORK_CONFIGS = {
         },
         # no 'explorer' — Arbitrum Sepolia has no API configured,
         # so the /graph feature is off for this chain
+    },
+    "polygonAmoy": {
+        'id': 8,
+        'chain_id': 80002,
+        'faucet': {
+            'short_name': "POL",
+            'full_name': 'Polygon Amoy',
+            'rpc_url': 'https://polygon-amoy.infura.io/v3/<INFURA_PROJECT_ID>',
+            'chunk_size': 0.2,
+        },
+        'metamask': {
+            'chain_name': 'Amoy',
+            'native_currency': {
+                'name': 'POL',
+                'symbol': 'POL',
+                'decimals': 18
+            },
+            'rpc_urls': ['https://polygon-amoy-bor-rpc.publicnode.com'],
+            'block_explorer_urls': ['https://amoy.polygonscan.com'],
+        },
+        'explorer': {
+
+            'etherscan_api_url': 'https://api.etherscan.io/v2/api',
+        },
     }
 }
 
