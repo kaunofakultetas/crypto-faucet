@@ -8,7 +8,7 @@
 //                 token across every chain it lives on),
 //                 /faucet/utxo/:network
 //    - graph    — /graph/:network (transaction flow)
-//    - teaching — /sha256 (simulator), /reorgattack, /videos
+//    - teaching — /sha256 (simulator), /videos
 //    - dapps    — /dapps-server launcher
 //  "/" redirects into the first faucet family that has
 //  entries configured, EVM preferred — a family the operator
@@ -39,7 +39,6 @@ import FaucetUTXO from '@/pages/Faucet_UTXO/Page';
 import GraphPage from '@/pages/Graph/Page';
 import BlockchainSimulatorPage from '@/pages/BlockchainSimulator/Page';
 import DappsServerPage from '@/pages/DappsServer/Page';
-import ReorgAttackPage from '@/pages/ReorgAttack/Page';
 import VideosPage from '@/pages/Videos/Page';
 
 
@@ -58,8 +57,8 @@ import VideosPage from '@/pages/Videos/Page';
 // faucetTargetFor's pick: last used → backend default → first
 // entry. Renders nothing while the deciding catalog loads,
 // and nothing at all when no family is configured (the
-// navbar's teaching pages still work). The catalog queries
-// share their cache keys with the navbar — one fetch serves
+// navbar's teaching pages still work). The catalog query
+// shares its cache key with the navbar — one fetch serves
 // both.
 //
 // Used by:

@@ -113,49 +113,6 @@ def init_db_tables():
 
 
 
-        ######################## Reorg attack tables ########################
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS "Blockchain_Blocks" (
-                "Height"	INTEGER NOT NULL,
-                "Hash"	TEXT NOT NULL UNIQUE,
-                "PrevHash"	TEXT NOT NULL,
-                "CoinbaseMessage"	TEXT NOT NULL,
-                "Date"	TEXT NOT NULL,
-                "Time"	TEXT NOT NULL,
-                "ScryptHash"	TEXT NOT NULL,
-                "ChainWork"	REAL NOT NULL,
-                PRIMARY KEY("Hash")
-            )
-        ''')
-        conn.execute('''
-            CREATE INDEX IF NOT EXISTS idx_blocks_height ON Blockchain_Blocks(Height)
-        ''')
-        conn.execute('''
-            CREATE INDEX IF NOT EXISTS idx_blocks_date ON Blockchain_Blocks(Date)
-        ''')
-        conn.execute('''
-            CREATE INDEX IF NOT EXISTS idx_blocks_coinbase ON Blockchain_Blocks(CoinbaseMessage)
-        ''')
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS "Blockchain_Transactions" (
-                "TXID"	    TEXT NOT NULL UNIQUE,
-                "Inputs"	TEXT NOT NULL,
-                "Outputs"	TEXT NOT NULL,
-                "Color"     TEXT NOT NULL,
-                PRIMARY KEY("TXID")
-            )
-        ''')
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS "Blockchain_TxInBlocks" (
-                "TXID"	TEXT NOT NULL,
-                "BlockHash"	TEXT NOT NULL,
-                UNIQUE("TXID","BlockHash")
-            )
-        ''')
-        #####################################################################
-
-
-
 
 ############################################################
 # init_default_data
