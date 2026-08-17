@@ -64,6 +64,14 @@ except ImportError:
 # cached entry, so a claim shows up immediately regardless.
 BALANCE_CACHE_TTL = 10
 
+# Seconds one address must wait between payouts on one network
+COOLDOWN_SECONDS = 60
+
+# The network the picker preselects. A key of _CONFIG/coins.py's
+# EVM map — when the operator drops that network, get_networks
+# falls back to the lowest picker id instead.
+DEFAULT_NETWORK = 'sepolia'
+
 
 
 
@@ -117,9 +125,8 @@ class EVMFaucet:
     #   - evm_routes.py — at import time, the single instance
     ############################################################
 
-    def __init__(self, network_configs, default_network=None):
+    def __init__(self, network_configs):
         self.APP_DEBUG = os.getenv('APP_DEBUG', 'false').lower() == "true"
-        self.FAUCET_DEFAULT_NETWORK = default_network or os.getenv('FAUCET_DEFAULT_NETWORK', 'sepolia')
 
         self.NETWORK_CONFIGS = network_configs
 
@@ -167,7 +174,7 @@ class EVMFaucet:
         # is claimed atomically before the payout work and released
         # on failure (see app/cooldown.py for the in-memory
         # trade-offs).
-        self.cooldowns = CooldownTable(seconds=60)
+        self.cooldowns = CooldownTable(COOLDOWN_SECONDS)
 
         # network -> the lock serializing that chain's payouts, native
         # AND ERC-20 (same wallet, same per-chain nonce sequence — see
@@ -515,6 +522,9 @@ class EVMFaucet:
     # template, explorer API) stay out of the public payload.
     # icon is the /api/icons/... URL when an icon file exists
     # in the mounted config dir, else None (see app/icons.py).
+    # The preselected network is DEFAULT_NETWORK, or — when
+    # that key is not configured — the lowest picker id, which
+    # is the first entry the picker lists.
     #
     # Used by:
     #   - evm_routes.py — GET /api/evm/networks
@@ -540,7 +550,10 @@ class EVMFaucet:
                 'block_explorer_urls': metamask.get('block_explorer_urls', []),
             }
 
+        default_key = DEFAULT_NETWORK if DEFAULT_NETWORK in networks else min(
+            networks, key=lambda key: networks[key]['id'], default=None)
+
         return {
             "networks": networks,
-            "default_network": self.FAUCET_DEFAULT_NETWORK
+            "default_network": default_key
         }

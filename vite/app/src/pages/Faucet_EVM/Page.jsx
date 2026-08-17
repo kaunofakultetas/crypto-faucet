@@ -57,9 +57,10 @@ const FAUCET_REFRESH_MS = 3000;
 //
 // The backend side of the page as two TanStack queries: the
 // network's metadata (chain id, names, RPC urls — from
-// /api/evm/networks, cache shared with the navbar and the
-// "/" redirect) and the faucet info ({ address, balance,
-// chunk_size }), polling every 3 s once the metadata is in.
+// /api/evm/networks, cache shared with the graph page; the
+// navbar reads the bundled /api/faucet/catalog instead) and
+// the faucet info ({ address, balance, chunk_size }),
+// polling every 3 s once the metadata is in.
 // A network switch changes the query keys, so the previous
 // chain's numbers never linger. Failures leave the data
 // empty — the page keeps its skeletons.

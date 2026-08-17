@@ -202,7 +202,7 @@ def make_evm_faucet(configs=None, private_key=TEST_PRIVATE_KEY):
     env = {'TEST_RPC_SECRET': 'sekretas-iš-env', 'FAUCET_PRIVATE_KEY': private_key}
     with mock.patch.dict(os.environ, env):
         with mock.patch.object(EVMFaucet, '_warm_up_networks', lambda self: None):
-            return EVMFaucet(configs or EVM_TEST_CONFIGS, 'testchain')
+            return EVMFaucet(configs or EVM_TEST_CONFIGS)
 
 
 

@@ -55,8 +55,9 @@ const DEFAULT_NET_META = { short_name: 'BTC', full_name: 'Bitcoin', icon: null }
 //           refresh } = useFaucetInfo(network)
 //
 // Everything the page knows about the faucet, as two TanStack
-// queries: the network's display names (cache shared with the
-// navbar's UTXO catalog) and the live faucet info
+// queries: the network's display names (the page's own fetch
+// — the navbar reads the bundled /api/faucet/catalog
+// instead) and the live faucet info
 // ({ balance, address, chunk_size } or { error }), repolled
 // silently every 5 s. initialLoad separates the first fetch
 // (skeletons) from the background repolls (no flicker); a

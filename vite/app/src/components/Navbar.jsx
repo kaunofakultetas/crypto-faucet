@@ -13,22 +13,23 @@
 //  picking the chain happens on the page). FAUCET_TYPES holds
 //  that difference; everything else treats all four alike.
 //
-//  All catalogs load once on mount. A family whose catalog
-//  answers EMPTY is hidden everywhere — no switch segment, no
-//  jumps into it: deleting (or emptying) a family's map in
-//  _CONFIG/coins.py is how the operator disables a whole coin
-//  type. Faucet jumps land on whatever the student picked
-//  last for that type (lastPick:<type> in localStorage), then
-//  the backend default, then the catalog's first entry.
+//  The whole offering arrives in ONE request on mount
+//  (/api/faucet/catalog — every family's catalog in a single
+//  payload). A family whose slice is EMPTY is hidden
+//  everywhere — no switch segment, no jumps into it: deleting
+//  (or emptying) a family's map in _CONFIG/coins.py is how
+//  the operator disables a whole coin type. Faucet jumps land
+//  on whatever the student picked last for that type
+//  (lastPick:<type> in localStorage), then the backend
+//  default, then the catalog's first entry.
 //
 //  Split into (root component last):
 //
 //    WHITE_OUTLINED_SX  — shared white outline button look
-//    FAUCET_TYPES       — the four types: endpoint, how to
-//                         turn its payload into picker items,
-//                         labels (exported)
-//    useFaucetCatalogs  — every type's items + default pick
-//                         (exported)
+//    networkCatalog     — the shared shape of network-keyed
+//                         types
+//    FAUCET_TYPES       — the four types as a table (exported)
+//    useFaucetCatalogs  — the one-request catalog (exported)
 //    faucetTargetFor    — where a jump into one type lands
 //                         (exported)
 //    FaucetTypeSwitch   — segmented switch, live types only
@@ -39,7 +40,7 @@
 
 import { useEffect, useState } from 'react';
 import axios from 'axios';
-import { useQueries } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 
 import { Box, Button, Menu, MenuItem, ToggleButton, ToggleButtonGroup } from '@mui/material';
@@ -63,21 +64,51 @@ const WHITE_OUTLINED_SX = {
 
 
 // -----------------------------------------------------------
+// networkCatalog
+// -----------------------------------------------------------
+//
+// The shared catalog shape of every network-keyed type: the
+// slice's `networks` map as picker items in picker order,
+// with the type's own `secondary` line — the ONLY thing that
+// differs between UTXO, EVM and SVM.
+//
+// Used by:
+//   - FAUCET_TYPES (below) — the utxo / evm / svm entries
+// -----------------------------------------------------------
+
+const networkCatalog = (secondaryOf) => ({
+  defaultOf: (data) => data.default_network ?? null,
+  itemsOf: (data) => Object.entries(data.networks ?? {})
+    .sort(([, a], [, b]) => (a.id ?? 0) - (b.id ?? 0))
+    .map(([key, network]) => ({
+      key,
+      primary: network.full_name || key,
+      secondary: secondaryOf(network),
+      icon: network.icon ?? null,
+    })),
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // FAUCET_TYPES
 // -----------------------------------------------------------
 //
 // The four faucet types, in navbar order. Per entry:
 //
-//   key       — route prefix, /faucet/<key>/<pick>
+//   key       — route prefix, /faucet/<key>/<pick>, and the
+//               type's slice in the /api/faucet/catalog
+//               payload
 //   label     — segmented switch caption
 //   pickLabel — dropdown placeholder ("networks" vs "tokens")
-//   api       — the catalog endpoint
-//   queryKey  — the TanStack Query cache key; shared with the
-//               pages that fetch the same endpoint, so the
-//               catalog and the page cost ONE request
-//   itemsOf   — turns that payload into picker items
-//               ({ key, primary, secondary }), which is where
-//               the network-keyed types and ERC-20 part
+//   itemsOf   — turns the type's catalog slice into picker
+//               items ({ key, primary, secondary }); the
+//               network-keyed types share networkCatalog,
+//               ERC-20 is keyed by TOKEN and has its own
 //   defaultOf — the backend's suggested pick
 //
 // A type with no entries in its catalog is a DISABLED family
@@ -95,56 +126,24 @@ export const FAUCET_TYPES = [
     key: 'utxo',
     label: 'UTXO',
     pickLabel: 'Pasirinkti tinklą',
-    api: '/api/utxo/networks',
-    queryKey: ['utxo-networks'],
-    defaultOf: (data) => data.default_network ?? null,
-    itemsOf: (data) => Object.entries(data.networks ?? {})
-      .sort(([, a], [, b]) => (a.id ?? 0) - (b.id ?? 0))
-      .map(([key, network]) => ({
-        key,
-        primary: network.full_name || key,
-        secondary: `Tinklas: ${network.chain ?? 'testnet'}`,
-        icon: network.icon ?? null,
-      })),
+    ...networkCatalog((network) => `Tinklas: ${network.chain ?? 'testnet'}`),
   },
   {
     key: 'evm',
     label: 'EVM',
     pickLabel: 'Pasirinkti tinklą',
-    api: '/api/evm/networks',
-    queryKey: ['evm-networks'],
-    defaultOf: (data) => data.default_network ?? null,
-    itemsOf: (data) => Object.entries(data.networks ?? {})
-      .sort(([, a], [, b]) => (a.id ?? 0) - (b.id ?? 0))
-      .map(([key, network]) => ({
-        key,
-        primary: network.full_name || key,
-        secondary: `Chain ID: ${network.chain_id}`,
-        icon: network.icon ?? null,
-      })),
+    ...networkCatalog((network) => `Chain ID: ${network.chain_id}`),
   },
   {
     key: 'svm',
     label: 'SVM',
     pickLabel: 'Pasirinkti tinklą',
-    api: '/api/svm/networks',
-    queryKey: ['svm-networks'],
-    defaultOf: (data) => data.default_network ?? null,
-    itemsOf: (data) => Object.entries(data.networks ?? {})
-      .sort(([, a], [, b]) => (a.id ?? 0) - (b.id ?? 0))
-      .map(([key, network]) => ({
-        key,
-        primary: network.full_name || key,
-        secondary: `${network.chunk_size} ${network.symbol} · ${network.cluster}`,
-        icon: network.icon ?? null,
-      })),
+    ...networkCatalog((network) => `${network.chunk_size} ${network.symbol} · ${network.cluster}`),
   },
   {
     key: 'erc20',
     label: 'ERC-20',
     pickLabel: 'Pasirinkti žetoną',
-    api: '/api/erc20/tokens',
-    queryKey: ['erc20-tokens'],
     defaultOf: (data) => data.default_token ?? null,
     itemsOf: (data) => Object.entries(data.tokens ?? {})
       .map(([key, token]) => ({
@@ -166,25 +165,25 @@ export const FAUCET_TYPES = [
 // useFaucetCatalogs
 // -----------------------------------------------------------
 //
-//   const catalogs = useFaucetCatalogs()
-//   catalogs.evm / .erc20 / .utxo
-//     → { items, defaultKey, loading }
+//   const { loading, families } = useFaucetCatalogs()
+//   families.evm / .erc20 / .utxo / .svm
+//     → { items, defaultKey }
 //
-// All four catalogs as TanStack queries, driven by the
-// FAUCET_TYPES table — each entry's own itemsOf turns its
-// payload into ready picker items. The cache keys are shared
-// with the pages, so a catalog the page already fetched is
-// free. A catalog that fails to load just ends up empty —
-// indistinguishable from a family the operator disabled, and
-// treated the same way: hidden.
+// The whole faucet offering from ONE request —
+// GET /api/faucet/catalog answers with every family's public
+// catalog keyed by type, so there is a single loading flag
+// and never a partial answer to reconcile. Each entry's own
+// itemsOf turns its slice into ready picker items. A failed
+// fetch leaves every family empty — indistinguishable from
+// all-disabled, and treated the same way: hidden.
 //
-// Every successful payload is ALSO persisted to localStorage
-// (catalog:<type>) and used as initialData on the next
-// mount: the in-memory query cache dies with the page, so
-// without this every refresh re-decided the navbar from four
-// in-flight requests — tabs and names flickered while the
-// answers landed. With it, a refresh renders the last known
-// navbar instantly; the queries still refetch immediately
+// The last successful payload is ALSO persisted to
+// localStorage (catalog:all) and used as initialData on the
+// next mount: the in-memory query cache dies with the page,
+// so without this every refresh re-decided the navbar from an
+// in-flight request — tabs and names flickered while the
+// answer landed. With it, a refresh renders the last known
+// navbar instantly; the query still refetches immediately
 // (initialDataUpdatedAt 0), so a config change reconciles on
 // its first fetch and is stable from then on.
 //
@@ -193,11 +192,11 @@ export const FAUCET_TYPES = [
 //   - App.jsx — DynamicDefaultRedirect, the "/" route
 // -----------------------------------------------------------
 
-// The persisted last-known payload of one catalog, or
-// undefined (never null — initialData treats null as data)
-const readCatalogCache = (typeKey) => {
+// The persisted last-known catalog payload, or undefined
+// (never null — initialData treats null as data)
+const readCatalogCache = () => {
   try {
-    return JSON.parse(localStorage.getItem(`catalog:${typeKey}`)) ?? undefined;
+    return JSON.parse(localStorage.getItem('catalog:all')) ?? undefined;
   } catch (_) {
     return undefined;
   }
@@ -205,26 +204,29 @@ const readCatalogCache = (typeKey) => {
 
 export function useFaucetCatalogs() {
 
-  const results = useQueries({
-    queries: FAUCET_TYPES.map((type) => ({
-      queryKey: type.queryKey,
-      queryFn: async () => {
-        const { data } = await axios.get(type.api);
-        try { localStorage.setItem(`catalog:${type.key}`, JSON.stringify(data)); } catch (_) {}
-        return data;
-      },
-      staleTime: 5 * 60 * 1000,
-      initialData: () => readCatalogCache(type.key),
-      initialDataUpdatedAt: 0,
-    })),
+  const { data, isPending } = useQuery({
+    queryKey: ['faucet-catalog'],
+    queryFn: async () => {
+      const { data: catalog } = await axios.get('/api/faucet/catalog');
+      try { localStorage.setItem('catalog:all', JSON.stringify(catalog)); } catch (_) {}
+      return catalog;
+    },
+    staleTime: 5 * 60 * 1000,
+    initialData: readCatalogCache,
+    initialDataUpdatedAt: 0,
   });
 
-  return Object.fromEntries(FAUCET_TYPES.map((type, i) => [type.key, {
-    items: results[i].data ? type.itemsOf(results[i].data) : [],
-    defaultKey: results[i].data ? type.defaultOf(results[i].data) : null,
-    loading: results[i].isPending,
-  }]));
+  return {
+    loading: isPending,
+    families: Object.fromEntries(FAUCET_TYPES.map((type) => [type.key, {
+      items: data?.[type.key] ? type.itemsOf(data[type.key]) : [],
+      defaultKey: data?.[type.key] ? type.defaultOf(data[type.key]) : null,
+    }])),
+  };
 }
+
+
+
 
 
 
@@ -233,7 +235,7 @@ export function useFaucetCatalogs() {
 // faucetTargetFor
 // -----------------------------------------------------------
 //
-//   faucetTargetFor(catalogs.evm, 'evm')  →  'sepolia' | null
+//   faucetTargetFor(families.evm, 'evm')  →  'sepolia' | null
 //
 // Where a jump into one faucet type lands: the student's last
 // pick for that type (lastPick:<type> in localStorage), the
@@ -390,14 +392,14 @@ function ToolsMenu() {
 // Navbar (default export)
 // -----------------------------------------------------------
 //
-// Holds the faucet type (synced from the URL, so a direct
-// /faucet/erc20/... link flips the switch) and the faucet
-// navigation. Only the types whose catalogs have entries are
-// rendered — a family the operator disabled (empty map in
-// _CONFIG/coins.py) has no segment and no jumps, and if it
-// was the selected type, the selection hops to the first live
-// family. Jump targets come from faucetTargetFor, so they
-// always exist in the catalog.
+// Pure derivation over the URL and the catalog: the type in
+// /faucet/<type>/... drives the switch highlight (the switch
+// only renders on faucet pages, where the URL always knows
+// the type), a one-cell memory keeps the quick-open button
+// pointing where the student last was, and a selection whose
+// family the operator disabled falls back to the first live
+// one at render time. Clicking a segment just navigates —
+// the highlight follows the URL.
 //
 // Used by:
 //   - App.jsx — the page shell
@@ -408,50 +410,38 @@ export default function Navbar() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const catalogs = useFaucetCatalogs();
+  const { loading, families } = useFaucetCatalogs();
 
-  // 'evm' | 'erc20' | 'utxo' | 'svm' — follows the faucet
-  // URL, and survives leaving the faucet pages
-  const [faucetType, setFaucetType] = useState('evm');
+  const urlType = location.pathname.match(/^\/faucet\/(evm|erc20|utxo|svm)(\/|$)/)?.[1] ?? null;
 
-  // A type stays visible while its catalog loads (so the
-  // switch doesn't rebuild on every cold load) and disappears
-  // once the backend confirms there is nothing in it
+  // Where the quick-open button leads after the student
+  // leaves the faucet pages: the type they were on last
+  const [rememberedType, setRememberedType] = useState('evm');
+  useEffect(() => {
+    if (urlType) setRememberedType(urlType);
+  }, [urlType]);
+
+  // Every type stays visible while the one catalog request is
+  // in flight (so the switch doesn't rebuild on a cold load);
+  // confirmed-empty families disappear
   const enabledTypes = FAUCET_TYPES.filter(
-    (type) => catalogs[type.key].loading || catalogs[type.key].items.length > 0,
+    (type) => loading || families[type.key].items.length > 0,
   );
 
-  const active = catalogs[faucetType];
+  // The selection, corrected to the first live family when
+  // the wanted one is disabled — render-time derivation, so
+  // there is never a frame highlighting a hidden type
+  const selected = urlType ?? rememberedType;
+  const faucetType = enabledTypes.some((t) => t.key === selected)
+    ? selected
+    : (enabledTypes[0]?.key ?? selected);
+
+  const active = families[faucetType];
   const activeType = FAUCET_TYPES.find((t) => t.key === faucetType);
-  const isOnFaucet = /^\/faucet\/(evm|erc20|utxo|svm)(\/|$)/.test(location.pathname);
-
-
-  // A direct link to another faucet type flips the switch
-  // without anyone touching it
-  useEffect(() => {
-    const m = location.pathname.match(/^\/faucet\/(evm|erc20|utxo|svm)\//);
-    if (m?.[1]) setFaucetType(m[1]);
-  }, [location.pathname]);
-
-
-  // A disabled family must not stay selected: once its
-  // catalog is confirmed empty, hop to the first family that
-  // has something — the switch highlight and the quick-open
-  // button never point at a hidden type
-  useEffect(() => {
-    if (active.loading || active.items.length > 0) return;
-    const firstLive = FAUCET_TYPES.find((t) => catalogs[t.key].items.length > 0);
-    if (firstLive) setFaucetType(firstLive.key);
-  }, [active.loading, active.items.length, catalogs]);
 
   const goToFaucet = (typeKey) => {
-    const target = faucetTargetFor(catalogs[typeKey], typeKey);
+    const target = faucetTargetFor(families[typeKey], typeKey);
     if (target) navigate(`/faucet/${typeKey}/${target}`);
-  };
-
-  const handleTypeChange = (next) => {
-    setFaucetType(next);
-    if (isOnFaucet) goToFaucet(next);
   };
 
 
@@ -467,14 +457,14 @@ export default function Navbar() {
         {/* Faucet controls: type + network on faucet pages, a
             quick-open button everywhere else */}
         <div className="ml-4">
-          {isOnFaucet ? (
+          {urlType ? (
             enabledTypes.length > 0 && (
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                <FaucetTypeSwitch types={enabledTypes} faucetType={faucetType} onChange={handleTypeChange} />
+                <FaucetTypeSwitch types={enabledTypes} faucetType={faucetType} onChange={goToFaucet} />
 
                 <FaucetPicker
                   items={active.items}
-                  loading={active.loading}
+                  loading={loading}
                   faucetType={faucetType}
                   label={activeType.pickLabel}
                 />

@@ -55,9 +55,9 @@ import VideosPage from '@/pages/Videos/Page';
 // entries — EVM first (the classroom default), then the rest
 // in navbar order. Within the family the target is
 // faucetTargetFor's pick: last used → backend default → first
-// entry. Renders nothing while the deciding catalog loads,
-// and nothing at all when no family is configured (the
-// navbar's teaching pages still work). The catalog query
+// entry. Renders nothing while the catalog request is in
+// flight, and nothing at all when no family is configured
+// (the navbar's teaching pages still work). The catalog query
 // shares its cache key with the navbar — one fetch serves
 // both.
 //
@@ -67,7 +67,10 @@ import VideosPage from '@/pages/Videos/Page';
 
 function DynamicDefaultRedirect() {
 
-  const catalogs = useFaucetCatalogs();
+  const { loading, families } = useFaucetCatalogs();
+
+  // Decide on data, never on an unfinished fetch
+  if (loading) return null;
 
   // EVM keeps its historical priority for "/"; the rest
   // follow in navbar order
@@ -77,11 +80,7 @@ function DynamicDefaultRedirect() {
   ];
 
   for (const type of order) {
-    // A higher-priority family may still be answering —
-    // decide on data, never on an unfinished fetch
-    if (catalogs[type.key].loading) return null;
-
-    const target = faucetTargetFor(catalogs[type.key], type.key);
+    const target = faucetTargetFor(families[type.key], type.key);
     if (target) return <Navigate to={`/faucet/${type.key}/${target}`} />;
   }
 

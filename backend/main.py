@@ -204,6 +204,11 @@ if __name__ == '__main__':
     from app.svm_faucet.svm_routes import bp_svm_faucet
     app.register_blueprint(bp_svm_faucet, url_prefix='')
 
+    # Composes the four singletons above, so it must come after
+    # their route modules have built them
+    from app.faucet_catalog.catalog_routes import bp_faucet_catalog
+    app.register_blueprint(bp_faucet_catalog, url_prefix='')
+
     from app.icons import bp_icons
     app.register_blueprint(bp_icons, url_prefix='')
 

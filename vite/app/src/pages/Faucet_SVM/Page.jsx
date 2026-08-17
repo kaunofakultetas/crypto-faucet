@@ -76,8 +76,9 @@ const lamportsToCoins = (lamports, decimals) => lamports / 10 ** decimals;
 //
 //   const networks = useNetworks()
 //
-// The SVM network catalog, cache key shared with the navbar's
-// picker so both cost ONE request.
+// The SVM network map, the page's own fetch — the navbar
+// reads the bundled /api/faucet/catalog instead, so nothing
+// shares this cache entry.
 //
 // Used by:
 //   - FaucetSVM (below)

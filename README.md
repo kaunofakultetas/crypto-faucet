@@ -83,7 +83,6 @@ Then set the GUI login password in `docker-compose.yml` (service `faucet-endpoin
 | `DBGATE_PASSWORD` | Password of the `/dbgate` database browser | - | ✅ |
 | `APP_PASSWORD_1` | System GUI access password (set in compose, not `.env`) | - | ✅ |
 | `ETHERSCAN_API_KEY` | Etherscan API key (transaction graph) | - | ❌ |
-| `FAUCET_DEFAULT_NETWORK` | Default EVM network | sepolia | ❌ |
 | `APP_DEBUG` | Flask debug mode (development only) | false | ❌ |
 
 ### Coins & Icons — the `_CONFIG` Directory

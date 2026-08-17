@@ -242,8 +242,8 @@ export default function GraphPage() {
   const address = data?.address ?? null;
 
   // The viewed network's native currency symbol for the graph's
-  // edge labels — same cache entry the navbar and the "/"
-  // redirect already share
+  // edge labels — same cache entry the EVM faucet page uses,
+  // so coming from there this costs no request
   const { data: networksData } = useQuery({
     queryKey: ['evm-networks'],
     queryFn: async () => (await axios.get('/api/evm/networks')).data,
