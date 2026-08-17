@@ -1,7 +1,7 @@
 // -----------------------------------------------------------
 //  [*] FaucetPicker — the navbar's what-am-I-getting dropdown
 //
-//  One compact dropdown for all four faucet types, because
+//  One compact dropdown for all five faucet types, because
 //  they are not all keyed by the same thing:
 //
 //    UTXO  → a network  (Bitcoin Testnet4, …)
@@ -10,6 +10,7 @@
 //                        many chains, so the chain is chosen
 //                        on the page, not here
 //    SVM   → a network  (Solana Devnet, …)
+//    MOVE  → a network  (Sui Testnet, …)
 //
 //  The component knows nothing about that distinction: it
 //  takes a ready list of { key, primary, secondary, icon }

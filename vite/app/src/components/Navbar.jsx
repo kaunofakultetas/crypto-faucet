@@ -8,10 +8,10 @@
 //  the "Kiti Įrankiai" dropdown with the teaching tools.
 //
 //  What the dropdown lists depends on the type, because the
-//  faucets are keyed differently: EVM, UTXO and SVM by
+//  faucets are keyed differently: EVM, UTXO, SVM and MOVE by
 //  NETWORK, ERC-20 by TOKEN (one token lives on many chains —
 //  picking the chain happens on the page). FAUCET_TYPES holds
-//  that difference; everything else treats all four alike.
+//  that difference; everything else treats all five alike.
 //
 //  The whole offering arrives in ONE request on mount
 //  (/api/faucet/catalog — every family's catalog in a single
@@ -28,7 +28,7 @@
 //    WHITE_OUTLINED_SX  — shared white outline button look
 //    networkCatalog     — the shared shape of network-keyed
 //                         types
-//    FAUCET_TYPES       — the four types as a table (exported)
+//    FAUCET_TYPES       — the five types as a table (exported)
 //    useFaucetCatalogs  — the one-request catalog (exported)
 //    faucetTargetFor    — where a jump into one type lands
 //                         (exported)
@@ -70,10 +70,11 @@ const WHITE_OUTLINED_SX = {
 // The shared catalog shape of every network-keyed type: the
 // slice's `networks` map as picker items in picker order,
 // with the type's own `secondary` line — the ONLY thing that
-// differs between UTXO, EVM and SVM.
+// differs between UTXO, EVM, SVM and MOVE.
 //
 // Used by:
-//   - FAUCET_TYPES (below) — the utxo / evm / svm entries
+//   - FAUCET_TYPES (below) — every network-keyed entry
+//     (utxo / evm / svm / move)
 // -----------------------------------------------------------
 
 const networkCatalog = (secondaryOf) => ({
@@ -98,7 +99,7 @@ const networkCatalog = (secondaryOf) => ({
 // FAUCET_TYPES
 // -----------------------------------------------------------
 //
-// The four faucet types, in navbar order. Per entry:
+// The five faucet types, in navbar order. Per entry:
 //
 //   key       — route prefix, /faucet/<key>/<pick>, and the
 //               type's slice in the /api/faucet/catalog
@@ -153,6 +154,12 @@ export const FAUCET_TYPES = [
     pickLabel: 'Pasirinkti tinklą',
     ...networkCatalog((network) => `${network.chunk_size} ${network.symbol} · ${network.cluster}`),
   },
+  {
+    key: 'move',
+    label: 'MoveVM',
+    pickLabel: 'Pasirinkti tinklą',
+    ...networkCatalog((network) => `${network.chunk_size} ${network.symbol} · ${network.network}`),
+  },
 ];
 
 
@@ -166,7 +173,7 @@ export const FAUCET_TYPES = [
 // -----------------------------------------------------------
 //
 //   const { loading, families } = useFaucetCatalogs()
-//   families.evm / .erc20 / .utxo / .svm
+//   families.evm / .erc20 / .utxo / .svm / .move
 //     → { items, defaultKey }
 //
 // The whole faucet offering from ONE request —
@@ -413,7 +420,7 @@ export default function Navbar() {
 
   const { loading, families } = useFaucetCatalogs();
 
-  const urlType = location.pathname.match(/^\/faucet\/(evm|erc20|utxo|svm)(\/|$)/)?.[1] ?? null;
+  const urlType = location.pathname.match(/^\/faucet\/(evm|erc20|utxo|svm|move)(\/|$)/)?.[1] ?? null;
 
   // Where the quick-open button leads after the student
   // leaves the faucet pages: the type they were on last

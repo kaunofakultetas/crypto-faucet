@@ -1,9 +1,10 @@
 ############################################################
 #  [*] Config models
 #
-#  The ENFORCED schema for main.py's four config maps
+#  The ENFORCED schema for main.py's five config maps
 #  (EVM_NETWORK_CONFIGS, ERC20_TOKEN_CONFIGS,
-#  UTXO_NETWORK_CONFIGS, SVM_NETWORK_CONFIGS). Every model
+#  UTXO_NETWORK_CONFIGS, SVM_NETWORK_CONFIGS,
+#  MOVE_NETWORK_CONFIGS). Every model
 #  forbids unknown keys, so a misspelled field name fails the
 #  boot with a precise error instead of silently falling back
 #  to a default somewhere at runtime — the same fail-at-startup
@@ -463,10 +464,136 @@ class SvmNetworkConfig(StrictModel):
 
 
 ############################################################
+# MoveFaucetSection
+############################################################
+#
+# The OPERATOR's choices for one Move network: which chain
+# ('sui'), which network flavour, the display names, the
+# payout size and the backend's own GraphQL endpoint (which
+# may carry <ENV_NAME> placeholders, resolved at startup by
+# MoveFaucet).
+#
+# Everything protocol-precise — the native symbol, MIST
+# decimals, the coin type tag, the gas margin — is a fact
+# about the chain and resolves from the in-code registry
+# (app/move_faucet/chains/). The validator below confirms the
+# chain + flavour combination exists there.
+#
+# Used by:
+#   - MoveNetworkConfig (below)
+############################################################
+
+class MoveFaucetSection(StrictModel):
+    chain: str = Field(min_length=1)
+    network: str = Field(min_length=1)
+    short_name: str = Field(min_length=1)
+    full_name: str = Field(min_length=1)
+    rpc_url: str = Field(pattern=r'^https?://')
+    chunk_size: float = Field(gt=0)
+
+
+
+
+    ############################################################
+    # chain_and_flavour_exist
+    ############################################################
+    #
+    # The chain + network flavour must resolve in the in-code
+    # registry — chain_params raises a ValueError that names
+    # the known chains / available flavours, and that message
+    # surfaces verbatim in the boot error. Compares constants,
+    # so it belongs here: the operator learns at boot, not on
+    # the first claim.
+    #
+    # Used by:
+    #   - pydantic — automatically on model validation
+    ############################################################
+
+    @model_validator(mode='after')
+    def chain_and_flavour_exist(self):
+        from app.move_faucet.chains import chain_params
+        chain_params(self.chain, self.network)  # raises ValueError naming the options
+        return self
+
+
+
+
+
+
+
+
+############################################################
+# MoveWalletSection
+############################################################
+#
+# The public GraphQL endpoint the PAGE may query for the
+# student's balance — public endpoints only, never the
+# backend's keyed RPC.
+#
+# Used by:
+#   - MoveNetworkConfig (below)
+############################################################
+
+class MoveWalletSection(StrictModel):
+    rpc_urls: list[str] = Field(min_length=1)
+
+
+
+
+
+
+
+
+############################################################
+# MoveExplorerSection
+############################################################
+#
+# Where the UI links a transaction / address. Optional.
+#
+# Used by:
+#   - MoveNetworkConfig (below)
+############################################################
+
+class MoveExplorerSection(StrictModel):
+    block_explorer_urls: list[str] = []
+
+
+
+
+
+
+
+
+############################################################
+# MoveNetworkConfig
+############################################################
+#
+# One Move network: identity plus the consumer sections.
+# Like SVM there is no chain_id — Move chains are told apart
+# by their endpoint, not by a numeric id.
+#
+# Used by:
+#   - validate_configs (below)
+############################################################
+
+class MoveNetworkConfig(StrictModel):
+    id: int = Field(ge=1)
+    faucet: MoveFaucetSection
+    wallet: MoveWalletSection
+    explorer: Optional[MoveExplorerSection] = None
+
+
+
+
+
+
+
+
+############################################################
 # validate_configs
 ############################################################
 #
-# The single entry point: validates all four maps, enforces
+# The single entry point: validates all five maps, enforces
 # the cross-map rules the per-entry models can't see (unique
 # ids and chain ids; every token deployment referencing an
 # existing EVM network), and returns NORMALIZED PLAIN DICTS
@@ -478,8 +605,8 @@ class SvmNetworkConfig(StrictModel):
 #   - main.py — right after the config definitions
 ############################################################
 
-def validate_configs(evm_configs, erc20_configs, utxo_configs, svm_configs):
-    evm, erc20, utxo, svm = {}, {}, {}, {}
+def validate_configs(evm_configs, erc20_configs, utxo_configs, svm_configs, move_configs):
+    evm, erc20, utxo, svm, move = {}, {}, {}, {}, {}
 
     for key, config in (evm_configs or {}).items():
         try:
@@ -505,9 +632,15 @@ def validate_configs(evm_configs, erc20_configs, utxo_configs, svm_configs):
         except ValueError as e:
             raise ValueError(f"SVM network '{key}' is misconfigured:\n{e}") from None
 
+    for key, config in (move_configs or {}).items():
+        try:
+            move[key] = MoveNetworkConfig.model_validate(config)
+        except ValueError as e:
+            raise ValueError(f"MOVE network '{key}' is misconfigured:\n{e}") from None
+
     # Cross-map rules: unique picker ids per family, unique EVM
     # chain ids, and every token deployment on a known network.
-    for family, configs in (('EVM', evm), ('UTXO', utxo), ('SVM', svm)):
+    for family, configs in (('EVM', evm), ('UTXO', utxo), ('SVM', svm), ('MOVE', move)):
         ids = [c.id for c in configs.values()]
         if len(ids) != len(set(ids)):
             raise ValueError(f"{family} network configs reuse an 'id' — picker order would break")
@@ -529,6 +662,7 @@ def validate_configs(evm_configs, erc20_configs, utxo_configs, svm_configs):
         {key: model.model_dump(exclude_none=True) for key, model in erc20.items()},
         {key: model.model_dump(exclude_none=True) for key, model in utxo.items()},
         {key: model.model_dump(exclude_none=True) for key, model in svm.items()},
+        {key: model.model_dump(exclude_none=True) for key, model in move.items()},
     )
 
 

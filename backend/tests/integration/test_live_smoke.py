@@ -84,11 +84,12 @@ class LiveSmokeTests(unittest.TestCase):
         # them are pure config compositions, so equality holds)
         catalog = get('/api/faucet/catalog')
 
-        self.assertEqual(set(catalog), {'utxo', 'evm', 'svm', 'erc20'})
+        self.assertEqual(set(catalog), {'utxo', 'evm', 'svm', 'erc20', 'move'})
         self.assertEqual(catalog['utxo'], get('/api/utxo/networks'))
         self.assertEqual(catalog['evm'], get('/api/evm/networks'))
         self.assertEqual(catalog['svm'], get('/api/svm/networks'))
         self.assertEqual(catalog['erc20'], get('/api/erc20/tokens'))
+        self.assertEqual(catalog['move'], get('/api/move/networks'))
 
     def test_graph_flows_in_day_window(self):
         # the date slider's contract: a [from, to) unix window

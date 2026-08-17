@@ -1,8 +1,9 @@
 ############################################################
 #  [*] Coins configuration — the operator-editable file
 #
-#  The FOUR config maps that drive every faucet: UTXO
-#  networks, EVM networks, SVM networks and ERC-20 tokens.
+#  The FIVE config maps that drive every faucet: UTXO
+#  networks, EVM networks, SVM networks, MOVE networks and
+#  ERC-20 tokens.
 #  This file is MOUNTED into the backend container
 #  (./_CONFIG:/config) and loaded by main.py at startup —
 #  editing it needs a backend restart (docker restart
@@ -15,8 +16,8 @@
 #  the boot with a precise error in the container logs.
 #
 #  Icons live next door in icons/<type>/<key>.svg (or .png /
-#  .webp), where <type> is evm / erc20 / utxo / svm and <key>
-#  is the entry's key in these maps ('sepolia', 'LINK',
+#  .webp), where <type> is evm / erc20 / utxo / svm / move
+#  and <key> is the entry's key in these maps ('sepolia', 'LINK',
 #  'btc4'). Dropping a file there is enough — no restart
 #  needed.
 #
@@ -395,3 +396,60 @@ SVM_NETWORK_CONFIGS = {
 
 
 
+
+
+
+
+
+
+
+
+############################################################
+# MOVE_NETWORK_CONFIGS
+############################################################
+#
+# Move networks (Sui and anything else added to the chain
+# registry), split by WHO consumes the settings:
+#
+#   (top level)  — identity: id (picker order)
+#   'faucet'     — the OPERATOR's choices: which chain, which
+#                  network flavour, the names the UI shows,
+#                  the backend's own GraphQL endpoint and the
+#                  payout size. <NAME> inside rpc_url is
+#                  replaced with the environment variable of
+#                  that name at startup
+#   'wallet'     — the PUBLIC GraphQL endpoint the page may
+#                  query for the student's balance
+#   'explorer'   — where the UI links a transaction / address
+#
+# 'chain' names an entry of the backend's chain registry
+# (app/move_faucet/chains/): 'sui'. Everything
+# protocol-precise — the native symbol, MIST decimals, the
+# coin type tag, the gas margin — lives in that registry,
+# not here.
+#
+# The faucet signs with the same FAUCET_PRIVATE_KEY as the
+# other families, used as an Ed25519 seed and hashed into a
+# Sui address: a DIFFERENT wallet that must be funded on
+# each Move chain separately.
+############################################################
+
+MOVE_NETWORK_CONFIGS = {
+    'suiTestnet': {
+        'id': 1,
+        'faucet': {
+            'chain': 'sui',
+            'network': 'testnet',
+            'short_name': "tSUI",
+            'full_name': 'Sui Testnet',
+            'rpc_url': 'https://graphql.testnet.sui.io/graphql',
+            'chunk_size': 0.5,
+        },
+        'wallet': {
+            'rpc_urls': ['https://graphql.testnet.sui.io/graphql'],
+        },
+        'explorer': {
+            'block_explorer_urls': ['https://suiscan.xyz/testnet'],
+        },
+    },
+}

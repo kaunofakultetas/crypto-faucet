@@ -1,13 +1,14 @@
 ############################################################
 #  [*] Faucet Backend — entrypoint & configuration loading
 #
-#  The Flask app plus the LOADER for the four config maps
+#  The Flask app plus the LOADER for the five config maps
 #  that drive every faucet (EVM networks, ERC-20 tokens,
-#  UTXO networks, SVM networks). The maps themselves live
+#  UTXO networks, SVM networks, MOVE networks). The maps
+#  themselves live
 #  OUTSIDE the image, in the mounted config directory
 #  (_CONFIG/coins.py on the host → /config/coins.py in the
 #  container), so an operator edits coins live and restarts
-#  the backend — never rebuilds the stack. All four are
+#  the backend — never rebuilds the stack. All five are
 #  validated against app/config_models.py right after
 #  loading — a misspelled key, a malformed contract address
 #  or a token on an unknown network kills the boot with a
@@ -15,7 +16,7 @@
 #  fallback.
 #
 #  Run directly (python main.py) this file wires the
-#  database, the six blueprints and the dev server. The
+#  database, the seven blueprints and the dev server. The
 #  route modules import THIS module back for their config
 #  maps — that is why the blueprint imports sit inside
 #  __main__: by the time they run, main is fully defined and
@@ -26,6 +27,7 @@
 #    - app/erc_faucet/erc20_routes.py — ERC20_TOKEN_CONFIGS
 #    - app/utxo_faucet/utxo_routes.py — UTXO_NETWORK_CONFIGS
 #    - app/svm_faucet/svm_routes.py — SVM_NETWORK_CONFIGS
+#    - app/move_faucet/move_routes.py — MOVE_NETWORK_CONFIGS
 #    - app/icons.py — CONFIG_DIR (the icons live beside coins.py)
 #    - tests/ — config invariants + schema tests import main
 #    - Dockerfile — CMD ["python3", "-u", "main.py"]
@@ -81,7 +83,7 @@ CONFIG_DIR = os.getenv('CONFIG_DIR') or (
 # Coins configuration — loaded from CONFIG_DIR/coins.py
 ############################################################
 #
-# The four maps are loaded from the MOUNTED file and
+# The five maps are loaded from the MOUNTED file and
 # validated before anything uses them; what the rest of the
 # app imports from main are the validated, normalized maps.
 #
@@ -103,11 +105,12 @@ def _load_coins_module():
 
 _coins = _load_coins_module()
 
-EVM_NETWORK_CONFIGS, ERC20_TOKEN_CONFIGS, UTXO_NETWORK_CONFIGS, SVM_NETWORK_CONFIGS = validate_configs(
+EVM_NETWORK_CONFIGS, ERC20_TOKEN_CONFIGS, UTXO_NETWORK_CONFIGS, SVM_NETWORK_CONFIGS, MOVE_NETWORK_CONFIGS = validate_configs(
     getattr(_coins, 'EVM_NETWORK_CONFIGS', {}),
     getattr(_coins, 'ERC20_TOKEN_CONFIGS', {}),
     getattr(_coins, 'UTXO_NETWORK_CONFIGS', {}),
     getattr(_coins, 'SVM_NETWORK_CONFIGS', {}),
+    getattr(_coins, 'MOVE_NETWORK_CONFIGS', {}),
 )
 
 
@@ -163,7 +166,7 @@ def get_example_blockchain():
 ############################################################
 #
 # Wires the whole backend when run directly: the database
-# schema, the six feature blueprints, then the dev server.
+# schema, the seven feature blueprints, then the dev server.
 # The blueprint imports are deliberately DEFERRED to down
 # here — the route modules import main back for their config
 # maps, and at this point main is fully defined, so the
@@ -204,7 +207,10 @@ if __name__ == '__main__':
     from app.svm_faucet.svm_routes import bp_svm_faucet
     app.register_blueprint(bp_svm_faucet, url_prefix='')
 
-    # Composes the four singletons above, so it must come after
+    from app.move_faucet.move_routes import bp_move_faucet
+    app.register_blueprint(bp_move_faucet, url_prefix='')
+
+    # Composes the five singletons above, so it must come after
     # their route modules have built them
     from app.faucet_catalog.catalog_routes import bp_faucet_catalog
     app.register_blueprint(bp_faucet_catalog, url_prefix='')

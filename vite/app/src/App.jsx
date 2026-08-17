@@ -35,6 +35,7 @@ import Footer from '@/components/Footer';
 import FaucetEVM from '@/pages/Faucet_EVM/Page';
 import FaucetERC20 from '@/pages/Faucet_ERC20/Page';
 import FaucetSVM from '@/pages/Faucet_SVM/Page';
+import FaucetMOVE from '@/pages/Faucet_MOVE/Page';
 import FaucetUTXO from '@/pages/Faucet_UTXO/Page';
 import GraphPage from '@/pages/Graph/Page';
 import BlockchainSimulatorPage from '@/pages/BlockchainSimulator/Page';
@@ -126,6 +127,9 @@ export default function App() {
                 </Route>
                 <Route path="svm">
                   <Route path=":network" element={<FaucetSVM />} />
+                </Route>
+                <Route path="move">
+                  <Route path=":network" element={<FaucetMOVE />} />
                 </Route>
                 {/* keyed by TOKEN — the token spans many chains */}
                 <Route path="erc20">

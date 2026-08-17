@@ -19,6 +19,7 @@ from app.evm_faucet.evm_faucet import EVMFaucet
 from app.erc_faucet.erc20_faucet import ERC20Faucet
 from app.utxo_faucet.utxo_faucet import UTXOFaucet
 from app.svm_faucet.svm_faucet import SVMFaucet
+from app.move_faucet.move_faucet import MoveFaucet
 
 from tests import helpers
 
@@ -66,6 +67,13 @@ class DisabledFamilyTests(unittest.TestCase):
         self.assertEqual(faucet.get_networks()['networks'], {})
         self.assertEqual(faucet.get_faucet_balance('solanaDevnet')[1], 400)
         self.assertEqual(faucet.request_sol('solanaDevnet', 'addr', 'sig', '1')[1], 400)
+
+    def test_move_family_disabled(self):
+        faucet = MoveFaucet({})
+
+        self.assertEqual(faucet.get_networks()['networks'], {})
+        self.assertEqual(faucet.get_faucet_balance('suiTestnet')[1], 400)
+        self.assertEqual(faucet.request_move('suiTestnet', '0x' + 'ab' * 32, 'sig', '1')[1], 400)
 
     def test_erc20_family_disabled(self):
         faucet = ERC20Faucet(EVMFaucet({}), {})

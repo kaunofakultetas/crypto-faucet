@@ -25,6 +25,7 @@ from app.utxo_faucet.utxo_faucet import UTXOFaucet
 from app.evm_faucet.evm_faucet import EVMFaucet
 from app.erc_faucet.erc20_faucet import ERC20Faucet
 from app.svm_faucet.svm_faucet import SVMFaucet
+from app.move_faucet.move_faucet import MoveFaucet
 
 
 # Throwaway secp256k1 keys — NEVER the real faucet key. The UTXO
@@ -120,6 +121,22 @@ SVM_TEST_CONFIGS = {
             'chunk_size': 0.5,
         },
         'wallet': {'rpc_urls': ['http://public.example/rpc']},
+        'explorer': {'block_explorer_urls': ['http://explorer.example']},
+    },
+}
+
+MOVE_TEST_CONFIGS = {
+    'testmove': {
+        'id': 1,
+        'faucet': {
+            'chain': 'sui',
+            'network': 'testnet',
+            'short_name': 'tSUI',
+            'full_name': 'Test MOVE',
+            'rpc_url': 'http://127.0.0.1:9/<TEST_RPC_SECRET>',
+            'chunk_size': 0.5,
+        },
+        'wallet': {'rpc_urls': ['http://public.example/graphql']},
         'explorer': {'block_explorer_urls': ['http://explorer.example']},
     },
 }
@@ -315,6 +332,119 @@ def sign_svm_claim(nonce='1785666345742', address_seed=None, signer_seed=None):
     signature = signer_kp.sign_message(message.encode('utf-8'))
 
     return str(address_kp.pubkey()), str(signature), nonce
+
+
+
+
+############################################################
+# make_move_faucet
+############################################################
+#
+# A MoveFaucet with the warmup patched out (no GraphQL calls)
+# and the throwaway key injected as the Ed25519 seed. The
+# clients exist but are never called — patch their methods to
+# feed a test (see fake_sui_graphql below).
+#
+# Used by:
+#   - test_move_faucet.py
+############################################################
+
+def make_move_faucet(configs=None, private_key=TEST_PRIVATE_KEY):
+    env = {'TEST_RPC_SECRET': 'sekretas-iš-env', 'FAUCET_PRIVATE_KEY': private_key}
+    with mock.patch.dict(os.environ, env):
+        with mock.patch.object(MoveFaucet, '_warm_up_networks', lambda self: None):
+            return MoveFaucet(configs or MOVE_TEST_CONFIGS)
+
+
+
+
+############################################################
+# fake_sui_graphql
+############################################################
+#
+#   client = fake_sui_graphql(faucet, 'testmove', balances={...})
+#
+# Points one network's GraphQL client at canned data: MIST
+# balances keyed by address (absent reads as 0), a fixed
+# node-built transaction, and execute() recording the
+# broadcast instead of sending it. build_error /
+# execute_error / balance_error drive the failure paths.
+# Returns the client, so a test can assert on client.executed
+# afterwards.
+#
+# Used by:
+#   - test_move_faucet.py
+############################################################
+
+def fake_sui_graphql(faucet, network, balances=None, build_error=None, execute_error=None, balance_error=None):
+    # What the node would answer from simulateTransaction — any
+    # base64 payload works, the faucet only signs it
+    built_tx = 'dGVzdC10cmFuc2FjdGlvbi1iY3M='
+    client = faucet._clients[network]
+    client.executed = []
+
+    def get_balance(address, coin_type):
+        if balance_error:
+            raise RuntimeError(balance_error)
+        return (balances or {}).get(address, 0)
+
+    def build_transfer(sender, recipient_b64, amount_b64):
+        if build_error:
+            raise RuntimeError(build_error)
+        client.built = {'sender': sender, 'recipient': recipient_b64, 'amount': amount_b64}
+        return built_tx
+
+    def execute(tx_bcs, signature):
+        if execute_error:
+            raise RuntimeError(execute_error)
+        client.executed.append({'tx_bcs': tx_bcs, 'signature': signature})
+        return 'digest' + '1' * 38
+
+    client.get_balance = get_balance
+    client.build_transfer = build_transfer
+    client.execute = execute
+    client.get_chain_identifier = lambda: 'testchain-id'
+    return client
+
+
+
+
+############################################################
+# sign_move_claim
+############################################################
+#
+#   address, signature, nonce = sign_move_claim()
+#
+# A REAL Sui personal-message signature over the exact
+# message the MOVE faucet verifies: Ed25519 over blake2b-256
+# of intent (3,0,0) + the BCS-encoded message, serialized as
+# base64 of flag || sig || pubkey — the scheme was confirmed
+# against the node's own verifySignature. Signing with a
+# different key than the claimed address is how the 403 path
+# is tested (pass signer_seed).
+#
+# Used by:
+#   - test_move_faucet.py
+############################################################
+
+def sign_move_claim(nonce='1785666345742', address_seed=None, signer_seed=None):
+    import base64
+    import hashlib
+    from solders.keypair import Keypair
+
+    address_kp = Keypair.from_seed(address_seed or bytes(range(32)))
+    signer_kp = Keypair.from_seed(signer_seed) if signer_seed else address_kp
+
+    address = '0x' + hashlib.blake2b(
+        bytes([0]) + bytes(address_kp.pubkey()), digest_size=32).hexdigest()
+
+    message = CLAIM_MESSAGE.format(nonce=nonce).encode('utf-8')
+    payload = bytes([3, 0, 0]) + bytes([len(message)]) + message
+    digest = hashlib.blake2b(payload, digest_size=32).digest()
+    signature = base64.b64encode(
+        bytes([0]) + bytes(signer_kp.sign_message(digest)) + bytes(signer_kp.pubkey())).decode()
+
+    return address, signature, nonce
 
 
 
