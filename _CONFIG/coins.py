@@ -63,7 +63,7 @@ UTXO_NETWORK_CONFIGS = {
             'coin': 'knfcoin',
             'network': 'mainnet',
             'chunk_size': 1000,
-            'electrum_server': '158.129.172.247:49002',
+            'electrum_server': 'ip-158-129-172-247--49002:443',
         },
         'explorer': {
             'block_explorer': 'https://knfcoin.knf.vu.lt/explorer',
@@ -77,7 +77,7 @@ UTXO_NETWORK_CONFIGS = {
             'coin': 'litecoin',
             'network': 'testnet',
             'chunk_size': 1000,
-            'electrum_server': '158.129.172.247:50002',
+            'electrum_server': 'ip-158-129-172-247--50002:443',
         },
         'explorer': {
             'block_explorer': 'https://litecoinspace.org/testnet',
@@ -91,7 +91,7 @@ UTXO_NETWORK_CONFIGS = {
     #         'coin': 'bitcoin',
     #         'network': 'testnet',
     #         'chunk_size': 0.005,
-    #         'electrum_server': '158.129.172.247:51002',
+    #         'electrum_server': 'ip-158-129-172-247--51002:443',
     #     },
     #     'explorer': {
     #         'block_explorer': 'https://mempool.space/testnet',
@@ -105,7 +105,7 @@ UTXO_NETWORK_CONFIGS = {
             'coin': 'bitcoin',
             'network': 'testnet',
             'chunk_size': 0.01,
-            'electrum_server': '158.129.172.247:52002',
+            'electrum_server': 'ip-158-129-172-247--52002:443',
         },
         'explorer': {
             'block_explorer': 'https://mempool.space/testnet4',
@@ -119,7 +119,7 @@ UTXO_NETWORK_CONFIGS = {
     #         'coin': 'dogecoin',
     #         'network': 'testnet',
     #         'chunk_size': 50,
-    #         'electrum_server': '158.129.172.247:53002',
+    #         'electrum_server': 'ip-158-129-172-247--53002:443',
     #     },
     #     'explorer': {
     #         'block_explorer': 'https://blockexplorer.one/dogecoin/testnet',

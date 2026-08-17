@@ -1,0 +1,112 @@
+{
+    layer4 {
+        :443 {
+
+
+            # ------------------------------------------------------------
+            #                      UTXO Faucet
+            # ------------------------------------------------------------
+            # ElectrumX servers — one host, one port per network. The
+            # dummy SNI name encodes the real destination (ip--port);
+            # the client always connects here on :443.
+
+            @exit_utxo_knf tls sni ip-158-129-172-247--49002
+            route @exit_utxo_knf {
+                proxy 158.129.172.247:49002
+            }
+
+            @exit_utxo_ltc4 tls sni ip-158-129-172-247--50002
+            route @exit_utxo_ltc4 {
+                proxy 158.129.172.247:50002
+            }
+
+            @exit_utxo_btc3 tls sni ip-158-129-172-247--51002
+            route @exit_utxo_btc3 {
+                proxy 158.129.172.247:51002
+            }
+
+            @exit_utxo_btc4 tls sni ip-158-129-172-247--52002
+            route @exit_utxo_btc4 {
+                proxy 158.129.172.247:52002
+            }
+
+            @exit_utxo_doge3 tls sni ip-158-129-172-247--53002
+            route @exit_utxo_doge3 {
+                proxy 158.129.172.247:53002
+            }
+
+
+
+
+
+
+            # ------------------------------------------------------------
+            #                     EVM Faucets + Infura
+            # ------------------------------------------------------------
+            @exit_infura tls sni *.infura.io
+            route @exit_infura {
+                proxy {l4.tls.server_name}:443
+            }
+
+            @exit_evm_hoodi tls sni rpc.hoodi.ethpandaops.io
+            route @exit_evm_hoodi {
+                proxy rpc.hoodi.ethpandaops.io:443
+            }
+
+
+
+
+
+
+            # ------------------------------------------------------------
+            #                EVM Faucet — explorer APIs (/graph)
+            # ------------------------------------------------------------
+
+            @exit_evm_explorer_etherscan tls sni api.etherscan.io
+            route @exit_evm_explorer_etherscan {
+                proxy api.etherscan.io:443
+            }
+
+            @exit_evm_zksync_explorer tls sni block-explorer-api.sepolia.zksync.dev
+            route @exit_evm_zksync_explorer {
+                proxy block-explorer-api.sepolia.zksync.dev:443
+            }
+
+            @exit_evm_linea_explorer tls sni api-explorer.sepolia.linea.build
+            route @exit_evm_linea_explorer {
+                proxy api-explorer.sepolia.linea.build:443
+            }
+
+
+
+
+
+
+            # ------------------------------------------------------------
+            #                          SVM Faucet
+            # ------------------------------------------------------------
+            @exit_svm_solana tls sni solana-devnet.infura.io
+            route @exit_svm_solana {
+                proxy solana-devnet.infura.io:443
+            }
+
+
+
+
+
+
+            # ------------------------------------------------------------
+            #                          MOVE Faucet
+            # ------------------------------------------------------------
+            @exit_move_sui tls sni graphql.testnet.sui.io
+            route @exit_move_sui {
+                proxy graphql.testnet.sui.io:443
+            }
+
+
+
+
+
+        }
+    }
+}

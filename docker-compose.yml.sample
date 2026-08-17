@@ -17,8 +17,23 @@ services:
       - ./_VIDEOS:/var/www/videos:ro
     ports:
       - 80:80
+    networks:
+      - external
     restart: unless-stopped
+  
 
+  faucet-exit:
+    container_name: faucet-exit
+    image: vuknf/caddy-l4:2.11
+    user: 1000:1000
+    read_only: true
+    volumes:
+      - ./exit/Caddyfile:/etc/caddy/Caddyfile:ro
+    networks:
+      external: {}
+      isolated:
+        ipv4_address: 172.18.102.30
+    restart: unless-stopped
   # ------------------------------------------------------------
   # ------------------------------------------------------------
   # ------------------------------------------------------------
@@ -39,6 +54,8 @@ services:
     read_only: true
     environment:
       VITE_SYSTEM_NAME: "KNF Testnet<br/>Kriptovaliutų Faucet'as"
+    networks:
+      - isolated
     restart: unless-stopped
   # ------------------------------------------------------------
   # ------------------------------------------------------------
@@ -76,6 +93,9 @@ services:
     #   - /home/node/.npm:uid=1000,gid=1000                                            # Dev
     # volumes:                                                                         # Dev
     #   - ./vite/app:/app                                                              # Dev
+    networks:
+      - isolated
+      # - external                                                                     # Dev
     restart: unless-stopped
 
 
@@ -112,6 +132,27 @@ services:
 
       # Backend Source Code
       # - ./backend:/app                                                               # Dev
+    dns:
+      - 172.18.102.31
+    networks:
+      - isolated
+      # - external                                                                     # Dev
+    restart: unless-stopped
+
+
+  faucet-dns:
+    container_name: faucet-dns
+    image: dockurr/dnsmasq:2.92
+    user: 1000:1000
+    read_only: true
+    entrypoint: ["dnsmasq", "--no-daemon"]
+    command:
+      - --no-resolv
+      - --no-hosts
+      - --address=/#/172.18.102.30
+    networks:
+      isolated:
+        ipv4_address: 172.18.102.31
     restart: unless-stopped
   # ------------------------------------------------------------
   # ------------------------------------------------------------
@@ -140,6 +181,8 @@ services:
       - /tmp:uid=1000,gid=1000
     volumes:
       - ./_DATA/etherpad:/opt/etherpad-lite/var
+    networks:
+      - isolated
     restart: unless-stopped
   # ------------------------------------------------------------
   # ------------------------------------------------------------
@@ -170,6 +213,8 @@ services:
 
       # Dapps Root Directory
       - ./_DATA/dapps:/data
+    networks:
+      - isolated
     restart: unless-stopped
 
 
@@ -184,10 +229,13 @@ services:
 
       # Dapps Root Directory
       - ./_DATA/dapps:/srv:ro
+    networks:
+      - isolated
     restart: unless-stopped
   # ------------------------------------------------------------
   # ------------------------------------------------------------
   # ------------------------------------------------------------
+
 
 
 
@@ -220,9 +268,27 @@ services:
 
     volumes:
       - ./_DATA/backend:/data
+    networks:
+      - isolated
     restart: unless-stopped
   # ------------------------------------------------------------
   # ------------------------------------------------------------
   # ------------------------------------------------------------
 
 
+
+
+
+
+
+networks:
+  external:
+    external: true
+  isolated:
+    name: faucet-isolated
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.18.102.0/24
+          gateway: 172.18.102.1
