@@ -30,7 +30,7 @@ A comprehensive multi-blockchain faucet system developed for Vilnius University.
 - **Blockchain Simulator**: Interactive SHA-256 blockchain demonstration
 - **Transaction Graph Visualizer**: Explore cryptocurrency transaction flows (See [more](_DOCS/txgraph/README.md))
 - **DApp Hosting**: File browser and hosting for decentralized applications
-- **51% Attack Tool**: Visual interface for 51% attack on LTC Testnet4 network (See [more](_DOCS/51percent/README.md))
+
 
 ## 📋 Prerequisites
 
@@ -143,13 +143,6 @@ The UTXO and SVM entries name a *coin* / *chain* plus a network flavour (`bitcoi
 - Host decentralized applications
 - Manage hosted content
 
-#### 51% Attack Tool (See [more](_DOCS/51percent/README.md))
-- Access at `/reorgattack`
-- Visual interface for 51% attack on LTC Testnet4 network
-- Explore and control blockchain structure
-- Test the impact of 51% attacks on the network
-- Rent and point miners to your private blockchain (Default port: 63333)
-
 
 
 ### Project Structure
@@ -164,7 +157,6 @@ The UTXO and SVM entries name a *coin* / *chain* plus a network flavour (`bitcoi
 │   │   ├── erc_faucet/     # ERC-20 token faucet
 │   │   ├── utxo_faucet/    # UTXO faucet (Electrum-based)
 │   │   ├── svm_faucet/     # SVM faucet (Solana JSON-RPC)
-│   │   ├── reorg_attack/   # 51% attack tool (LTC Testnet4)
 │   │   ├── icons.py        # /api/icons — serves _CONFIG/icons
 │   │   └── database/       # SQLite helpers
 │   ├── tests/              # Unit tests

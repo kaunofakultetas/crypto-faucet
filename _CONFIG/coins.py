@@ -207,29 +207,6 @@ EVM_NETWORK_CONFIGS = {
             'etherscan_api_url': 'https://block-explorer-api.sepolia.zksync.dev/api',
         },
     },
-    # 'polygonZkEvm': {
-    #     'id': 4,
-    #     'chain_id': 2442,
-    #     'faucet': {
-    #         'short_name': "ETH",
-    #         'full_name': 'Polygon zkEVM Cardona',
-    #         'rpc_url': 'https://rpc.cardona.zkevm-rpc.com',
-    #         'chunk_size': 0.05,
-    #     },
-    #     'metamask': {
-    #         'chain_name': 'Polygon zkEVM Cardona Testnet',
-    #         'native_currency': {
-    #             'name': 'Ethereum',
-    #             'symbol': 'ETH',
-    #             'decimals': 18
-    #         },
-    #         'rpc_urls': ['https://rpc.cardona.zkevm-rpc.com'],
-    #         'block_explorer_urls': ['https://explorer-ui.cardona.zkevm-rpc.com'],
-    #     },
-    #     'explorer': {
-    #         'etherscan_api_url': 'https://api-cardona-zkevm.polygonscan.com/api',
-    #     },
-    # },
     'lineaSepolia': {
         'id': 5,
         'chain_id': 59141,
