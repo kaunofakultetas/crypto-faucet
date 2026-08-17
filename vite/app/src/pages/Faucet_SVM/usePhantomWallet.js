@@ -175,12 +175,20 @@ async function connectPhantom() {
 // requestClusterHop
 // -----------------------------------------------------------
 //
-// The cluster-hop conversation: hand Phantom's changeNetwork
-// the cluster's genesis hash. A build that ships the method
-// answers → 'confirmed'; one that does not leaves the hop to
-// the student's own clicks → 'assumed' (the page then keeps
-// the Testnet Mode instructions visible). A refusal or a
-// real failure throws a ready-to-display message.
+// The cluster-hop conversation. VERIFIED (2026-08, Phantom's
+// own phantom-connect-sdk source): Phantom has NO programmatic
+// Solana cluster switch — the official SDK's injected-path
+// switchNetwork is literally a no-op ("Wallet Standard does
+// not support network switching"), unlike its EVM side, which
+// has switchChain. The cluster is the student's Testnet Mode
+// setting, full stop.
+//
+// changeNetwork({ genesisHash }) is the OKX-style provider
+// API, kept as cheap future-proofing: a wallet that ships it
+// answers → 'confirmed'; Phantom answers method-not-found →
+// 'assumed', and the page keeps the Testnet Mode instructions
+// visible. A refusal or a real failure throws a
+// ready-to-display message.
 //
 // Used by:
 //   - usePhantomWallet (below) — switchNetwork()
