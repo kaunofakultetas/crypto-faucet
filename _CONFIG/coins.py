@@ -331,6 +331,39 @@ EVM_NETWORK_CONFIGS = {
 
 
 
+
+############################################################
+# ERC20_TOKEN_CONFIGS
+############################################################
+#
+# ERC-20 test tokens, token-first: each token is defined once
+# and lists every chain it is deployed on (network key ->
+# contract address). Network keys must exist in
+# EVM_NETWORK_CONFIGS — validation refuses unknown ones.
+# Adding a chain to a token = one deployments line; adding a
+# token = one block.
+############################################################
+
+ERC20_TOKEN_CONFIGS = {
+    'LINK': {
+        'name': 'Chainlink',
+        'decimals': 18,
+        'chunk_size': 5,
+        'deployments': {
+            # Official Chainlink token on Sepolia (docs.chain.link)
+            'sepolia': '0x779877A7B0D9E8603169DdbD7836e478b4624789',
+        },
+    },
+}
+
+
+
+
+
+
+
+
+
 ############################################################
 # SVM_NETWORK_CONFIGS
 ############################################################
@@ -380,39 +413,6 @@ SVM_NETWORK_CONFIGS = {
         },
     },
 }
-
-
-
-
-
-
-
-
-
-############################################################
-# ERC20_TOKEN_CONFIGS
-############################################################
-#
-# ERC-20 test tokens, token-first: each token is defined once
-# and lists every chain it is deployed on (network key ->
-# contract address). Network keys must exist in
-# EVM_NETWORK_CONFIGS — validation refuses unknown ones.
-# Adding a chain to a token = one deployments line; adding a
-# token = one block.
-############################################################
-
-ERC20_TOKEN_CONFIGS = {
-    'LINK': {
-        'name': 'Chainlink',
-        'decimals': 18,
-        'chunk_size': 5,
-        'deployments': {
-            # Official Chainlink token on Sepolia (docs.chain.link)
-            'sepolia': '0x779877A7B0D9E8603169DdbD7836e478b4624789',
-        },
-    },
-}
-
 
 
 
