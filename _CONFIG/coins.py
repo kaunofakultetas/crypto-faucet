@@ -370,7 +370,7 @@ SVM_NETWORK_CONFIGS = {
             'short_name': "devSOL",
             'full_name': 'Solana Devnet',
             'rpc_url': 'https://solana-devnet.infura.io/v3/<INFURA_PROJECT_ID>',
-            'chunk_size': 0.05,
+            'chunk_size': 5,
         },
         'wallet': {
             'rpc_urls': ['https://api.devnet.solana.com'],

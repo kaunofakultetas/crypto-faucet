@@ -135,12 +135,6 @@ export const FAUCET_TYPES = [
     ...networkCatalog((network) => `Chain ID: ${network.chain_id}`),
   },
   {
-    key: 'svm',
-    label: 'SVM',
-    pickLabel: 'Pasirinkti tinklą',
-    ...networkCatalog((network) => `${network.chunk_size} ${network.symbol} · ${network.cluster}`),
-  },
-  {
     key: 'erc20',
     label: 'ERC-20',
     pickLabel: 'Pasirinkti žetoną',
@@ -152,6 +146,12 @@ export const FAUCET_TYPES = [
         secondary: `${token.chunk_size} ${token.symbol} · ${token.networks.length} tinkl.`,
         icon: token.icon ?? null,
       })),
+  },
+  {
+    key: 'svm',
+    label: 'SVM',
+    pickLabel: 'Pasirinkti tinklą',
+    ...networkCatalog((network) => `${network.chunk_size} ${network.symbol} · ${network.cluster}`),
   },
 ];
 
