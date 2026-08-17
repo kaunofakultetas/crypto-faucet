@@ -61,7 +61,6 @@
             # ------------------------------------------------------------
             #                EVM Faucet — explorer APIs (/graph)
             # ------------------------------------------------------------
-
             @exit_evm_explorer_etherscan tls sni api.etherscan.io
             route @exit_evm_explorer_etherscan {
                 proxy api.etherscan.io:443
