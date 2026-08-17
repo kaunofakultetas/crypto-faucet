@@ -69,7 +69,7 @@ import CheckIcon from '@mui/icons-material/Check';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import LocalGasStationIcon from '@mui/icons-material/LocalGasStation';
 
-import useMetamaskWallet from '@/hooks/useMetamaskWallet';
+import useMetamaskWallet, { getMetamaskProvider } from '@/hooks/useMetamaskWallet';
 import { WalletStepper, WalletGateButton, FadingAlert, useAlerts } from '@/components/WalletFlow';
 import AssetIcon from '@/components/AssetIcon';
 
@@ -433,7 +433,9 @@ function LoadingSkeleton() {
 // → switch to a token network (an unrelated chain would hide
 // the received tokens) → have gas → claim. The network step
 // is done once the wallet sits on ANY of the token's chains;
-// its button targets the current chain's deployment when
+// until then the gate button SWITCHES the wallet for the
+// student — same wallet_switchEthereumChain mechanics as the
+// EVM page — targeting the current chain's deployment when
 // there is one, else the first chain with gas, else the
 // first. The gas step completes once the wallet clears the
 // threshold (half the native chunk) on at least one chain.
@@ -491,9 +493,11 @@ export default function FaucetERC20() {
 
   // Make the token visible: hop to that chain if the wallet is
   // elsewhere, then import the contract address so MetaMask
-  // stops pretending the balance isn't there
+  // stops pretending the balance isn't there. MetaMask's OWN
+  // provider — bare window.ethereum may be another wallet
   const showInMetamask = async (deployment) => {
-    if (!window.ethereum) {
+    const provider = getMetamaskProvider();
+    if (!provider) {
       addAlert('error', 'Pirmiausia įsidiekite MetaMask.', deployment.network);
       return;
     }
@@ -503,7 +507,7 @@ export default function FaucetERC20() {
         await wallet.switchNetwork(deployment);
       }
 
-      await window.ethereum.request({
+      await provider.request({
         method: 'wallet_watchAsset',
         params: {
           type: 'ERC20',

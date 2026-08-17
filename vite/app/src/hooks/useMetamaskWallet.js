@@ -1,21 +1,23 @@
 // -----------------------------------------------------------
 //  [*] useMetamaskWallet — MetaMask on EVM chains
 //
-//  The EVM-family pages' wallet hook — window.ethereum plus
-//  one Web3 instance, with account and chain kept fresh
-//  through MetaMask's own events. The returned `step` is the
-//  single source of truth:
+//  The EVM-family pages' wallet hook — MetaMask's OWN
+//  provider (resolved via EIP-6963, never bare
+//  window.ethereum) plus one Web3 instance, with account and
+//  chain kept fresh through MetaMask's events. The returned
+//  `step` is the single source of truth:
 //  0 install → 1 connect → 2 switch network → 3 ready.
 //
 //  Split into (root last) — the MetaMask conversations are
 //  plain functions, the hook wires their results into state:
 //
-//    WALLET_REFRESH_MS — balance repoll cadence
-//    connectMetamask   — the connect conversation
-//    requestChainHop   — the switch/add-chain conversation
-//    signClaimMessage  — the ownership-proof conversation
-//    useMetamaskWallet — state wiring + balance + step
-//                        (default export)
+//    WALLET_REFRESH_MS   — balance repoll cadence
+//    getMetamaskProvider — MetaMask's provider, nobody else's
+//    connectMetamask     — the connect conversation
+//    requestChainHop     — the switch/add-chain conversation
+//    signClaimMessage    — the ownership-proof conversation
+//    useMetamaskWallet   — state wiring + balance + step
+//                          (default export)
 //
 //  Used by:
 //    - pages/Faucet_EVM/Page.jsx
@@ -38,6 +40,54 @@ const WALLET_REFRESH_MS = 1000;
 
 
 // -----------------------------------------------------------
+// getMetamaskProvider
+// -----------------------------------------------------------
+//
+// THE MetaMask provider — never bare window.ethereum, which
+// is contested territory: Phantom injects an EVM provider
+// there too, with isMetaMask set to true, so with both
+// extensions installed every "MetaMask" call was answered by
+// Phantom's popup. EIP-6963 discovery settles it — installed
+// wallets announce themselves synchronously on request, and
+// rdns io.metamask* is an identity, not a flag anyone can
+// fake in the same way. null = treat MetaMask as not
+// installed rather than talk to a stranger.
+//
+// Cached after the first hit — the winner cannot change
+// within a page load; a miss is retried on every call, so a
+// late-injecting extension still gets picked up.
+//
+// Used by:
+//   - connectMetamask / requestChainHop (below)
+//   - useMetamaskWallet (below) — the detection effect
+//   - pages/Faucet_ERC20/Page.jsx — wallet_watchAsset
+// -----------------------------------------------------------
+
+let cachedProvider = null;
+
+export const getMetamaskProvider = () => {
+  if (cachedProvider) return cachedProvider;
+  if (typeof window === 'undefined') return null;
+
+  const onAnnounce = (event) => {
+    if (event.detail?.info?.rdns?.startsWith('io.metamask')) {
+      cachedProvider = event.detail.provider;
+    }
+  };
+  window.addEventListener('eip6963:announceProvider', onAnnounce);
+  window.dispatchEvent(new Event('eip6963:requestProvider'));
+  window.removeEventListener('eip6963:announceProvider', onAnnounce);
+
+  return cachedProvider;
+};
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // connectMetamask
 // -----------------------------------------------------------
 //
@@ -51,7 +101,10 @@ const WALLET_REFRESH_MS = 1000;
 // -----------------------------------------------------------
 
 async function connectMetamask() {
-  const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+  const provider = getMetamaskProvider();
+  if (!provider) throw new Error('MetaMask dar neįkelta. Bandykite dar kartą.');
+
+  const accounts = await provider.request({ method: 'eth_requestAccounts' });
   return accounts[0] ?? null;
 }
 
@@ -77,19 +130,27 @@ async function connectMetamask() {
 // -----------------------------------------------------------
 
 async function requestChainHop(networkInfo) {
+  const provider = getMetamaskProvider();
+  if (!provider) throw new Error('MetaMask dar neįkelta. Bandykite dar kartą.');
+
   const chainIdHex = `0x${networkInfo.chain_id.toString(16)}`;
 
   try {
-    await window.ethereum.request({
+    await provider.request({
       method: 'wallet_switchEthereumChain',
       params: [{ chainId: chainIdHex }],
     });
   } catch (err) {
-    if (err.code !== 4902) {
+    // 4902 = MetaMask doesn't know the chain yet. Newer builds
+    // sometimes wrap it inside an internal error instead of
+    // answering with it at the top level.
+    const chainUnknown = err?.code === 4902
+      || err?.data?.originalError?.code === 4902;
+    if (!chainUnknown) {
       throw new Error(`Nepavyko persijungti į tinklą: ${err.message}`);
     }
 
-    await window.ethereum.request({
+    await provider.request({
       method: 'wallet_addEthereumChain',
       params: [{
         chainId: chainIdHex,
@@ -106,7 +167,7 @@ async function requestChainHop(networkInfo) {
     });
   }
 
-  const landedOn = await window.ethereum.request({ method: 'eth_chainId' });
+  const landedOn = await provider.request({ method: 'eth_chainId' });
   if (landedOn !== chainIdHex) {
     throw new Error('Nepavyko persijungti į reikiamą tinklą. Patikrinkite MetaMask nustatymus.');
   }
@@ -179,27 +240,30 @@ export default function useMetamaskWallet(expectedChainId) {
   const [chainId, setChainId] = useState(null);
 
 
-  // Detect MetaMask once; the listeners keep account/chain in
-  // step with what the student does inside the extension
+  // Detect MetaMask once — its OWN provider, so another
+  // wallet squatting on window.ethereum is never mistaken for
+  // it; the listeners keep account/chain in step with what
+  // the student does inside the extension
   useEffect(() => {
-    if (!window.ethereum) return;
+    const provider = getMetamaskProvider();
+    if (!provider) return;
 
     setInstalled(true);
-    const w3 = new Web3(window.ethereum);
+    const w3 = new Web3(provider);
     setWeb3(w3);
 
     const handleAccountsChanged = (acc) => setAccount(acc[0] ?? null);
     const handleChainChanged = (id) => setChainId(parseInt(id, 16));
 
-    window.ethereum.on('accountsChanged', handleAccountsChanged);
-    window.ethereum.on('chainChanged', handleChainChanged);
+    provider.on('accountsChanged', handleAccountsChanged);
+    provider.on('chainChanged', handleChainChanged);
 
     w3.eth.getAccounts().then(handleAccountsChanged);
     w3.eth.getChainId().then((id) => setChainId(Number(id)));
 
     return () => {
-      window.ethereum.removeListener('accountsChanged', handleAccountsChanged);
-      window.ethereum.removeListener('chainChanged', handleChainChanged);
+      provider.removeListener('accountsChanged', handleAccountsChanged);
+      provider.removeListener('chainChanged', handleChainChanged);
     };
   }, []);
 
@@ -223,13 +287,21 @@ export default function useMetamaskWallet(expectedChainId) {
 
 
   // The actions are the MetaMask conversations at the top of
-  // the file — connect is the only one whose result becomes
-  // state; the chain hop's outcome arrives via chainChanged
+  // the file — the wrappers translate their results into state
   const connect = () => connectMetamask().then((acc) => {
     if (acc) setAccount(acc);
   });
 
-  const switchNetwork = requestChainHop;
+  // The hop is VERIFIED inside requestChainHop (it read
+  // eth_chainId after switching), so record the landing
+  // directly: per-dapp MetaMask builds switch an
+  // already-permitted chain silently and do not reliably emit
+  // chainChanged — waiting for the event froze the stepper on
+  // the switch step after a successful hop
+  const switchNetwork = async (networkInfo) => {
+    await requestChainHop(networkInfo);
+    setChainId(Number(networkInfo.chain_id));
+  };
 
   const signMessage = () => signClaimMessage(web3, account);
 

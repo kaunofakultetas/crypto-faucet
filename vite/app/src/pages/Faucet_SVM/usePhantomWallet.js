@@ -64,11 +64,13 @@ const CLUSTER_GENESIS = {
 // getPhantomProvider
 // -----------------------------------------------------------
 //
-// The injected provider, or null. Prefers
-// window.phantom.solana so we do not pick up Brave (or
-// another wallet) sitting on the legacy window.solana slot.
-// Re-resolved on every use rather than cached — the extension
-// injects on its own schedule.
+// The injected provider, or null — ONLY window.phantom.solana,
+// Phantom's own reserved namespace, the same identity-based
+// discipline as the MetaMask hook's EIP-6963 resolution. The
+// legacy shared window.solana slot is deliberately not read:
+// it is guarded only by a flag any wallet can fake (Brave and
+// friends have squatted it). Re-resolved on every use rather
+// than cached — the extension injects on its own schedule.
 //
 // Used by:
 //   - connectPhantom / requestClusterHop / signClaimMessage
@@ -78,9 +80,7 @@ const CLUSTER_GENESIS = {
 
 const getPhantomProvider = () => {
   if (typeof window === 'undefined') return null;
-  if (window.phantom?.solana?.isPhantom) return window.phantom.solana;
-  if (window.solana?.isPhantom) return window.solana;
-  return null;
+  return window.phantom?.solana?.isPhantom ? window.phantom.solana : null;
 };
 
 
