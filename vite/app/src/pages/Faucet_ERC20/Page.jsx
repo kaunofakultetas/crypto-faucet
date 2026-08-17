@@ -610,7 +610,7 @@ export default function FaucetERC20() {
             'Prijungti Metamask',
             switchTarget ? `Įsijungti ${switchTarget.full_name} Tinklą` : 'Įsijungti Tinklą',
             'Gauti native valiutos',
-            `Atsisiųsti ${token.symbol}`,
+            `Atsisiųsti ${token.name} žetoną`,
           ]}
           icons={{ 3: <LocalGasStationIcon /> }}
         />

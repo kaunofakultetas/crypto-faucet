@@ -326,7 +326,7 @@ export default function FaucetMOVE() {
   const steps = [
     `Susidiegti ${wallet.walletName}`,
     `Prijungti ${wallet.walletName}`,
-    `Atsisiųsti ${networkInfo.full_name} ${networkInfo.short_name}`,
+    `Atsisiųsti ${networkInfo.full_name}`,
   ];
 
 

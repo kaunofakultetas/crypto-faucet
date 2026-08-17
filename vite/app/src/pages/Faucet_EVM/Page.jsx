@@ -232,7 +232,7 @@ export default function FaucetEVM() {
             'Susidiegti Metamask',
             'Prijungti Metamask',
             `Įsijungti ${networkInfo.full_name} Tinklą`,
-            `Atsisiųsti ${networkInfo.full_name} ETH`,
+            `Atsisiųsti ${networkInfo.full_name}`,
           ]}
         />
       </div>
