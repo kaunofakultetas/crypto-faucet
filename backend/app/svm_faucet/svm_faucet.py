@@ -281,7 +281,7 @@ class SVMFaucet:
     # The payout size for one network, in lamports. The config
     # states it in whole coins; the decimals are a chain fact.
     # Boot validation already proved this clears the chain's
-    # rent-exempt minimum (see config_models.py).
+    # rent-exempt minimum (see config_schema.py).
     #
     # Used by:
     #   - request_sol (below)
