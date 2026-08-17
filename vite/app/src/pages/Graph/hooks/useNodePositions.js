@@ -12,7 +12,7 @@
 
 import { useEffect, useRef } from 'react';
 
-import { LAYOUT_CONFIG, STORAGE_KEYS } from './constants';
+import { LAYOUT_CONFIG, STORAGE_KEYS } from '../constants';
 
 
 

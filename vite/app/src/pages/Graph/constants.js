@@ -50,8 +50,7 @@ export const ZOOM_CONFIG = {
 // is disabled, the graph computes positions itself.
 //
 // Used by:
-//   - useTransactionGraph.js — syncDataSets (Y = level ×
-//     LEVEL_SEPARATION)
+//   - useTransactionGraph.js — syncDataSets (Y = level × LEVEL_SEPARATION)
 //   - useNodePositions.js — X slot width
 // -----------------------------------------------------------
 
@@ -123,8 +122,7 @@ export const NODE_CONFIG = {
 // every interaction state.
 //
 // Used by:
-//   - useTransactionGraph.js — VIS_OPTIONS and syncDataSets
-//     (edge label font)
+//   - useTransactionGraph.js — VIS_OPTIONS and syncDataSets (edge label font)
 // -----------------------------------------------------------
 
 export const EDGE_CONFIG = {

@@ -23,8 +23,8 @@ import { useState } from 'react';
 
 import Box from '@mui/material/Box';
 
-import { ZOOM_CONFIG } from './constants';
-import useTransactionGraph from './useTransactionGraph';
+import { ZOOM_CONFIG } from '../constants';
+import useTransactionGraph from '../hooks/useTransactionGraph';
 import ZoomControls from './ZoomControls';
 import AddressDialog from './AddressDialog';
 

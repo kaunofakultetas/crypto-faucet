@@ -37,7 +37,7 @@ import TodayIcon from '@mui/icons-material/Today';
 import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';
 
-import CryptoFlowGraph from './CryptoFlowGraph';
+import CryptoFlowGraph from './components/CryptoFlowGraph';
 
 
 // The round brand-colored day-stepper buttons, matching the

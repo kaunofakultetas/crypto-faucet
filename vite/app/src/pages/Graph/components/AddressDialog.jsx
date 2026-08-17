@@ -21,7 +21,32 @@ import Tooltip from '@mui/material/Tooltip';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import CloseIcon from '@mui/icons-material/Close';
 
-import { copyToClipboard } from './utils';
+
+
+
+
+
+
+// -----------------------------------------------------------
+// copyToClipboard
+// -----------------------------------------------------------
+//
+// Clipboard write that reports success instead of throwing —
+// the "Nukopijuota" hint shows only when it worked.
+//
+// Used by:
+//   - AddressDialog (below) — the copy button
+// -----------------------------------------------------------
+
+const copyToClipboard = async (text) => {
+  try {
+    await navigator.clipboard.writeText(text || '');
+    return true;
+  } catch (error) {
+    console.error('Failed to copy to clipboard:', error);
+    return false;
+  }
+};
 
 
 

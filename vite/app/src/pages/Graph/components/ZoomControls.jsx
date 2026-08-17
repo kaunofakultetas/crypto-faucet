@@ -12,7 +12,7 @@ import IconButton from '@mui/material/IconButton';
 import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';
 
-import { DIMENSIONS } from './constants';
+import { DIMENSIONS } from '../constants';
 
 
 // Shared look of the round plus/minus zoom buttons
