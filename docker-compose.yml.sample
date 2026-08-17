@@ -14,7 +14,7 @@ services:
       ######################################################################
     volumes:
       - ./endpoint/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./_VIDEOS:/var/www/videos
+      - ./_VIDEOS:/var/www/videos:ro
     ports:
       - 80:80
     restart: unless-stopped
