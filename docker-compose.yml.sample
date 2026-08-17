@@ -19,6 +19,7 @@ services:
       - 80:80
     networks:
       - external
+      - isolated
     restart: unless-stopped
   
 
