@@ -6,7 +6,8 @@
 //  /faucet/erc20/:network.
 //
 //  The four-step MetaMask flow (install → connect → switch
-//  network → claim) is driven by the shared useWallet hook;
+//  network → claim) is driven by the shared useMetamaskWallet
+//  hook;
 //  claiming signs a nonce message the backend verifies before
 //  sending (GET /api/evm/<network>/request). The faucet's
 //  return address renders as text + QR, with a shortcut to
@@ -35,7 +36,7 @@ import axios from 'axios';
 import { Button, Box, Skeleton, Stack, CircularProgress } from '@mui/material';
 import HubIcon from '@mui/icons-material/Hub';
 
-import useWallet from '@/hooks/useWallet';
+import useMetamaskWallet from '@/hooks/useMetamaskWallet';
 import { WalletStepper, WalletGateButton, FadingAlert, useAlerts } from '@/components/WalletFlow';
 import AssetIcon from '@/components/AssetIcon';
 
@@ -162,7 +163,7 @@ export default function FaucetEVM() {
   const navigate = useNavigate();
 
   const { networkInfo, faucetInfo } = useFaucetInfo(network);
-  const wallet = useWallet(networkInfo?.chain_id);
+  const wallet = useMetamaskWallet(networkInfo?.chain_id);
   const { alerts, addAlert } = useAlerts();
   const queryClient = useQueryClient();
 

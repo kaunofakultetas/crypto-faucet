@@ -69,7 +69,7 @@ import CheckIcon from '@mui/icons-material/Check';
 import VisibilityIcon from '@mui/icons-material/Visibility';
 import LocalGasStationIcon from '@mui/icons-material/LocalGasStation';
 
-import useWallet from '@/hooks/useWallet';
+import useMetamaskWallet from '@/hooks/useMetamaskWallet';
 import { WalletStepper, WalletGateButton, FadingAlert, useAlerts } from '@/components/WalletFlow';
 import AssetIcon from '@/components/AssetIcon';
 
@@ -427,7 +427,8 @@ function LoadingSkeleton() {
 // -----------------------------------------------------------
 //
 // The page itself: the wallet flow around one card per chain.
-// useWallet gets no expected chain (the token spans many), so
+// useMetamaskWallet gets no expected chain (the token spans
+// many), so
 // activeStep is derived HERE — five steps: install → connect
 // → switch to a token network (an unrelated chain would hide
 // the received tokens) → have gas → claim. The network step
@@ -449,7 +450,7 @@ export default function FaucetERC20() {
 
   const { token: symbol } = useParams();
 
-  const wallet = useWallet();
+  const wallet = useMetamaskWallet();
   const { data, error, reload } = useToken(symbol, wallet.account);
   const { alerts, addAlert } = useAlerts();
 
@@ -547,7 +548,7 @@ export default function FaucetERC20() {
   };
 
 
-  // The page's own steps on top of useWallet's 0/1 (install /
+  // The page's own steps on top of useMetamaskWallet's 0/1 (install /
   // connect): the NETWORK step — the wallet must sit on ONE
   // of the token's chains, an unrelated chain would hide the
   // received tokens — then the GAS step, complete once at

@@ -7,7 +7,7 @@
 //  the self-fading outcome alerts.
 //
 //  Wallet-agnostic. Everything here is driven by the `step`
-//  the page's wallet hook derives (hooks/useWallet.js for
+//  the page's wallet hook derives (hooks/useMetamaskWallet.js for
 //  MetaMask, Faucet_SVM/usePhantomWallet.js for Phantom);
 //  nothing in this file talks to a wallet itself. What differs
 //  between wallets arrives as props: the install link and
