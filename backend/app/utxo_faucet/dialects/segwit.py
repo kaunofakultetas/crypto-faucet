@@ -48,6 +48,20 @@ class SegwitDialect:
     OUTPUT_SIZE = 31
 
 
+
+
+    ############################################################
+    # __init__
+    ############################################################
+    #
+    # The network's bech32 HRP, plus — when the coin lists
+    # base58 version bytes — the composed legacy codec for
+    # old-wallet recipients (see the file header).
+    #
+    # Used by:
+    #   - dialects/__init__.py — dialect_for(), per network
+    ############################################################
+
     def __init__(self, hrp: str, p2pkh_prefix=None, p2sh_prefix=None):
         self.hrp = hrp
 
@@ -62,21 +76,34 @@ class SegwitDialect:
 
 
     ############################################################
-    # faucet_script / faucet_address
+    # faucet_script
     ############################################################
     #
-    # The faucet's own p2wpkh scriptPubKey, and that script as
-    # a bech32 address under this network's HRP. The script is
+    # The faucet's own p2wpkh scriptPubKey. It is
     # HRP-independent — every SegWit chain shares it (and its
     # Electrum scripthash); only the address encoding differs.
     #
     # Used by:
     #   - utxo_faucet.py — identity per network, warmup
+    #   - faucet_address (below)
     ############################################################
 
     def faucet_script(self, pub) -> embit_script.Script:
         return embit_script.p2wpkh(pub)
 
+
+
+
+    ############################################################
+    # faucet_address
+    ############################################################
+    #
+    # That script as a bech32 address under this network's
+    # HRP.
+    #
+    # Used by:
+    #   - utxo_faucet.py — identity per network, warmup
+    ############################################################
 
     def faucet_address(self, pub) -> str:
         return self.faucet_script(pub).address({'bech32': self.hrp})

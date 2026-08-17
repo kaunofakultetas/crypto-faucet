@@ -21,6 +21,7 @@
 #    - evm_faucet/evm_faucet.py — per (network, address)
 #    - erc_faucet/erc20_faucet.py — per (network, token, address)
 #    - utxo_faucet/utxo_faucet.py — per (network, address)
+#    - svm_faucet/svm_faucet.py — per (network, address)
 ############################################################
 
 
@@ -42,7 +43,7 @@ import threading
 # key shape — the keys are opaque tuples to this class.
 #
 # Used by:
-#   - the three faucet __init__s — one instance each
+#   - the four faucet __init__s — one instance each
 ############################################################
 
 class CooldownTable:
@@ -60,7 +61,7 @@ class CooldownTable:
     # claim map so check-and-claim stays one atomic step.
     #
     # Used by:
-    #   - the three faucet __init__s
+    #   - the four faucet __init__s
     ############################################################
 
     def __init__(self, seconds):

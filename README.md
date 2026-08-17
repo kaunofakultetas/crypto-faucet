@@ -15,10 +15,13 @@ A comprehensive multi-blockchain faucet system developed for Vilnius University.
 - **EVM-Compatible Networks**:
   - Ethereum Sepolia Testnet
   - zkSync Sepolia Testnet
-  - Polygon zkEVM Cardona Testnet
   - Linea Sepolia Testnet
   - Ethereum Hoodi Testnet
   - Arbitrum Sepolia Testnet
+  - Polygon Amoy Testnet
+
+- **SVM Networks** (Solana runtime — Phantom wallet, Ed25519 addresses):
+  - Solana Devnet
 
 - **ERC-20 Test Tokens** (token-first — one page per token, across every chain it is deployed on):
   - Chainlink (LINK) on Sepolia
@@ -76,20 +79,21 @@ Then set the GUI login password in `docker-compose.yml` (service `faucet-endpoin
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
 | `INFURA_PROJECT_ID` | Infura API project ID | - | ✅ |
-| `FAUCET_PRIVATE_KEY` | Private key of the faucet wallet (shared by EVM + ERC-20) | - | ✅ |
+| `FAUCET_PRIVATE_KEY` | Private key of the faucet wallet (shared by EVM, ERC-20, UTXO and SVM — see below) | - | ✅ |
 | `DBGATE_PASSWORD` | Password of the `/dbgate` database browser | - | ✅ |
 | `APP_PASSWORD_1` | System GUI access password (set in compose, not `.env`) | - | ✅ |
 | `ETHERSCAN_API_KEY` | Etherscan API key (transaction graph) | - | ❌ |
 | `FAUCET_DEFAULT_NETWORK` | Default EVM network | sepolia | ❌ |
-| `UTXO_DEFAULT_NETWORK` | Default UTXO network | btc4 | ❌ |
 | `APP_DEBUG` | Flask debug mode (development only) | false | ❌ |
 
 ### Coins & Icons — the `_CONFIG` Directory
 
 All networks and tokens are defined in **`_CONFIG/coins.py`**, which is mounted read-only into the backend container (`./_CONFIG:/config`) — so the coin catalog lives *outside* the images and can be changed without rebuilding anything:
 
-- **`_CONFIG/coins.py`** holds three maps: `EVM_NETWORK_CONFIGS`, `ERC20_TOKEN_CONFIGS`, `UTXO_NETWORK_CONFIGS`. Each entry is sectioned by who consumes the settings (`faucet` / `metamask` / `explorer`). The file is validated on boot — a typo kills the start with a precise error in `docker logs faucet-backend` instead of a silent fallback. The Infura key never sits in this file: `<INFURA_PROJECT_ID>` inside `rpc_url` is substituted from the environment at startup.
-- **`_CONFIG/icons/<type>/<key>.svg`** (or `.png` / `.webp`) holds the asset icons, where `<type>` is `evm` / `erc20` / `utxo` and `<key>` is the entry's key in the maps (e.g. `evm/sepolia.svg`, `erc20/LINK.svg`, `utxo/btc4.svg`). Assets without an icon file automatically fall back to a colored dot in the UI.
+- **`_CONFIG/coins.py`** holds four maps: `EVM_NETWORK_CONFIGS`, `ERC20_TOKEN_CONFIGS`, `UTXO_NETWORK_CONFIGS`, `SVM_NETWORK_CONFIGS`. Each entry is sectioned by who consumes the settings (`faucet` / `metamask` / `wallet` / `explorer`). The file is validated on boot — a typo kills the start with a precise error in `docker logs faucet-backend` instead of a silent fallback. The Infura key never sits in this file: `<INFURA_PROJECT_ID>` inside `rpc_url` is substituted from the environment at startup.
+- **`_CONFIG/icons/<type>/<key>.svg`** (or `.png` / `.webp`) holds the asset icons, where `<type>` is `evm` / `erc20` / `utxo` / `svm` and `<key>` is the entry's key in the maps (e.g. `evm/sepolia.svg`, `erc20/LINK.svg`, `utxo/btc4.svg`, `svm/solanaDevnet.svg`). Assets without an icon file automatically fall back to a colored dot in the UI.
+
+The UTXO and SVM entries name a *coin* / *chain* plus a network flavour (`bitcoin` + `testnet`, `solana` + `devnet`); everything protocol-precise — address version bytes, fee rates, dust limits, lamport decimals, rent-exempt minimums — lives in the backend's in-code registries (`app/utxo_faucet/coins/`, `app/svm_faucet/chains/`) and is never an operator setting. An unknown coin/chain, an unknown flavour, or an SVM `chunk_size` below the chain's rent-exempt minimum all fail the boot.
 
 **To add or change a coin**: edit `_CONFIG/coins.py`, then `docker restart faucet-backend` (~3 s).
 **To add or change an icon**: drop the file into `_CONFIG/icons/` — it appears on the next page load, no restart at all.
@@ -109,6 +113,13 @@ All networks and tokens are defined in **`_CONFIG/coins.py`**, which is mounted 
 2. Connect your MetaMask wallet and switch to the network (the page adds it to MetaMask if missing)
 3. Sign the verification message — no transaction, the signature only proves you own the address
 4. Receive testnet ETH in your wallet
+
+#### SVM Networks (Solana-like)
+1. Navigate to `/faucet/svm/{network}` (e.g., `/faucet/svm/solanaDevnet`)
+2. Connect your Phantom wallet
+3. Put Phantom on Devnet — **Settings (⚙️) → Developer Settings → Testnet Mode**, then pick *Solana Devnet* (not *Solana*) in the network list. Phantom cannot always be switched by the page, so the instructions stay on screen until it confirms the hop; coins always go to Devnet, and a wallet left on mainnet will not show them
+4. Sign the verification message — no transaction, the Ed25519 signature only proves you own the address
+5. Receive testnet SOL in your wallet
 
 #### ERC-20 Tokens
 1. Navigate to `/faucet/erc20/{token}` (e.g., `/faucet/erc20/LINK`) — one page shows the token on **every** chain it is deployed on
@@ -145,14 +156,15 @@ All networks and tokens are defined in **`_CONFIG/coins.py`**, which is mounted 
 ### Project Structure
 ```
 ├── _CONFIG/                # Operator-editable config (mounted into the backend)
-│   ├── coins.py            # EVM / ERC-20 / UTXO network & token definitions
-│   └── icons/              # Crypto asset icons (evm/, erc20/, utxo/)
+│   ├── coins.py            # EVM / ERC-20 / UTXO / SVM network & token definitions
+│   └── icons/              # Crypto asset icons (evm/, erc20/, utxo/, svm/)
 ├── _DATA/                  # Runtime data (SQLite, dapps, notes) — created on first run
 ├── backend/                # Python Flask API
 │   ├── app/
 │   │   ├── evm_faucet/     # Native EVM faucet + Etherscan explorer
 │   │   ├── erc_faucet/     # ERC-20 token faucet
 │   │   ├── utxo_faucet/    # UTXO faucet (Electrum-based)
+│   │   ├── svm_faucet/     # SVM faucet (Solana JSON-RPC)
 │   │   ├── reorg_attack/   # 51% attack tool (LTC Testnet4)
 │   │   ├── icons.py        # /api/icons — serves _CONFIG/icons
 │   │   └── database/       # SQLite helpers
@@ -178,11 +190,16 @@ All endpoints are `GET`; the request endpoints take their inputs as query parame
 - `GET /api/evm/{network}/request?address=&signature=&nonce=` - Request testnet ETH (signature proves address ownership)
 - `GET /api/evm/{network}/faucet-balance` - Check faucet balance
 
+#### SVM Faucet
+- `GET /api/svm/networks` - List supported SVM networks
+- `GET /api/svm/{network}/request?address=&signature=&nonce=` - Request testnet SOL (Ed25519 signature proves address ownership)
+- `GET /api/svm/{network}/faucet-balance` - Check faucet balance
+
 #### ERC-20 Faucet
 - `GET /api/erc20/tokens` - List supported tokens and their networks
 - `GET /api/erc20/token/{symbol}?address=` - One token across all its chains (balances, gas thresholds)
 - `GET /api/erc20/{network}/{token}/request?address=&signature=&nonce=` - Request tokens on one chain
 
 #### Asset Icons
-- `GET /api/icons/{type}/{key}` - Icon of a network or token (`type`: `evm` / `erc20` / `utxo`)
+- `GET /api/icons/{type}/{key}` - Icon of a network or token (`type`: `evm` / `erc20` / `utxo` / `svm`)
 

@@ -74,6 +74,14 @@ from ..icons import icon_url
 # cached entry, so a claim shows up immediately regardless.
 BALANCE_CACHE_TTL = 10
 
+# Seconds one address must wait between payouts on one network
+COOLDOWN_SECONDS = 60
+
+# The network the picker preselects. A key of _CONFIG/coins.py's
+# UTXO map — when the operator drops that network, get_networks
+# falls back to the lowest picker id instead.
+DEFAULT_NETWORK = 'btc4'
+
 
 
 
@@ -217,7 +225,7 @@ class UTXOFaucet:
         # the EVM faucet's keying) — the slot is claimed atomically
         # before the payout work and released on failure (see
         # app/cooldown.py for the in-memory trade-offs).
-        self.cooldowns = CooldownTable(int(os.getenv('UTXO_COOLDOWN_SECONDS', '60')))
+        self.cooldowns = CooldownTable(COOLDOWN_SECONDS)
 
         # The faucet identity is the same KEY on every chain; how it
         # becomes a script and an address is each network's dialect's
@@ -605,16 +613,17 @@ class UTXOFaucet:
     ############################################################
     #
     # Everything the frontend needs to render the network
-    # picker. chain_id is always 0 — the field only exists so
-    # the payload shape matches the EVM faucet's.
+    # picker. The preselected network is DEFAULT_NETWORK, or —
+    # when that key is not configured — the lowest picker id,
+    # which is the first entry the picker lists. chain_id is
+    # always 0; the field only exists so the payload shape
+    # matches the EVM faucet's.
     #
     # Used by:
     #   - utxo_routes.py — GET /api/utxo/networks
     ############################################################
 
     def get_networks(self) -> dict:
-        default_key = os.getenv('UTXO_DEFAULT_NETWORK', 'btc4')
-
         networks = {}
         for key, config in self.network_configs.items():
             faucet_config = config.get('faucet', {})
@@ -627,6 +636,9 @@ class UTXOFaucet:
                 'chain': faucet_config.get('network', 'testnet'),
                 'chunk_size': float(faucet_config.get('chunk_size')) if faucet_config.get('chunk_size') is not None else float(self.default_amount_btc),
             }
+
+        default_key = DEFAULT_NETWORK if DEFAULT_NETWORK in networks else min(
+            networks, key=lambda key: networks[key]['id'], default=None)
 
         return {
             'default_network': default_key,

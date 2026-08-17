@@ -24,6 +24,7 @@ from unittest import mock
 from app.utxo_faucet.utxo_faucet import UTXOFaucet
 from app.evm_faucet.evm_faucet import EVMFaucet
 from app.erc_faucet.erc20_faucet import ERC20Faucet
+from app.svm_faucet.svm_faucet import SVMFaucet
 
 
 # Throwaway secp256k1 keys — NEVER the real faucet key. The UTXO
@@ -104,6 +105,22 @@ EVM_TEST_CONFIGS = {
             'block_explorer_urls': ['http://explorer.example'],
         },
         'explorer': {'etherscan_api_url': 'http://scan.example/api'},
+    },
+}
+
+SVM_TEST_CONFIGS = {
+    'testsvm': {
+        'id': 1,
+        'faucet': {
+            'chain': 'solana',
+            'network': 'devnet',
+            'short_name': 'devSOL',
+            'full_name': 'Test SVM',
+            'rpc_url': 'http://127.0.0.1:9/<TEST_RPC_SECRET>',
+            'chunk_size': 0.5,
+        },
+        'wallet': {'rpc_urls': ['http://public.example/rpc']},
+        'explorer': {'block_explorer_urls': ['http://explorer.example']},
     },
 }
 
@@ -204,6 +221,100 @@ def make_erc20_faucet(evm_faucet=None, token_configs=None):
     evm = evm_faucet or make_evm_faucet()
     with mock.patch.object(ERC20Faucet, '_warm_up_tokens', lambda self: None):
         return ERC20Faucet(evm, token_configs or ERC20_TEST_CONFIGS)
+
+
+
+
+############################################################
+# make_svm_faucet
+############################################################
+#
+# An SVMFaucet with the warmup patched out (no RPC calls) and
+# the throwaway key injected as the Ed25519 seed. The RPC
+# clients exist but are never called — patch their methods to
+# feed a test (see fake_solana_rpc below).
+#
+# Used by:
+#   - test_svm_faucet.py
+############################################################
+
+def make_svm_faucet(configs=None, private_key=TEST_PRIVATE_KEY):
+    env = {'TEST_RPC_SECRET': 'sekretas-iš-env', 'FAUCET_PRIVATE_KEY': private_key}
+    with mock.patch.dict(os.environ, env):
+        with mock.patch.object(SVMFaucet, '_warm_up_networks', lambda self: None):
+            return SVMFaucet(configs or SVM_TEST_CONFIGS)
+
+
+
+
+############################################################
+# fake_solana_rpc
+############################################################
+#
+#   client = fake_solana_rpc(faucet, 'testsvm', balances={...})
+#
+# Points one network's RPC client at canned data: balances
+# keyed by base58 address (absent reads as 0), a fixed
+# blockhash, and send_transaction recording the broadcast
+# instead of sending it. broadcast_error / balance_error
+# drive the failure paths. Returns the client, so a test can
+# assert on client.sent afterwards.
+#
+# Used by:
+#   - test_svm_faucet.py
+############################################################
+
+def fake_solana_rpc(faucet, network, balances=None, broadcast_error=None, balance_error=None):
+    # A valid base58 32-byte hash — Hash.from_string must parse it
+    blockhash = '11111111111111111111111111111111'
+    client = faucet._clients[network]
+    client.sent = []
+
+    def get_balance(address):
+        if balance_error:
+            raise RuntimeError(balance_error)
+        return (balances or {}).get(str(address), 0)
+
+    def send_transaction(signed_base64):
+        if broadcast_error:
+            raise RuntimeError(broadcast_error)
+        client.sent.append(signed_base64)
+        return 'sig' + '1' * 85
+
+    client.get_balance = get_balance
+    client.get_latest_blockhash = lambda: blockhash
+    client.send_transaction = send_transaction
+    client.get_version = lambda: '4.2.0'
+    return client
+
+
+
+
+############################################################
+# sign_svm_claim
+############################################################
+#
+#   address, signature, nonce = sign_svm_claim()
+#
+# A REAL Ed25519 signature over the exact message the SVM
+# faucet verifies — the same wording the EVM flow uses.
+# Signing with a different key than the claimed address is
+# how the 403 path is tested (pass signer_seed).
+#
+# Used by:
+#   - test_svm_faucet.py
+############################################################
+
+def sign_svm_claim(nonce='1785666345742', address_seed=None, signer_seed=None):
+    from solders.keypair import Keypair
+
+    address_kp = Keypair.from_seed(address_seed or bytes(range(32)))
+    signer_kp = Keypair.from_seed(signer_seed) if signer_seed else address_kp
+
+    message = CLAIM_MESSAGE.format(nonce=nonce)
+    signature = signer_kp.sign_message(message.encode('utf-8'))
+
+    return str(address_kp.pubkey()), str(signature), nonce
 
 
 

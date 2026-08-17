@@ -1,24 +1,28 @@
 // -----------------------------------------------------------
-//  [*] WalletFlow — shared MetaMask flow UI
+//  [*] WalletFlow — shared wallet flow UI
 //
-//  The pieces both EVM-family faucet pages (native coins and
-//  ERC-20 tokens) put around their claim buttons: the
-//  four-step progress bar, the gate button that walks the
+//  The pieces every faucet page puts around its claim button:
+//  the step progress bar, the gate button that walks the
 //  student through install → connect → switch network, and
 //  the self-fading outcome alerts.
 //
-//  Everything here is driven by the `step` that
-//  hooks/useWallet.js derives; nothing in this file talks to
-//  MetaMask itself.
+//  Wallet-agnostic. Everything here is driven by the `step`
+//  the page's wallet hook derives (hooks/useWallet.js for
+//  MetaMask, Faucet_SVM/usePhantomWallet.js for Phantom);
+//  nothing in this file talks to a wallet itself. What differs
+//  between wallets arrives as props: the install link and
+//  name, the last step's icon, and any extra help rendered
+//  under the switch button.
 //
 //  Split into (last used first is fine here — no root
 //  component, this is a toolbox):
 //
 //    ALERT_VISIBLE_MS/…   — alert lifetime + fade length
+//    METAMASK_*           — the default wallet's name + link
 //    ColorlibConnector    — gradient connector line (styled)
 //    ColorlibStepIconRoot — gradient step bubble (styled)
 //    ColorlibStepIcon     — icon inside a step bubble
-//    MetamaskStepper      — the four-step progress bar
+//    WalletStepper        — the step progress bar
 //    WalletGateButton     — install / connect / switch button
 //    FadingAlert          — one self-fading outcome row
 //    useAlerts            — the alert list + addAlert
@@ -26,6 +30,7 @@
 //  Used by:
 //    - pages/Faucet_EVM/Page.jsx
 //    - pages/Faucet_ERC20/Page.jsx
+//    - pages/Faucet_SVM/Page.jsx
 // -----------------------------------------------------------
 
 import { useEffect, useState } from 'react';
@@ -42,6 +47,11 @@ import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
 const ALERT_VISIBLE_MS = 8000;
 const ALERT_FADE_MS = 500;
 
+// WalletGateButton's defaults — the EVM-family pages never
+// pass these, the SVM page passes Phantom's
+const METAMASK_NAME = 'MetaMask';
+const METAMASK_DOWNLOAD_URL = 'https://metamask.io/download/';
+
 
 
 
@@ -57,7 +67,7 @@ const ALERT_FADE_MS = 500;
 // leads to is active or completed.
 //
 // Used by:
-//   - MetamaskStepper (below)
+//   - WalletStepper (below)
 // -----------------------------------------------------------
 
 const ColorlibConnector = styled(StepConnector)(({ theme }) => ({
@@ -137,12 +147,13 @@ const ColorlibStepIconRoot = styled('div')(({ theme, ownerState }) => ({
 // The icon inside a step bubble, picked by position so the
 // bar works at any length: install, power, the Ethereum
 // diamond for the LAST step, hub for anything between. An
-// `override` element (from MetamaskStepper's icons prop)
-// beats the position logic — the ERC-20 page slots a gas
-// pump into its gas step this way.
+// `override` element (from WalletStepper's icons prop) beats
+// the position logic — the ERC-20 page slots a gas pump into
+// its gas step this way, the SVM page a coin into its last
+// one.
 //
 // Used by:
-//   - MetamaskStepper (below)
+//   - WalletStepper (below)
 // -----------------------------------------------------------
 
 function ColorlibStepIcon({ icon, total, override, active, completed, className }) {
@@ -174,22 +185,22 @@ function ColorlibStepIcon({ icon, total, override, active, completed, className 
 
 
 // -----------------------------------------------------------
-// MetamaskStepper
+// WalletStepper
 // -----------------------------------------------------------
 //
-// The flow bar, given the labels: the native faucet runs
+// The flow bar, given the labels: the native faucets run
 // install → connect → switch network → claim, the ERC-20 one
 // adds a gas step — install → connect → token network → have
 // gas → claim. Purely presentational. `icons` is an optional
 // sparse index→element map that overrides the position-based
 // defaults for steps the defaults can't know about (the
-// ERC-20 gas step).
+// ERC-20 gas step, the SVM claim step).
 //
 // Used by:
-//   - both faucet pages (see the file header)
+//   - every faucet page (see the file header)
 // -----------------------------------------------------------
 
-export function MetamaskStepper({ activeStep, steps, icons }) {
+export function WalletStepper({ activeStep, steps, icons }) {
   return (
     <Stack sx={{ width: '100%' }} spacing={4}>
       <Stepper alternativeLabel activeStep={activeStep} connector={<ColorlibConnector />}>
@@ -224,28 +235,36 @@ export function MetamaskStepper({ activeStep, steps, icons }) {
 // -----------------------------------------------------------
 //
 // The one action standing between the student and claiming:
-// the MetaMask download link (step 0), the connect prompt
+// the wallet download link (step 0), the connect prompt
 // (step 1) or the network switch (step 2). Renders NOTHING at
 // step 3 and above — the pages put their own gas/claim UI
 // there.
 //
+// walletName / installUrl default to MetaMask. switchHelp is
+// an optional node shown under the switch button, for wallets
+// whose network hop needs manual clicks the page can only
+// describe (Phantom's Testnet Mode).
+//
 // Used by:
-//   - both faucet pages (see the file header)
+//   - every faucet page (see the file header)
 // -----------------------------------------------------------
 
-export function WalletGateButton({ step, networkInfo, onConnect, onSwitch, onError }) {
+export function WalletGateButton({
+  step, networkInfo, onConnect, onSwitch, onError,
+  walletName = METAMASK_NAME, installUrl = METAMASK_DOWNLOAD_URL, switchHelp = null,
+}) {
 
   if (step === 0) {
     return (
       <Button
         component="a"
-        href="https://metamask.io/download/"
+        href={installUrl}
         target="_blank"
         rel="noopener noreferrer"
         variant="contained"
         fullWidth
       >
-        Sudiegti MetaMask
+        Sudiegti {walletName}
       </Button>
     );
   }
@@ -260,13 +279,16 @@ export function WalletGateButton({ step, networkInfo, onConnect, onSwitch, onErr
 
   if (step === 2) {
     return (
-      <Button
-        variant="contained"
-        fullWidth
-        onClick={() => onSwitch(networkInfo).catch((e) => onError(e.message))}
-      >
-        Persijungti į {networkInfo.full_name} tinklą
-      </Button>
+      <>
+        <Button
+          variant="contained"
+          fullWidth
+          onClick={() => onSwitch(networkInfo).catch((e) => onError(e.message))}
+        >
+          Persijungti į {networkInfo.full_name} tinklą
+        </Button>
+        {switchHelp}
+      </>
     );
   }
 
@@ -289,7 +311,7 @@ export function WalletGateButton({ step, networkInfo, onConnect, onSwitch, onErr
 // exactly once.
 //
 // Used by:
-//   - both faucet pages (see the file header)
+//   - every faucet page (see the file header)
 // -----------------------------------------------------------
 
 export function FadingAlert({ severity, children }) {
@@ -330,10 +352,10 @@ export function FadingAlert({ severity, children }) {
 // optional tag lets a page with actions spread across many
 // cards route each row to the card that caused it — the
 // ERC-20 page tags by network; untagged rows are the page's
-// own to place (the EVM page ignores tags entirely).
+// own to place (the EVM and SVM pages ignore tags entirely).
 //
 // Used by:
-//   - both faucet pages (see the file header)
+//   - every faucet page (see the file header)
 // -----------------------------------------------------------
 
 export function useAlerts() {

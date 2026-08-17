@@ -2,30 +2,36 @@
 //  [*] Navbar — the burgundy top bar
 //
 //  Shown on every page: the VU KnF logo linking to "/", the
-//  faucet controls (on faucet pages a segmented EVM / ERC-20 /
-//  UTXO switch plus the network dropdown, elsewhere a quick
+//  faucet controls (on faucet pages a segmented faucet-type
+//  switch plus the network dropdown, elsewhere a quick
 //  "Atidaryti Faucet'ą" button), the Vaizdo Įrašai link and
 //  the "Kiti Įrankiai" dropdown with the teaching tools.
 //
 //  What the dropdown lists depends on the type, because the
-//  faucets are keyed differently: EVM and UTXO by NETWORK,
-//  ERC-20 by TOKEN (one token lives on many chains — picking
-//  the chain happens on the page). FAUCET_TYPES holds that
-//  difference; everything else treats all three alike.
+//  faucets are keyed differently: EVM, UTXO and SVM by
+//  NETWORK, ERC-20 by TOKEN (one token lives on many chains —
+//  picking the chain happens on the page). FAUCET_TYPES holds
+//  that difference; everything else treats all four alike.
 //
-//  All three catalogs load once on mount. Faucet jumps land
-//  on whatever the student picked last for that type
-//  (lastPick:<type> in localStorage), then the backend
-//  default, then a hardcoded fallback.
+//  All catalogs load once on mount. A family whose catalog
+//  answers EMPTY is hidden everywhere — no switch segment, no
+//  jumps into it: deleting (or emptying) a family's map in
+//  _CONFIG/coins.py is how the operator disables a whole coin
+//  type. Faucet jumps land on whatever the student picked
+//  last for that type (lastPick:<type> in localStorage), then
+//  the backend default, then the catalog's first entry.
 //
 //  Split into (root component last):
 //
 //    WHITE_OUTLINED_SX  — shared white outline button look
-//    FAUCET_TYPES       — the three types: endpoint, how to
+//    FAUCET_TYPES       — the four types: endpoint, how to
 //                         turn its payload into picker items,
-//                         labels, fallback
+//                         labels (exported)
 //    useFaucetCatalogs  — every type's items + default pick
-//    FaucetTypeSwitch   — segmented EVM / ERC-20 / UTXO
+//                         (exported)
+//    faucetTargetFor    — where a jump into one type lands
+//                         (exported)
+//    FaucetTypeSwitch   — segmented switch, live types only
 //    ToolsMenu          — "Kiti Įrankiai" dropdown
 //    Navbar             — navigation logic + layout
 //                         (default export)
@@ -60,7 +66,7 @@ const WHITE_OUTLINED_SX = {
 // FAUCET_TYPES
 // -----------------------------------------------------------
 //
-// The three faucet types, in navbar order. Per entry:
+// The four faucet types, in navbar order. Per entry:
 //
 //   key       — route prefix, /faucet/<key>/<pick>
 //   label     — segmented switch caption
@@ -71,22 +77,26 @@ const WHITE_OUTLINED_SX = {
 //               catalog and the page cost ONE request
 //   itemsOf   — turns that payload into picker items
 //               ({ key, primary, secondary }), which is where
-//               EVM/UTXO (networks) and ERC-20 (tokens) part
+//               the network-keyed types and ERC-20 part
 //   defaultOf — the backend's suggested pick
-//   fallback  — last resort when nothing else answers
+//
+// A type with no entries in its catalog is a DISABLED family
+// — the switch, the jumps and App.jsx's "/" redirect all skip
+// it. There is no hardcoded fallback pick on purpose: every
+// target must exist in the catalog or the jump doesn't happen.
 //
 // Used by:
 //   - useFaucetCatalogs / FaucetTypeSwitch / Navbar (below)
+//   - App.jsx — DynamicDefaultRedirect walks this table
 // -----------------------------------------------------------
 
-const FAUCET_TYPES = [
+export const FAUCET_TYPES = [
   {
     key: 'utxo',
     label: 'UTXO',
     pickLabel: 'Pasirinkti tinklą',
     api: '/api/utxo/networks',
     queryKey: ['utxo-networks'],
-    fallback: 'btc4',
     defaultOf: (data) => data.default_network ?? null,
     itemsOf: (data) => Object.entries(data.networks ?? {})
       .sort(([, a], [, b]) => (a.id ?? 0) - (b.id ?? 0))
@@ -103,7 +113,6 @@ const FAUCET_TYPES = [
     pickLabel: 'Pasirinkti tinklą',
     api: '/api/evm/networks',
     queryKey: ['evm-networks'],
-    fallback: 'sepolia',
     defaultOf: (data) => data.default_network ?? null,
     itemsOf: (data) => Object.entries(data.networks ?? {})
       .sort(([, a], [, b]) => (a.id ?? 0) - (b.id ?? 0))
@@ -115,12 +124,27 @@ const FAUCET_TYPES = [
       })),
   },
   {
+    key: 'svm',
+    label: 'SVM',
+    pickLabel: 'Pasirinkti tinklą',
+    api: '/api/svm/networks',
+    queryKey: ['svm-networks'],
+    defaultOf: (data) => data.default_network ?? null,
+    itemsOf: (data) => Object.entries(data.networks ?? {})
+      .sort(([, a], [, b]) => (a.id ?? 0) - (b.id ?? 0))
+      .map(([key, network]) => ({
+        key,
+        primary: network.full_name || key,
+        secondary: `${network.chunk_size} ${network.symbol} · ${network.cluster}`,
+        icon: network.icon ?? null,
+      })),
+  },
+  {
     key: 'erc20',
     label: 'ERC-20',
     pickLabel: 'Pasirinkti žetoną',
     api: '/api/erc20/tokens',
     queryKey: ['erc20-tokens'],
-    fallback: null,
     defaultOf: (data) => data.default_token ?? null,
     itemsOf: (data) => Object.entries(data.tokens ?? {})
       .map(([key, token]) => ({
@@ -146,25 +170,52 @@ const FAUCET_TYPES = [
 //   catalogs.evm / .erc20 / .utxo
 //     → { items, defaultKey, loading }
 //
-// All three catalogs as TanStack queries, driven by the
+// All four catalogs as TanStack queries, driven by the
 // FAUCET_TYPES table — each entry's own itemsOf turns its
 // payload into ready picker items. The cache keys are shared
 // with the pages, so a catalog the page already fetched is
-// free. A catalog that fails to load just ends up empty (the
-// stack may run without UTXO or with no tokens configured) —
-// the navbar still works.
+// free. A catalog that fails to load just ends up empty —
+// indistinguishable from a family the operator disabled, and
+// treated the same way: hidden.
+//
+// Every successful payload is ALSO persisted to localStorage
+// (catalog:<type>) and used as initialData on the next
+// mount: the in-memory query cache dies with the page, so
+// without this every refresh re-decided the navbar from four
+// in-flight requests — tabs and names flickered while the
+// answers landed. With it, a refresh renders the last known
+// navbar instantly; the queries still refetch immediately
+// (initialDataUpdatedAt 0), so a config change reconciles on
+// its first fetch and is stable from then on.
 //
 // Used by:
 //   - Navbar (below)
+//   - App.jsx — DynamicDefaultRedirect, the "/" route
 // -----------------------------------------------------------
 
-function useFaucetCatalogs() {
+// The persisted last-known payload of one catalog, or
+// undefined (never null — initialData treats null as data)
+const readCatalogCache = (typeKey) => {
+  try {
+    return JSON.parse(localStorage.getItem(`catalog:${typeKey}`)) ?? undefined;
+  } catch (_) {
+    return undefined;
+  }
+};
+
+export function useFaucetCatalogs() {
 
   const results = useQueries({
     queries: FAUCET_TYPES.map((type) => ({
       queryKey: type.queryKey,
-      queryFn: async () => (await axios.get(type.api)).data,
+      queryFn: async () => {
+        const { data } = await axios.get(type.api);
+        try { localStorage.setItem(`catalog:${type.key}`, JSON.stringify(data)); } catch (_) {}
+        return data;
+      },
       staleTime: 5 * 60 * 1000,
+      initialData: () => readCatalogCache(type.key),
+      initialDataUpdatedAt: 0,
     })),
   });
 
@@ -178,6 +229,44 @@ function useFaucetCatalogs() {
 
 
 
+// -----------------------------------------------------------
+// faucetTargetFor
+// -----------------------------------------------------------
+//
+//   faucetTargetFor(catalogs.evm, 'evm')  →  'sepolia' | null
+//
+// Where a jump into one faucet type lands: the student's last
+// pick for that type (lastPick:<type> in localStorage), the
+// backend default, or the catalog's first entry — whichever
+// is the FIRST that actually exists in the catalog, so a
+// network removed from the config can never be navigated to
+// from a stale pick. null while the catalog is empty (still
+// loading, or the family is disabled) — jumps are skipped
+// instead of landing on a dead page.
+//
+// Used by:
+//   - Navbar (below) — the switch and the quick-open button
+//   - App.jsx — DynamicDefaultRedirect, the "/" route
+// -----------------------------------------------------------
+
+export function faucetTargetFor(catalog, typeKey) {
+  const { items, defaultKey } = catalog;
+  if (items.length === 0) return null;
+
+  let saved = null;
+  try {
+    saved = localStorage.getItem(`lastPick:${typeKey}`);
+  } catch (_) {}
+
+  const exists = (key) => items.some((item) => item.key === key);
+  if (saved && exists(saved)) return saved;
+  if (defaultKey && exists(defaultKey)) return defaultKey;
+  return items[0].key;
+}
+
+
+
+
 
 
 
@@ -185,16 +274,17 @@ function useFaucetCatalogs() {
 // FaucetTypeSwitch
 // -----------------------------------------------------------
 //
-// The segmented EVM / ERC-20 / UTXO switch. Exclusive
-// selection, and a click on the already-active segment is
-// ignored (MUI hands over null) so the page never navigates
-// to nothing.
+// The segmented faucet-type switch. Only the LIVE types
+// arrive in `types` — a family the operator disabled is not
+// rendered at all. Exclusive selection, and a click on the
+// already-active segment is ignored (MUI hands over null) so
+// the page never navigates to nothing.
 //
 // Used by:
 //   - Navbar (below)
 // -----------------------------------------------------------
 
-function FaucetTypeSwitch({ faucetType, onChange }) {
+function FaucetTypeSwitch({ types, faucetType, onChange }) {
   return (
     <ToggleButtonGroup
       exclusive
@@ -217,7 +307,7 @@ function FaucetTypeSwitch({ faucetType, onChange }) {
         },
       }}
     >
-      {FAUCET_TYPES.map((type) => (
+      {types.map((type) => (
         <ToggleButton key={type.key} value={type.key}>
           {type.label}
         </ToggleButton>
@@ -305,11 +395,12 @@ function ToolsMenu() {
 //
 // Holds the faucet type (synced from the URL, so a direct
 // /faucet/erc20/... link flips the switch) and the faucet
-// navigation. faucetTarget resolves where a jump lands: the
-// student's last pick for that type → backend default →
-// hardcoded fallback. A type with nothing to offer (no tokens
-// configured) resolves to null and its jumps are skipped
-// rather than navigating to /faucet/erc20/null.
+// navigation. Only the types whose catalogs have entries are
+// rendered — a family the operator disabled (empty map in
+// _CONFIG/coins.py) has no segment and no jumps, and if it
+// was the selected type, the selection hops to the first live
+// family. Jump targets come from faucetTargetFor, so they
+// always exist in the catalog.
 //
 // Used by:
 //   - App.jsx — the page shell
@@ -322,36 +413,42 @@ export default function Navbar() {
 
   const catalogs = useFaucetCatalogs();
 
-  // 'evm' | 'erc20' | 'utxo' — follows the faucet URL, and
-  // survives leaving the faucet pages
+  // 'evm' | 'erc20' | 'utxo' | 'svm' — follows the faucet
+  // URL, and survives leaving the faucet pages
   const [faucetType, setFaucetType] = useState('evm');
+
+  // A type stays visible while its catalog loads (so the
+  // switch doesn't rebuild on every cold load) and disappears
+  // once the backend confirms there is nothing in it
+  const enabledTypes = FAUCET_TYPES.filter(
+    (type) => catalogs[type.key].loading || catalogs[type.key].items.length > 0,
+  );
 
   const active = catalogs[faucetType];
   const activeType = FAUCET_TYPES.find((t) => t.key === faucetType);
-  const isOnFaucet = /^\/faucet\/(evm|erc20|utxo)(\/|$)/.test(location.pathname);
+  const isOnFaucet = /^\/faucet\/(evm|erc20|utxo|svm)(\/|$)/.test(location.pathname);
 
 
   // A direct link to another faucet type flips the switch
   // without anyone touching it
   useEffect(() => {
-    const m = location.pathname.match(/^\/faucet\/(evm|erc20|utxo)\//);
+    const m = location.pathname.match(/^\/faucet\/(evm|erc20|utxo|svm)\//);
     if (m?.[1]) setFaucetType(m[1]);
   }, [location.pathname]);
 
 
-  // Where a faucet jump lands: last pick → backend default →
-  // hardcoded fallback (null when the type has nothing yet)
-  const faucetTarget = (typeKey) => {
-    const type = FAUCET_TYPES.find((t) => t.key === typeKey);
-    let saved = null;
-    try {
-      saved = localStorage.getItem(`lastPick:${typeKey}`);
-    } catch (_) {}
-    return saved || catalogs[typeKey].defaultKey || type.fallback;
-  };
+  // A disabled family must not stay selected: once its
+  // catalog is confirmed empty, hop to the first family that
+  // has something — the switch highlight and the quick-open
+  // button never point at a hidden type
+  useEffect(() => {
+    if (active.loading || active.items.length > 0) return;
+    const firstLive = FAUCET_TYPES.find((t) => catalogs[t.key].items.length > 0);
+    if (firstLive) setFaucetType(firstLive.key);
+  }, [active.loading, active.items.length, catalogs]);
 
   const goToFaucet = (typeKey) => {
-    const target = faucetTarget(typeKey);
+    const target = faucetTargetFor(catalogs[typeKey], typeKey);
     if (target) navigate(`/faucet/${typeKey}/${target}`);
   };
 
@@ -374,22 +471,24 @@ export default function Navbar() {
             quick-open button everywhere else */}
         <div className="ml-4">
           {isOnFaucet ? (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <FaucetTypeSwitch faucetType={faucetType} onChange={handleTypeChange} />
+            enabledTypes.length > 0 && (
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                <FaucetTypeSwitch types={enabledTypes} faucetType={faucetType} onChange={handleTypeChange} />
 
-              <FaucetPicker
-                items={active.items}
-                loading={active.loading}
-                faucetType={faucetType}
-                label={activeType.pickLabel}
-              />
-            </Box>
+                <FaucetPicker
+                  items={active.items}
+                  loading={active.loading}
+                  faucetType={faucetType}
+                  label={activeType.pickLabel}
+                />
+              </Box>
+            )
           ) : (
             <Button
               onClick={() => goToFaucet(faucetType)}
               variant="outlined"
               startIcon={<CurrencyBitcoinIcon />}
-              disabled={active.loading && !active.defaultKey}
+              disabled={!faucetTargetFor(active, faucetType)}
               sx={{ ...WHITE_OUTLINED_SX, textTransform: 'none' }}
             >
               Atidaryti Faucet&apos;ą

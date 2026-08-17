@@ -10,7 +10,10 @@
 //    - graph    — /graph/:network (transaction flow)
 //    - teaching — /sha256 (simulator), /reorgattack, /videos
 //    - dapps    — /dapps-server launcher
-//  "/" redirects into the last used (or default) EVM faucet.
+//  "/" redirects into the first faucet family that has
+//  entries configured, EVM preferred — a family the operator
+//  disabled (empty map in _CONFIG/coins.py) is skipped, the
+//  same way the navbar hides it.
 //
 //  Split into (root component last):
 //
@@ -20,19 +23,18 @@
 // -----------------------------------------------------------
 
 import { BrowserRouter as Router, Route, Routes, Navigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
-import axios from 'axios';
 
 import { ThemeProvider, CssBaseline, Box } from '@mui/material';
 import { StyledEngineProvider } from '@mui/material/styles';
 import theme from '@/theme';
 
-import Navbar from '@/components/Navbar';
+import Navbar, { FAUCET_TYPES, useFaucetCatalogs, faucetTargetFor } from '@/components/Navbar';
 import Footer from '@/components/Footer';
 
 // Pages
 import FaucetEVM from '@/pages/Faucet_EVM/Page';
 import FaucetERC20 from '@/pages/Faucet_ERC20/Page';
+import FaucetSVM from '@/pages/Faucet_SVM/Page';
 import FaucetUTXO from '@/pages/Faucet_UTXO/Page';
 import GraphPage from '@/pages/Graph/Page';
 import BlockchainSimulatorPage from '@/pages/BlockchainSimulator/Page';
@@ -50,12 +52,15 @@ import VideosPage from '@/pages/Videos/Page';
 // DynamicDefaultRedirect
 // -----------------------------------------------------------
 //
-// Sends "/" to the native EVM faucet: the network the student
-// used last (lastPick:evm — the key FaucetPicker saves), then
-// the backend's default_network, then sepolia when even that
-// fails. Renders nothing while deciding. The networks query
-// shares its cache key with the navbar's EVM catalog — one
-// fetch serves both.
+// Sends "/" into the first faucet family that actually has
+// entries — EVM first (the classroom default), then the rest
+// in navbar order. Within the family the target is
+// faucetTargetFor's pick: last used → backend default → first
+// entry. Renders nothing while the deciding catalog loads,
+// and nothing at all when no family is configured (the
+// navbar's teaching pages still work). The catalog queries
+// share their cache keys with the navbar — one fetch serves
+// both.
 //
 // Used by:
 //   - App (below) — the index route
@@ -63,21 +68,24 @@ import VideosPage from '@/pages/Videos/Page';
 
 function DynamicDefaultRedirect() {
 
-  let saved = null;
-  try {
-    saved = localStorage.getItem('lastPick:evm');
-  } catch (_) {}
+  const catalogs = useFaucetCatalogs();
 
-  const { data, isError } = useQuery({
-    queryKey: ['evm-networks'],
-    queryFn: async () => (await axios.get('/api/evm/networks')).data,
-    staleTime: 5 * 60 * 1000,
-    enabled: !saved,
-  });
+  // EVM keeps its historical priority for "/"; the rest
+  // follow in navbar order
+  const order = [
+    ...FAUCET_TYPES.filter((t) => t.key === 'evm'),
+    ...FAUCET_TYPES.filter((t) => t.key !== 'evm'),
+  ];
 
-  if (saved) return <Navigate to={`/faucet/evm/${saved}`} />;
-  if (isError) return <Navigate to="/faucet/evm/sepolia" />;
-  if (data) return <Navigate to={`/faucet/evm/${data.default_network || 'sepolia'}`} />;
+  for (const type of order) {
+    // A higher-priority family may still be answering —
+    // decide on data, never on an unfinished fetch
+    if (catalogs[type.key].loading) return null;
+
+    const target = faucetTargetFor(catalogs[type.key], type.key);
+    if (target) return <Navigate to={`/faucet/${type.key}/${target}`} />;
+  }
+
   return null;
 }
 
@@ -117,6 +125,9 @@ export default function App() {
               <Route path="faucet">
                 <Route path="evm">
                   <Route path=":network" element={<FaucetEVM />} />
+                </Route>
+                <Route path="svm">
+                  <Route path=":network" element={<FaucetSVM />} />
                 </Route>
                 {/* keyed by TOKEN — the token spans many chains */}
                 <Route path="erc20">

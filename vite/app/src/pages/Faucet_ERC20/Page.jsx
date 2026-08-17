@@ -70,7 +70,7 @@ import VisibilityIcon from '@mui/icons-material/Visibility';
 import LocalGasStationIcon from '@mui/icons-material/LocalGasStation';
 
 import useWallet from '@/hooks/useWallet';
-import { MetamaskStepper, WalletGateButton, FadingAlert, useAlerts } from '@/components/WalletFlow';
+import { WalletStepper, WalletGateButton, FadingAlert, useAlerts } from '@/components/WalletFlow';
 import AssetIcon from '@/components/AssetIcon';
 
 
@@ -598,7 +598,7 @@ export default function FaucetERC20() {
           errors and the connected-wallet line live here, with
           the gate. */}
       <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4">
-        <MetamaskStepper
+        <WalletStepper
           activeStep={activeStep}
           steps={[
             'Susidiegti Metamask',

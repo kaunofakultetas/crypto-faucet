@@ -1,20 +1,21 @@
 ############################################################
 #  [*] Faucet Backend — entrypoint & configuration loading
 #
-#  The Flask app plus the LOADER for the three config maps
+#  The Flask app plus the LOADER for the four config maps
 #  that drive every faucet (EVM networks, ERC-20 tokens,
-#  UTXO networks). The maps themselves live OUTSIDE the
-#  image, in the mounted config directory (_CONFIG/coins.py
-#  on the host → /config/coins.py in the container), so an
-#  operator edits coins live and restarts the backend —
-#  never rebuilds the stack. All three are validated against
-#  app/config_models.py right after loading — a misspelled
-#  key, a malformed contract address or a token on an
-#  unknown network kills the boot with a precise error
-#  instead of becoming a silent runtime fallback.
+#  UTXO networks, SVM networks). The maps themselves live
+#  OUTSIDE the image, in the mounted config directory
+#  (_CONFIG/coins.py on the host → /config/coins.py in the
+#  container), so an operator edits coins live and restarts
+#  the backend — never rebuilds the stack. All four are
+#  validated against app/config_models.py right after
+#  loading — a misspelled key, a malformed contract address
+#  or a token on an unknown network kills the boot with a
+#  precise error instead of becoming a silent runtime
+#  fallback.
 #
 #  Run directly (python main.py) this file wires the
-#  database, the five blueprints and the dev server. The
+#  database, the six blueprints and the dev server. The
 #  route modules import THIS module back for their config
 #  maps — that is why the blueprint imports sit inside
 #  __main__: by the time they run, main is fully defined and
@@ -24,6 +25,7 @@
 #    - app/evm_faucet/evm_routes.py — EVM_NETWORK_CONFIGS
 #    - app/erc_faucet/erc20_routes.py — ERC20_TOKEN_CONFIGS
 #    - app/utxo_faucet/utxo_routes.py — UTXO_NETWORK_CONFIGS
+#    - app/svm_faucet/svm_routes.py — SVM_NETWORK_CONFIGS
 #    - app/icons.py — CONFIG_DIR (the icons live beside coins.py)
 #    - tests/ — config invariants + schema tests import main
 #    - Dockerfile — CMD ["python3", "-u", "main.py"]
@@ -79,10 +81,9 @@ CONFIG_DIR = os.getenv('CONFIG_DIR') or (
 # Coins configuration — loaded from CONFIG_DIR/coins.py
 ############################################################
 #
-# The three maps are loaded from the MOUNTED file and
+# The four maps are loaded from the MOUNTED file and
 # validated before anything uses them; what the rest of the
-# app imports from main are the validated, normalized maps —
-# same names as before the move, so no consumer changed.
+# app imports from main are the validated, normalized maps.
 #
 # The loaded module is registered in sys.modules so the
 # Werkzeug dev reloader watches coins.py like any backend
@@ -102,8 +103,11 @@ def _load_coins_module():
 
 _coins = _load_coins_module()
 
-EVM_NETWORK_CONFIGS, ERC20_TOKEN_CONFIGS, UTXO_NETWORK_CONFIGS = validate_configs(
-    _coins.EVM_NETWORK_CONFIGS, _coins.ERC20_TOKEN_CONFIGS, _coins.UTXO_NETWORK_CONFIGS,
+EVM_NETWORK_CONFIGS, ERC20_TOKEN_CONFIGS, UTXO_NETWORK_CONFIGS, SVM_NETWORK_CONFIGS = validate_configs(
+    getattr(_coins, 'EVM_NETWORK_CONFIGS', {}),
+    getattr(_coins, 'ERC20_TOKEN_CONFIGS', {}),
+    getattr(_coins, 'UTXO_NETWORK_CONFIGS', {}),
+    getattr(_coins, 'SVM_NETWORK_CONFIGS', {}),
 )
 
 
@@ -159,7 +163,7 @@ def get_example_blockchain():
 ############################################################
 #
 # Wires the whole backend when run directly: the database
-# schema, the five feature blueprints, then the dev server.
+# schema, the six feature blueprints, then the dev server.
 # The blueprint imports are deliberately DEFERRED to down
 # here — the route modules import main back for their config
 # maps, and at this point main is fully defined, so the
@@ -196,6 +200,9 @@ if __name__ == '__main__':
 
     from app.erc_faucet.erc20_routes import bp_erc20_faucet
     app.register_blueprint(bp_erc20_faucet, url_prefix='')
+
+    from app.svm_faucet.svm_routes import bp_svm_faucet
+    app.register_blueprint(bp_svm_faucet, url_prefix='')
 
     from app.reorg_attack.routes import bp_reorg_attack
     app.register_blueprint(bp_reorg_attack, url_prefix='')

@@ -36,7 +36,7 @@ import { Button, Box, Skeleton, Stack, CircularProgress } from '@mui/material';
 import HubIcon from '@mui/icons-material/Hub';
 
 import useWallet from '@/hooks/useWallet';
-import { MetamaskStepper, WalletGateButton, FadingAlert, useAlerts } from '@/components/WalletFlow';
+import { WalletStepper, WalletGateButton, FadingAlert, useAlerts } from '@/components/WalletFlow';
 import AssetIcon from '@/components/AssetIcon';
 
 
@@ -224,7 +224,7 @@ export default function FaucetEVM() {
 
       {/* The four-step MetaMask flow */}
       <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4">
-        <MetamaskStepper
+        <WalletStepper
           activeStep={wallet.step}
           steps={[
             'Susidiegti Metamask',

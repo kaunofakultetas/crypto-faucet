@@ -21,6 +21,7 @@
 #    - app/evm_faucet/evm_faucet.py — get_networks payload
 #    - app/erc_faucet/erc20_faucet.py — catalog + token payloads
 #    - app/utxo_faucet/utxo_faucet.py — get_networks payload
+#    - app/svm_faucet/svm_faucet.py — get_networks payload
 ############################################################
 
 
@@ -41,7 +42,7 @@ ICONS_DIR = os.path.join(CONFIG_DIR, 'icons')
 
 # One folder per catalog, so an EVM network key can never
 # collide with a token symbol
-ICON_TYPES = ('evm', 'erc20', 'utxo')
+ICON_TYPES = ('evm', 'erc20', 'utxo', 'svm')
 
 # Probed in this order — svg preferred, it stays crisp at the
 # 10–20 px the identity dots render at
@@ -66,7 +67,8 @@ ICON_EXTENSIONS = ('svg', 'png', 'webp')
 #
 # Used by:
 #   - evm_faucet.get_networks / erc20_faucet.get_token_catalog
-#     + get_token / utxo_faucet.get_networks
+#     + get_token / utxo_faucet.get_networks /
+#     svm_faucet.get_networks
 ############################################################
 
 def icon_url(icon_type, key):

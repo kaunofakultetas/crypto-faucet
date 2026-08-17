@@ -1,13 +1,13 @@
 ############################################################
 #  [*] Coins configuration — the operator-editable file
 #
-#  The THREE config maps that drive every faucet: EVM
-#  networks, ERC-20 tokens and UTXO networks. This file is
-#  MOUNTED into the backend container (./_CONFIG:/config) and
-#  loaded by main.py at startup — editing it needs a backend
-#  restart (docker restart faucet-backend), never an image
-#  rebuild. In dev mode Flask's reloader watches this file
-#  and restarts by itself.
+#  The FOUR config maps that drive every faucet: UTXO
+#  networks, EVM networks, SVM networks and ERC-20 tokens.
+#  This file is MOUNTED into the backend container
+#  (./_CONFIG:/config) and loaded by main.py at startup —
+#  editing it needs a backend restart (docker restart
+#  faucet-backend), never an image rebuild. In dev mode
+#  Flask's reloader watches this file and restarts by itself.
 #
 #  Everything here is validated on boot against
 #  app/config_models.py — a misspelled key, a malformed
@@ -15,9 +15,10 @@
 #  the boot with a precise error in the container logs.
 #
 #  Icons live next door in icons/<type>/<key>.svg (or .png /
-#  .webp), where <type> is evm / erc20 / utxo and <key> is
-#  the entry's key in these maps ('sepolia', 'LINK', 'btc4').
-#  Dropping a file there is enough — no restart needed.
+#  .webp), where <type> is evm / erc20 / utxo / svm and <key>
+#  is the entry's key in these maps ('sepolia', 'LINK',
+#  'btc4'). Dropping a file there is enough — no restart
+#  needed.
 #
 #  Used by:
 #    - backend/main.py — loaded at startup, validated, then
@@ -321,6 +322,65 @@ EVM_NETWORK_CONFIGS = {
         },
     }
 }
+
+
+
+
+
+
+
+
+
+############################################################
+# SVM_NETWORK_CONFIGS
+############################################################
+#
+# SVM networks (Solana and the rollups reusing its runtime),
+# split by WHO consumes the settings:
+#
+#   (top level)  — identity: id (picker order)
+#   'faucet'     — the OPERATOR's choices: which chain, which
+#                  network flavour, the names the UI shows,
+#                  the backend's own RPC and the payout size.
+#                  <NAME> inside rpc_url is replaced with the
+#                  environment variable of that name at
+#                  startup (so the API key never sits here)
+#   'wallet'     — the PUBLIC RPC the student's Phantom
+#                  wallet should talk to
+#   'explorer'   — where the UI links a transaction / address
+#
+# 'chain' names an entry of the backend's SVM chain registry
+# (app/svm_faucet/chains/): 'solana'. Everything
+# protocol-precise — the native symbol, lamport decimals, the
+# per-signature fee, the rent-exempt minimum — lives in that
+# registry, not here. A chunk_size below the chain's
+# rent-exempt minimum fails the boot.
+#
+# The faucet signs with the same FAUCET_PRIVATE_KEY as EVM and
+# UTXO, used here as an Ed25519 seed: a DIFFERENT address that
+# must be funded on each SVM chain separately.
+############################################################
+
+SVM_NETWORK_CONFIGS = {
+    'solanaDevnet': {
+        'id': 1,
+        'faucet': {
+            'chain': 'solana',
+            'network': 'devnet',
+            'short_name': "devSOL",
+            'full_name': 'Solana Devnet',
+            'rpc_url': 'https://solana-devnet.infura.io/v3/<INFURA_PROJECT_ID>',
+            'chunk_size': 0.05,
+        },
+        'wallet': {
+            'rpc_urls': ['https://api.devnet.solana.com'],
+        },
+        'explorer': {
+            'block_explorer_urls': ['https://explorer.solana.com/?cluster=devnet'],
+        },
+    },
+}
+
 
 
 

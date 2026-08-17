@@ -1,13 +1,13 @@
 ############################################################
 #  [*] Config models
 #
-#  The ENFORCED schema for main.py's three config maps
+#  The ENFORCED schema for main.py's four config maps
 #  (EVM_NETWORK_CONFIGS, ERC20_TOKEN_CONFIGS,
-#  UTXO_NETWORK_CONFIGS). Every model forbids unknown keys,
-#  so a misspelled field name fails the boot with a precise
-#  error instead of silently falling back to a default
-#  somewhere at runtime — the same fail-at-startup philosophy
-#  as the warmups, applied to configuration.
+#  UTXO_NETWORK_CONFIGS, SVM_NETWORK_CONFIGS). Every model
+#  forbids unknown keys, so a misspelled field name fails the
+#  boot with a precise error instead of silently falling back
+#  to a default somewhere at runtime — the same fail-at-startup
+#  philosophy as the warmups, applied to configuration.
 #
 #  main.py authors the configs as plain readable dicts and
 #  pipes them through validate_configs() at import time; what
@@ -323,10 +323,150 @@ class UtxoNetworkConfig(StrictModel):
 
 
 ############################################################
+# SvmFaucetSection
+############################################################
+#
+# The OPERATOR's choices for one SVM network: which chain
+# ('solana'), which network flavour, the display names, the
+# payout size and the backend's own RPC (which may carry
+# <ENV_NAME> placeholders, resolved at startup by SVMFaucet).
+#
+# Everything protocol-precise — the native symbol, lamport
+# decimals, the per-signature fee, the rent-exempt minimum —
+# is a fact about the chain and resolves from the in-code
+# registry (app/svm_faucet/chains/). The validator below
+# confirms the chain + flavour combination exists there and
+# that the payout clears the rent-exempt minimum.
+#
+# Used by:
+#   - SvmNetworkConfig (below)
+############################################################
+
+class SvmFaucetSection(StrictModel):
+    chain: str = Field(min_length=1)
+    network: str = Field(min_length=1)
+    short_name: str = Field(min_length=1)
+    full_name: str = Field(min_length=1)
+    rpc_url: str = Field(pattern=r'^https?://')
+    chunk_size: float = Field(gt=0)
+
+
+
+
+    ############################################################
+    # chain_and_flavour_are_payable
+    ############################################################
+    #
+    # Two boot checks on one config entry:
+    #
+    #   - the chain + network flavour must resolve in the
+    #     in-code registry — chain_params raises a ValueError
+    #     that names the known chains / available flavours, and
+    #     that message surfaces verbatim in the boot error
+    #   - the payout must clear the chain's rent-exempt
+    #     minimum. An account funded below it is reclaimed by
+    #     the runtime, so the student would watch the transfer
+    #     confirm and the balance vanish
+    #
+    # Both compare constants, so both belong here rather than
+    # in the payout path: the operator learns at boot, not on
+    # the first claim.
+    #
+    # Used by:
+    #   - pydantic — automatically on model validation
+    ############################################################
+
+    @model_validator(mode='after')
+    def chain_and_flavour_are_payable(self):
+        from app.svm_faucet.chains import chain_params
+        params = chain_params(self.chain, self.network)  # raises ValueError naming the options
+
+        chunk_lamports = int(self.chunk_size * (10 ** params['decimals']))
+        if chunk_lamports < params['min_payout_lamports']:
+            raise ValueError(
+                f"chunk_size {self.chunk_size} is {chunk_lamports} lamports — below the "
+                f"{params['min_payout_lamports']} lamport rent-exempt minimum on '{self.chain}'"
+            )
+        return self
+
+
+
+
+
+
+
+
+############################################################
+# SvmWalletSection
+############################################################
+#
+# What the student's Phantom wallet should talk to —
+# public endpoints only, never the backend's keyed RPC.
+#
+# Used by:
+#   - SvmNetworkConfig (below)
+############################################################
+
+class SvmWalletSection(StrictModel):
+    rpc_urls: list[str] = Field(min_length=1)
+
+
+
+
+
+
+
+
+############################################################
+# SvmExplorerSection
+############################################################
+#
+# Where the UI links a transaction / address. Optional.
+#
+# Used by:
+#   - SvmNetworkConfig (below)
+############################################################
+
+class SvmExplorerSection(StrictModel):
+    block_explorer_urls: list[str] = []
+
+
+
+
+
+
+
+
+############################################################
+# SvmNetworkConfig
+############################################################
+#
+# One SVM network: identity plus the consumer sections. There
+# is no chain_id — SVM chains are told apart by their RPC
+# endpoint, not by a numeric id the way EVM chains are.
+#
+# Used by:
+#   - validate_configs (below)
+############################################################
+
+class SvmNetworkConfig(StrictModel):
+    id: int = Field(ge=1)
+    faucet: SvmFaucetSection
+    wallet: SvmWalletSection
+    explorer: Optional[SvmExplorerSection] = None
+
+
+
+
+
+
+
+
+############################################################
 # validate_configs
 ############################################################
 #
-# The single entry point: validates all three maps, enforces
+# The single entry point: validates all four maps, enforces
 # the cross-map rules the per-entry models can't see (unique
 # ids and chain ids; every token deployment referencing an
 # existing EVM network), and returns NORMALIZED PLAIN DICTS
@@ -338,8 +478,8 @@ class UtxoNetworkConfig(StrictModel):
 #   - main.py — right after the config definitions
 ############################################################
 
-def validate_configs(evm_configs, erc20_configs, utxo_configs):
-    evm, erc20, utxo = {}, {}, {}
+def validate_configs(evm_configs, erc20_configs, utxo_configs, svm_configs):
+    evm, erc20, utxo, svm = {}, {}, {}, {}
 
     for key, config in (evm_configs or {}).items():
         try:
@@ -359,9 +499,15 @@ def validate_configs(evm_configs, erc20_configs, utxo_configs):
         except ValueError as e:
             raise ValueError(f"UTXO network '{key}' is misconfigured:\n{e}") from None
 
+    for key, config in (svm_configs or {}).items():
+        try:
+            svm[key] = SvmNetworkConfig.model_validate(config)
+        except ValueError as e:
+            raise ValueError(f"SVM network '{key}' is misconfigured:\n{e}") from None
+
     # Cross-map rules: unique picker ids per family, unique EVM
     # chain ids, and every token deployment on a known network.
-    for family, configs in (('EVM', evm), ('UTXO', utxo)):
+    for family, configs in (('EVM', evm), ('UTXO', utxo), ('SVM', svm)):
         ids = [c.id for c in configs.values()]
         if len(ids) != len(set(ids)):
             raise ValueError(f"{family} network configs reuse an 'id' — picker order would break")
@@ -382,6 +528,7 @@ def validate_configs(evm_configs, erc20_configs, utxo_configs):
         {key: model.model_dump(exclude_none=True) for key, model in evm.items()},
         {key: model.model_dump(exclude_none=True) for key, model in erc20.items()},
         {key: model.model_dump(exclude_none=True) for key, model in utxo.items()},
+        {key: model.model_dump(exclude_none=True) for key, model in svm.items()},
     )
 
 

@@ -44,6 +44,21 @@ class LegacyDialect:
     OUTPUT_SIZE = 34
 
 
+
+
+    ############################################################
+    # __init__
+    ############################################################
+    #
+    # Just the network's base58 version bytes. p2sh_prefix is
+    # optional — None means p2sh recipients are rejected.
+    #
+    # Used by:
+    #   - dialects/__init__.py — dialect_for(), per network
+    #   - segwit.py — SegwitDialect.__init__, composing the
+    #     recipient-side codec
+    ############################################################
+
     def __init__(self, p2pkh_prefix: int, p2sh_prefix=None):
         self.p2pkh_prefix = int(p2pkh_prefix)
         self.p2sh_prefix = int(p2sh_prefix) if p2sh_prefix is not None else None
@@ -52,14 +67,12 @@ class LegacyDialect:
 
 
     ############################################################
-    # faucet_script / faucet_address
+    # faucet_script
     ############################################################
     #
-    # The faucet's own classic p2pkh scriptPubKey, and that
-    # key hash as a base58check address under this network's
-    # version byte. The script carries no version byte —
-    # every legacy chain shares it (and its Electrum
-    # scripthash); only the address encoding differs.
+    # The faucet's own classic p2pkh scriptPubKey. It carries
+    # no version byte — every legacy chain shares it (and its
+    # Electrum scripthash); only the address encoding differs.
     #
     # Used by:
     #   - utxo_faucet.py — identity per network, warmup
@@ -68,6 +81,19 @@ class LegacyDialect:
     def faucet_script(self, pub) -> embit_script.Script:
         return embit_script.p2pkh(pub)
 
+
+
+
+    ############################################################
+    # faucet_address
+    ############################################################
+    #
+    # The same key hash as a base58check address under this
+    # network's p2pkh version byte.
+    #
+    # Used by:
+    #   - utxo_faucet.py — identity per network, warmup
+    ############################################################
 
     def faucet_address(self, pub) -> str:
         keyhash = embit_hashes.hash160(pub.serialize())

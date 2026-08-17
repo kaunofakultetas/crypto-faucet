@@ -241,7 +241,10 @@ export default function FaucetPicker({ items = [], loading = false, faucetType, 
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <AssetIcon assetKey={selected?.key} icon={selected?.icon} size={20} />
+          {/* selectedKey keeps the dot's colour stable while
+              the catalog is still loading — the URL already
+              knows the key */}
+          <AssetIcon assetKey={selected?.key ?? selectedKey} icon={selected?.icon} size={20} />
           <span>{selected?.primary || selectedKey || label}</span>
         </Box>
       </Button>
