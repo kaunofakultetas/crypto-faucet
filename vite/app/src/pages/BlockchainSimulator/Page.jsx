@@ -24,6 +24,8 @@
 //    createGenesisBlock          — block #0 (Satoshi coinbase)
 //    createFirstBlock            — block #1 chained onto #0
 //    useBlockchain               — chain state + mining logic
+//    RoundedBox                  — the white card every
+//                                  section sits in (styled)
 //    CopiedToast                 — "Nukopijuota!" bubble
 //    ControlPanel                — difficulty + tool buttons
 //    BlockCard                   — one editable block card
@@ -35,11 +37,11 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { Typography, TextField, Button, Box, MenuItem, Select, InputLabel, FormControl } from '@mui/material';
+import { styled } from '@mui/material/styles';
 import { useMutation } from '@tanstack/react-query';
 import axios from 'axios';
 import crypto from 'crypto-js';
 
-import { RoundedBox } from './components/RoundedBox';
 import { GiMining } from "react-icons/gi";
 import AddCircleOutlinedIcon from '@mui/icons-material/AddCircleOutlined';
 
@@ -277,6 +279,40 @@ function useBlockchain() {
     exampleError: exampleChain.isError,
   };
 }
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// RoundedBox
+// -----------------------------------------------------------
+//
+// The rounded white card every section of the page sits in.
+// Note: the webkitBoxShadow line is INERT — emotion renders
+// it as the unknown property "webkit-box-shadow" (the vendor
+// key would be WebkitBoxShadow), so only the grey boxShadow
+// below it ever applies. Kept as found, documented rather
+// than silently changed.
+//
+// Used by:
+//   - ControlPanel / BlockCard / AddBlockButton (below)
+// -----------------------------------------------------------
+
+const RoundedBox = styled(Box)(({ theme }) => ({
+  background: theme.palette.background.default,
+  borderRadius: theme.shape.borderRadius,
+  margin: `${theme.spacing(2)} auto`,
+  padding: theme.spacing(2),
+  minWidth: theme.spacing(40),
+  maxWidth: theme.spacing(70),
+  width: '100%',
+  webkitBoxShadow: '2px 4px 10px 1px rgba(0, 0, 0, 0.47)',
+  boxShadow: '2px 4px 10px 1px rgba(201, 201, 201, 0.47)',
+  ...theme.typography.body2,
+}));
 
 
 
