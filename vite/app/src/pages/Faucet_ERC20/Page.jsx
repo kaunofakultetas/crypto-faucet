@@ -1,59 +1,39 @@
 // -----------------------------------------------------------
 //  [*] Pages — ERC-20 Faucet (route /faucet/erc20/:token)
 //
-//  The student-facing faucet for ERC-20 TEST TOKENS, keyed by
-//  the TOKEN — "I need LINK" comes before "on which chain".
-//  The page shows one token and every chain it is deployed
-//  on: GET /api/erc20/token/<symbol> returns the faucet's
-//  balance per chain plus the metadata MetaMask needs.
+//  The faucet for ERC-20 TEST TOKENS, keyed by the TOKEN —
+//  "I need LINK" comes before "on which chain". One page
+//  shows the token on every chain it is deployed on
+//  (GET /api/erc20/token/<symbol>), one claim card per chain,
+//  outcomes rendered inside the card that caused them.
 //
-//  Laid out like the native faucet — title, the MetaMask
-//  stepper, then the chain cards, then the return address with
-//  a QR code. Each chain card carries the network's identity
-//  dot (the SAME colour the navbar picker shows for it), the
-//  balance rows, the contract address with a copy button, and
-//  the claim button. Claim outcomes render INSIDE the card
-//  that caused them (alerts tagged by network), so the student
-//  sees the result next to the button they pressed — gate
-//  errors (connect/install) stay under the stepper.
+//  Two things set this page apart from the native faucets:
+//  the wallet must sit on a TOKEN chain before claiming, and
+//  USING tokens needs gas the student may not have — so the
+//  flow is FIVE steps (install → connect → token network →
+//  gas → claim), and the backend enforces both gates on the
+//  same numbers the page shows. The details live on the
+//  pieces: the ladder in deriveFlow, the gas economics in
+//  hasEnoughGas + GasNoticeCard, the tokens-are-invisible-
+//  until-imported story in watchTokenInMetamask.
 //
-//  Claiming technically does not require the wallet to sit
-//  on the TARGET chain — the signature only proves address
-//  ownership — but the flow still demands the wallet be on
-//  ONE of the token's chains before any claim: a student
-//  parked on some unrelated network would not see the tokens
-//  land and would assume the faucet is broken. Seeing them
-//  ALSO takes an import, so every card has a "Rodyti
-//  MetaMask" button that switches the wallet and imports the
-//  token (wallet_watchAsset) — freshly received ERC-20s are
-//  invisible until imported, which trips up students every
-//  single time.
-//
-//  Receiving tokens costs the student nothing (the faucet
-//  pays the gas), but USING them does — so the stepper has a
-//  dedicated GAS step, and every chain gates its claim on the
-//  wallet holding at least HALF the native faucet's chunk
-//  there. BOTH numbers come from the backend in the token
-//  payload (min_native_wei + wallet_native_wei, fetched over
-//  its own RPC connections — the public rpc_urls are not
-//  reliable from a browser), so the page and the backend gate
-//  on the same data. Chains below the bar disable their claim
-//  buttons, and ONE dedicated GasNoticeCard between the
-//  stepper and the chain cards lists them with links to their
-//  native faucets (/faucet/evm/<network>); the backend
-//  enforces the same rule, so bypassing the button changes
-//  nothing.
-//
-//  Split into (root component last):
+//  Split into (root component last) — the step ladder and
+//  the wallet conversation are plain functions with no React
+//  in them; the root keeps state, handlers and layout:
 //
 //    TOKEN_REFRESH_MS  — token payload repoll cadence
 //    useToken          — the token + its deployments, polled
+//    hasEnoughGas      — the per-chain gas verdict
+//    deriveFlow        — the five-step ladder + switch target
+//    watchTokenInMetamask — the wallet_watchAsset conversation
 //    AddressRow        — mono address + copy button
+//    GateCard          — stepper + gate button + gate alerts
 //    GasNoticeCard     — the "get native crypto first" card
 //    ChainCard         — one chain: dot, balances, claim,
 //                        show-in-MetaMask, its own alerts
 //    ReturnAddressCard — send leftover tokens back (+ QR)
 //    LoadingSkeleton   — full-page skeleton layout
+//    useTokenActions   — claim + show-in-MetaMask handlers
 //    FaucetERC20       — page state + layout (default export)
 // -----------------------------------------------------------
 
@@ -76,7 +56,7 @@ import AssetIcon from '@/components/AssetIcon';
 
 // How often the token payload (with the faucet's per-chain
 // balances) repolls — the backend caches those ~10 s anyway
-const TOKEN_REFRESH_MS = 15000;
+const TOKEN_REFRESH_MS = 10000;
 
 
 
@@ -94,7 +74,9 @@ const TOKEN_REFRESH_MS = 15000;
 // The whole page as ONE TanStack query, repolled every 15 s.
 // With a connected account the request carries ?address= and
 // every deployment comes back with that wallet's native
-// balance (wallet_native_wei) — the gas gate's input. A token
+// balance (wallet_native_wei) — the gas gate's input, fetched
+// by the BACKEND over its own RPC connections, because the
+// public rpc_urls are not reliable from a browser. A token
 // switch changes the key and shows skeletons; an account
 // change keeps the current rows on screen while the refresh
 // lands (placeholderData, same-symbol only). error holds the
@@ -138,6 +120,121 @@ function useToken(symbol, account) {
 
 
 // -----------------------------------------------------------
+// hasEnoughGas
+// -----------------------------------------------------------
+//
+// Does the wallet hold the backend's min_native_wei (half
+// the native chunk) on this chain? Both numbers arrive in
+// the deployment itself. true / false / null when the
+// balance is unknown (not connected yet, RPC hiccup).
+//
+// Used by:
+//   - deriveFlow (below)
+//   - FaucetERC20 (below) — each card's needsGas flag
+// -----------------------------------------------------------
+
+const hasEnoughGas = (deployment) => {
+  const bal = deployment.wallet_native_wei;
+  if (bal == null) return null;
+  return BigInt(bal) >= BigInt(deployment.min_native_wei ?? 0);
+};
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// deriveFlow
+// -----------------------------------------------------------
+//
+//   const { activeStep, switchTarget, gaslessDeployments } =
+//     deriveFlow(deployments, walletStep, chainId)
+//
+// The page's five-step ladder on top of the wallet hook's
+// 0/1 (install / connect): the NETWORK step — the wallet
+// must sit on ONE of the token's chains, an unrelated chain
+// would hide the received tokens — then the GAS step,
+// complete once at least one chain clears the threshold.
+// While no balance is known yet the gas step counts as
+// passed — fail open, the cards and the backend still
+// enforce the rule per chain.
+//
+// switchTarget is where the network step's button switches
+// to: the chain the wallet already sits on when it's a token
+// chain, else the first chain with gas, else simply the
+// first. gaslessDeployments are the chains GasNoticeCard
+// lists — below the bar for sure, not merely unknown.
+//
+// Used by:
+//   - FaucetERC20 (below) — once per render
+// -----------------------------------------------------------
+
+const deriveFlow = (deployments, walletStep, chainId) => {
+  const currentDeployment = deployments.find((d) => d.chain_id === chainId) ?? null;
+  const onTokenChain = deployments.length === 0 || currentDeployment !== null;
+
+  const gasKnown = deployments.some((d) => hasEnoughGas(d) != null);
+  const hasGasSomewhere = deployments.some((d) => hasEnoughGas(d) === true);
+
+  const activeStep =
+    walletStep < 2 ? walletStep
+    : !onTokenChain ? 2
+    : (!gasKnown || hasGasSomewhere) ? 4
+    : 3;
+
+  const switchTarget = currentDeployment
+    ?? deployments.find((d) => hasEnoughGas(d) === true)
+    ?? deployments[0]
+    ?? null;
+
+  const gaslessDeployments = deployments.filter((d) => hasEnoughGas(d) === false);
+
+  return { activeStep, switchTarget, gaslessDeployments };
+};
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// watchTokenInMetamask
+// -----------------------------------------------------------
+//
+// The wallet_watchAsset conversation: ask MetaMask to import
+// the token's contract so the balance becomes VISIBLE —
+// freshly received ERC-20s don't show until imported, which
+// trips up students every single time. The caller switches
+// chains first and routes the errors.
+//
+// Used by:
+//   - useTokenActions (below) — showInMetamask
+// -----------------------------------------------------------
+
+async function watchTokenInMetamask(provider, deployment, token) {
+  await provider.request({
+    method: 'wallet_watchAsset',
+    params: {
+      type: 'ERC20',
+      options: {
+        address: deployment.contract_address,
+        symbol: token.symbol,
+        decimals: token.decimals,
+      },
+    },
+  });
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // AddressRow
 // -----------------------------------------------------------
 //
@@ -172,6 +269,68 @@ function AddressRow({ value }) {
           {copied ? <CheckIcon sx={{ fontSize: 16 }} /> : <ContentCopyIcon sx={{ fontSize: 16 }} />}
         </IconButton>
       </Tooltip>
+    </div>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// GateCard
+// -----------------------------------------------------------
+//
+// The wallet-flow card: install → connect → token network →
+// gas → claim. The gate button covers the first three steps
+// (being on ANY of the token's chains completes the network
+// step); the connected-wallet line and the untagged gate
+// alerts live here too, with the gate that caused them.
+//
+// Used by:
+//   - FaucetERC20 (below)
+// -----------------------------------------------------------
+
+function GateCard({ activeStep, token, switchTarget, wallet, alerts, onError }) {
+  return (
+    <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4">
+      <WalletStepper
+        activeStep={activeStep}
+        steps={[
+          'Susidiegti Metamask',
+          'Prijungti Metamask',
+          switchTarget ? `Įsijungti ${switchTarget.full_name} Tinklą` : 'Įsijungti Tinklą',
+          'Gauti native valiutos',
+          `Atsisiųsti ${token.name} žetoną`,
+        ]}
+        icons={{ 3: <LocalGasStationIcon /> }}
+      />
+
+      {activeStep < 3 && (
+        <div className="mt-4">
+          <WalletGateButton
+            step={activeStep}
+            networkInfo={switchTarget}
+            onConnect={wallet.connect}
+            onSwitch={wallet.switchNetwork}
+            onError={onError}
+          />
+        </div>
+      )}
+
+      {wallet.step === 3 && (
+        <p className="mt-3 text-center text-xs text-gray-500">
+          Prijungta piniginė: <span className="font-mono">{wallet.account}</span>
+        </p>
+      )}
+
+      {alerts.map((a) => (
+        <FadingAlert key={a.id} severity={a.severity}>
+          {a.message}
+        </FadingAlert>
+      ))}
     </div>
   );
 }
@@ -423,43 +582,28 @@ function LoadingSkeleton() {
 
 
 // -----------------------------------------------------------
-// FaucetERC20 (default export)
+// useTokenActions
 // -----------------------------------------------------------
 //
-// The page itself: the wallet flow around one card per chain.
-// useMetamaskWallet gets no expected chain (the token spans
-// many), so
-// activeStep is derived HERE — five steps: install → connect
-// → switch to a token network (an unrelated chain would hide
-// the received tokens) → have gas → claim. The network step
-// is done once the wallet sits on ANY of the token's chains;
-// until then the gate button SWITCHES the wallet for the
-// student — same wallet_switchEthereumChain mechanics as the
-// EVM page — targeting the current chain's deployment when
-// there is one, else the first chain with gas, else the
-// first. The gas step completes once the wallet clears the
-// threshold (half the native chunk) on at least one chain.
-// Claim buttons enable only at the final step. Alerts are
-// tagged by network so each chain card shows only its own
-// outcomes; untagged rows (gate errors) render under the
-// stepper.
+//   const { busy, claim, showInMetamask } =
+//     useTokenActions(symbol, wallet, data, addAlert, reload)
+//
+// What the buttons DO — the action side of the page, kept
+// apart from the layout. claim signs the ownership message
+// and asks the backend to send on ONE chain; showInMetamask
+// hops the wallet there and imports the contract. busy names
+// the network with a claim in flight — every claim button
+// disables while any one is. Outcomes become alerts tagged
+// with the chain's network, so they render inside the card
+// whose button was pressed.
 //
 // Used by:
-//   - App.jsx — route /faucet/erc20/:token
+//   - FaucetERC20 (below)
 // -----------------------------------------------------------
 
-export default function FaucetERC20() {
-
-  const { token: symbol } = useParams();
-
-  const wallet = useMetamaskWallet();
-  const { data, error, reload } = useToken(symbol, wallet.account);
-  const { alerts, addAlert } = useAlerts();
+function useTokenActions(symbol, wallet, data, addAlert, reload) {
 
   const [busy, setBusy] = useState(null);
-
-  const gateAlerts = alerts.filter((a) => !a.tag);
-  const alertsFor = (network) => alerts.filter((a) => a.tag === network);
 
 
   // Claim on ONE chain. The wallet's current chain doesn't
@@ -506,22 +650,53 @@ export default function FaucetERC20() {
       if (wallet.chainId !== deployment.chain_id) {
         await wallet.switchNetwork(deployment);
       }
-
-      await provider.request({
-        method: 'wallet_watchAsset',
-        params: {
-          type: 'ERC20',
-          options: {
-            address: deployment.contract_address,
-            symbol: data.token.symbol,
-            decimals: data.token.decimals,
-          },
-        },
-      });
+      await watchTokenInMetamask(provider, deployment, data.token);
     } catch (e) {
       addAlert('error', e.message || 'Nepavyko pridėti žetono į MetaMask.', deployment.network);
     }
   };
+
+
+  return { busy, claim, showInMetamask };
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// FaucetERC20 (default export)
+// -----------------------------------------------------------
+//
+// The page itself: state and layout — GateCard, then one
+// card per chain. The five-step ladder is deriveFlow's
+// business, the button handlers are useTokenActions';
+// useMetamaskWallet gets no expected chain (the token spans
+// many), and until the wallet sits on a token chain the gate
+// button SWITCHES it for the student — same
+// wallet_switchEthereumChain mechanics as the EVM page.
+// Claim buttons enable only at the final step. Alerts are
+// tagged by network so each chain card shows only its own
+// outcomes; untagged rows (gate errors) render inside
+// GateCard.
+//
+// Used by:
+//   - App.jsx — route /faucet/erc20/:token
+// -----------------------------------------------------------
+
+export default function FaucetERC20() {
+
+  const { token: symbol } = useParams();
+
+  const wallet = useMetamaskWallet();
+  const { data, error, reload } = useToken(symbol, wallet.account);
+  const { alerts, addAlert } = useAlerts();
+  const { busy, claim, showInMetamask } = useTokenActions(symbol, wallet, data, addAlert, reload);
+
+  const gateAlerts = alerts.filter((a) => !a.tag);
+  const alertsFor = (network) => alerts.filter((a) => a.tag === network);
 
 
   if (error) {
@@ -540,45 +715,10 @@ export default function FaucetERC20() {
 
   const { token, deployments } = data;
 
-
-  // Does the wallet hold the backend's min_native_wei (half
-  // the native chunk) on this chain? Both numbers arrive in
-  // the deployment itself. true / false / null when the
-  // balance is unknown (not connected yet, RPC hiccup).
-  const hasEnoughGas = (deployment) => {
-    const bal = deployment.wallet_native_wei;
-    if (bal == null) return null;
-    return BigInt(bal) >= BigInt(deployment.min_native_wei ?? 0);
-  };
-
-
-  // The page's own steps on top of useMetamaskWallet's 0/1 (install /
-  // connect): the NETWORK step — the wallet must sit on ONE
-  // of the token's chains, an unrelated chain would hide the
-  // received tokens — then the GAS step, complete once at
-  // least one chain clears the threshold. While no balance is
-  // known yet the gas step counts as passed — fail open, the
-  // cards and the backend still enforce the rule per chain.
-  const currentDeployment = deployments.find((d) => d.chain_id === wallet.chainId) ?? null;
-  const onTokenChain = deployments.length === 0 || currentDeployment !== null;
-
-  const gasKnown = deployments.some((d) => hasEnoughGas(d) != null);
-  const hasGasSomewhere = deployments.some((d) => hasEnoughGas(d) === true);
-
-  const activeStep =
-    wallet.step < 2 ? wallet.step
-    : !onTokenChain ? 2
-    : (!gasKnown || hasGasSomewhere) ? 4
-    : 3;
-
-  // Where the network step's button switches to: the chain
-  // the wallet already sits on when it's a token chain, else
-  // the first chain with gas, else simply the first
-  const switchTarget = currentDeployment ?? deployments.find((d) => hasEnoughGas(d) === true) ?? deployments[0] ?? null;
-
-  // The chains GasNoticeCard lists — below the bar for sure,
-  // not merely unknown
-  const gaslessDeployments = deployments.filter((d) => hasEnoughGas(d) === false);
+  // The five-step ladder, the switch target and the gasless
+  // list — all deriveFlow's business (see its banner)
+  const { activeStep, switchTarget, gaslessDeployments } =
+    deriveFlow(deployments, wallet.step, wallet.chainId);
 
 
   return (
@@ -597,48 +737,14 @@ export default function FaucetERC20() {
         </p>
       </div>
 
-      {/* Install → connect → token network → gas → claim. The
-          gate covers the first three; being on ANY of the
-          token's chains completes the network step. Gate
-          errors and the connected-wallet line live here, with
-          the gate. */}
-      <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4">
-        <WalletStepper
-          activeStep={activeStep}
-          steps={[
-            'Susidiegti Metamask',
-            'Prijungti Metamask',
-            switchTarget ? `Įsijungti ${switchTarget.full_name} Tinklą` : 'Įsijungti Tinklą',
-            'Gauti native valiutos',
-            `Atsisiųsti ${token.name} žetoną`,
-          ]}
-          icons={{ 3: <LocalGasStationIcon /> }}
-        />
-
-        {activeStep < 3 && (
-          <div className="mt-4">
-            <WalletGateButton
-              step={activeStep}
-              networkInfo={switchTarget}
-              onConnect={wallet.connect}
-              onSwitch={wallet.switchNetwork}
-              onError={(msg) => addAlert('error', msg)}
-            />
-          </div>
-        )}
-
-        {wallet.step === 3 && (
-          <p className="mt-3 text-center text-xs text-gray-500">
-            Prijungta piniginė: <span className="font-mono">{wallet.account}</span>
-          </p>
-        )}
-
-        {gateAlerts.map((a) => (
-          <FadingAlert key={a.id} severity={a.severity}>
-            {a.message}
-          </FadingAlert>
-        ))}
-      </div>
+      <GateCard
+        activeStep={activeStep}
+        token={token}
+        switchTarget={switchTarget}
+        wallet={wallet}
+        alerts={gateAlerts}
+        onError={(msg) => addAlert('error', msg)}
+      />
 
       {/* The notice card shows ONLY while the flow sits on the
           gas step — earlier steps have their own instructions,
