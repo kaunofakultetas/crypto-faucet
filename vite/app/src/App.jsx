@@ -145,7 +145,6 @@ export default function App() {
 
               {/* Teaching pages */}
               <Route path="sha256" element={<BlockchainSimulatorPage />} />
-              <Route path="reorgattack" element={<ReorgAttackPage />} />
               <Route path="videos" element={<VideosPage />} />
 
               {/* Dapps server launcher */}

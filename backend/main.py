@@ -204,9 +204,6 @@ if __name__ == '__main__':
     from app.svm_faucet.svm_routes import bp_svm_faucet
     app.register_blueprint(bp_svm_faucet, url_prefix='')
 
-    from app.reorg_attack.routes import bp_reorg_attack
-    app.register_blueprint(bp_reorg_attack, url_prefix='')
-
     from app.icons import bp_icons
     app.register_blueprint(bp_icons, url_prefix='')
 

@@ -375,9 +375,6 @@ function ToolsMenu() {
         <MenuItem to="/sha256" component={Link} onClick={handleClose}>
           Blockchain Simuliatorius
         </MenuItem>
-        <MenuItem to="/reorgattack" component={Link} onClick={handleClose}>
-          51% Atakos Simuliacija
-        </MenuItem>
       </Menu>
     </>
   );
