@@ -103,6 +103,12 @@ class SvmIdentityTests(unittest.TestCase):
         self.assertIsNone(faucet.FAUCET_ADDRESS)
         self.assertIsNone(faucet.faucet_keypair)
 
+    def test_long_key_truncates_to_the_first_64_chars(self):
+        # Same normalization as EVM and UTXO — an imperfect key
+        # still runs the faucet, on the shared identity
+        long_key = helpers.make_svm_faucet(private_key=helpers.TEST_PRIVATE_KEY + 'ff').FAUCET_ADDRESS
+        self.assertEqual(long_key, helpers.make_svm_faucet().FAUCET_ADDRESS)
+
 
 
 

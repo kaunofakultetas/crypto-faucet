@@ -1,14 +1,15 @@
 // -----------------------------------------------------------
 //  [*] FaucetPicker — the navbar's what-am-I-getting dropdown
 //
-//  One compact dropdown for all three faucet types, because
-//  each of them is keyed by a different thing:
+//  One compact dropdown for all four faucet types, because
+//  they are not all keyed by the same thing:
 //
+//    UTXO  → a network  (Bitcoin Testnet4, …)
 //    EVM   → a network  (Sepolia, Arbitrum Sepolia, …)
 //    ERC-20→ a TOKEN    (Chainlink, …) — the token lives on
 //                        many chains, so the chain is chosen
 //                        on the page, not here
-//    UTXO  → a network  (Bitcoin Testnet4, …)
+//    SVM   → a network  (Solana Devnet, …)
 //
 //  The component knows nothing about that distinction: it
 //  takes a ready list of { key, primary, secondary, icon }

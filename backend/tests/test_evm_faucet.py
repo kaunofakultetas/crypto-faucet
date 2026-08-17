@@ -36,6 +36,13 @@ class EvmFaucetTests(unittest.TestCase):
         self.assertIsNone(faucet.FAUCET_ADDRESS)
         self.assertIsNone(faucet.FAUCET_ACCOUNT)
 
+    def test_long_key_truncates_to_the_first_64_chars(self):
+        # An over-long key must not kill the faucet — all three
+        # faucets truncate identically, so the stack still runs on
+        # ONE consistent identity
+        faucet = helpers.make_evm_faucet(private_key=helpers.TEST_PRIVATE_KEY + 'ff')
+        self.assertEqual(faucet.FAUCET_ADDRESS, helpers.make_evm_faucet().FAUCET_ADDRESS)
+
     def test_rpc_url_template_resolves_from_env(self):
         # <TEST_RPC_SECRET> must be replaced with the env value
         faucet = helpers.make_evm_faucet()

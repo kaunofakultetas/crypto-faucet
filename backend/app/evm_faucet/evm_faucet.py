@@ -131,19 +131,23 @@ class EVMFaucet:
         self.NETWORK_CONFIGS = network_configs
 
         # Same private key as the UTXO faucet, so one funded identity
-        # covers every chain the site offers. Normalize to a 0x-prefixed,
-        # 66-character hex string — zfill pads on the LEFT, because a
-        # short key means stripped leading zeros; padding the right
-        # would silently become a different wallet. A missing key
-        # leaves the account as None and every payout path answers
-        # with a configuration error instead of crashing the import.
+        # covers every chain the site offers. Normalized the same way
+        # in ALL THREE faucets, both directions: zfill pads a short
+        # key on the LEFT (stripped leading zeros), [:64] truncates
+        # an over-long one. The stack prefers RUNNING off an
+        # imperfect key over refusing to serve — identical
+        # truncation keeps every faucet on ONE identity. Anything
+        # that still fails (non-hex junk) is logged and leaves the
+        # account as None: payouts answer a configuration error,
+        # the faucet serves regardless.
         self.FAUCET_PRIVATE_KEY = os.getenv('FAUCET_PRIVATE_KEY')
         if self.FAUCET_PRIVATE_KEY:
-            self.FAUCET_PRIVATE_KEY = "0x" + self.FAUCET_PRIVATE_KEY.replace("0x", "").zfill(64)
+            self.FAUCET_PRIVATE_KEY = "0x" + self.FAUCET_PRIVATE_KEY.replace("0x", "").zfill(64)[:64]
 
         try:
             self.FAUCET_ACCOUNT = Account.from_key(self.FAUCET_PRIVATE_KEY) if self.FAUCET_PRIVATE_KEY else None
         except Exception:
+            logging.exception("Invalid FAUCET_PRIVATE_KEY for the EVM faucet")
             self.FAUCET_ACCOUNT = None
         self.FAUCET_ADDRESS = self.FAUCET_ACCOUNT.address if self.FAUCET_ACCOUNT else None
 

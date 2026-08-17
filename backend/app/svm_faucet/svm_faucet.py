@@ -182,10 +182,16 @@ class SVMFaucet:
     ############################################################
     #
     # Ed25519 keypair from FAUCET_PRIVATE_KEY — the same hex
-    # the EVM and UTXO faucets read. zfill pads on the LEFT,
-    # because a short key means stripped leading zeros;
-    # padding the right would silently derive a different
-    # wallet.
+    # the EVM and UTXO faucets read, normalized the same way
+    # in BOTH directions: zfill pads a short key on the LEFT
+    # (stripped leading zeros), [:64] truncates an over-long
+    # one. The stack prefers RUNNING off an imperfect key over
+    # refusing to serve — and all three faucets truncate
+    # identically, so even a malformed key still derives ONE
+    # consistent identity everywhere. Anything that still
+    # fails (non-hex junk) is logged and degrades to None:
+    # payouts answer a config error, the faucet serves
+    # regardless.
     #
     # Used by:
     #   - __init__ (above)
