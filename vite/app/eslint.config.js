@@ -26,7 +26,15 @@ export default [
       'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
       'react-refresh/only-export-components': [
         'warn',
-        { allowConstantExport: true },
+        {
+          allowConstantExport: true,
+          // Deliberate non-component exports living beside
+          // components: the navbar's catalog table + hooks
+          // (FAUCET_TYPES, useFaucetCatalogs, faucetTargetFor)
+          // and WalletFlow's useAlerts — shared with App.jsx
+          // and the faucet pages by design
+          allowExportNames: ['FAUCET_TYPES', 'useFaucetCatalogs', 'faucetTargetFor', 'useAlerts'],
+        },
       ],
     },
   },

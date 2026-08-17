@@ -159,7 +159,7 @@ function AddressRow({ value }) {
       await navigator.clipboard.writeText(value);
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch (_) {
+    } catch {
       /* clipboard unavailable — the address is still selectable */
     }
   };

@@ -89,7 +89,8 @@ function useLocalStorage(key, initialValue) {
     try {
       const raw = localStorage.getItem(key);
       return raw ? JSON.parse(raw) : initialValue;
-    } catch (_) {
+    } catch {
+      // corrupt JSON or blocked storage — start fresh
       return initialValue;
     }
   });
@@ -97,8 +98,8 @@ function useLocalStorage(key, initialValue) {
   useEffect(() => {
     try {
       localStorage.setItem(key, JSON.stringify(value));
-    } catch (_) {
-      /* ignore */
+    } catch {
+      /* private mode or quota — degrade to plain state */
     }
   }, [key, value]);
 
@@ -218,7 +219,7 @@ export default function FaucetPicker({ items = [], loading = false, faucetType, 
   // navigates
   const handleSelect = (item) => {
     if (item?.key) {
-      try { localStorage.setItem(`lastPick:${faucetType}`, item.key); } catch (_) {}
+      try { localStorage.setItem(`lastPick:${faucetType}`, item.key); } catch { /* blocked storage — the pick just won't be remembered */ }
       navigate(`/faucet/${faucetType}/${item.key}`);
     }
     closeMenu();

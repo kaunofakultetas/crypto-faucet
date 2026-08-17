@@ -197,7 +197,8 @@ export const FAUCET_TYPES = [
 const readCatalogCache = () => {
   try {
     return JSON.parse(localStorage.getItem('catalog:all')) ?? undefined;
-  } catch (_) {
+  } catch {
+    // corrupt JSON or blocked storage — same as no cache
     return undefined;
   }
 };
@@ -208,7 +209,7 @@ export function useFaucetCatalogs() {
     queryKey: ['faucet-catalog'],
     queryFn: async () => {
       const { data: catalog } = await axios.get('/api/faucet/catalog');
-      try { localStorage.setItem('catalog:all', JSON.stringify(catalog)); } catch (_) {}
+      try { localStorage.setItem('catalog:all', JSON.stringify(catalog)); } catch { /* private mode — the next load just refetches */ }
       return catalog;
     },
     staleTime: 5 * 60 * 1000,
@@ -258,7 +259,7 @@ export function faucetTargetFor(catalog, typeKey) {
   let saved = null;
   try {
     saved = localStorage.getItem(`lastPick:${typeKey}`);
-  } catch (_) {}
+  } catch { /* blocked storage — fall through to the default pick */ }
 
   const exists = (key) => items.some((item) => item.key === key);
   if (saved && exists(saved)) return saved;
