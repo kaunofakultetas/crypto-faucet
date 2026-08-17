@@ -104,9 +104,14 @@ class SolanaRpcClient:
     #
     # One JSON-RPC call. The node ANSWERING with an error is a
     # RuntimeError (a retry would only ask the same question
-    # again); transport failures propagate as the requests
-    # exception they already are, so the caller can decide.
-    # The timing print only fires with APP_DEBUG on.
+    # again). A CONNECTION failure retries once — a pooled
+    # keep-alive the server dropped while idle fails exactly
+    # one send, and the pool dials fresh for the retry; safe
+    # even for a broadcast, because re-sending the same signed
+    # transaction is idempotent (same signature). Every other
+    # transport failure propagates as the requests exception
+    # it already is, so the caller can decide. The timing
+    # print only fires with APP_DEBUG on.
     #
     # Used by:
     #   - every query method below
@@ -121,7 +126,10 @@ class SolanaRpcClient:
             payload['params'] = params
 
         start_time = time.time()
-        response = self.session.post(self.endpoint, json=payload, timeout=SOLANA_TIMEOUT_S)
+        try:
+            response = self.session.post(self.endpoint, json=payload, timeout=SOLANA_TIMEOUT_S)
+        except requests.ConnectionError:
+            response = self.session.post(self.endpoint, json=payload, timeout=SOLANA_TIMEOUT_S)
         response.raise_for_status()
         answer = response.json()
 

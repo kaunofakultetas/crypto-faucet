@@ -101,9 +101,14 @@ class SuiGraphqlClient:
     #
     # One GraphQL request. The node ANSWERING with errors is a
     # RuntimeError (a retry would only ask the same question
-    # again); transport failures propagate as the requests
-    # exception they already are, so the caller can decide.
-    # The timing print only fires with APP_DEBUG on.
+    # again). A CONNECTION failure retries once — a pooled
+    # keep-alive the server dropped while idle fails exactly
+    # one send, and the pool dials fresh for the retry; safe
+    # even for a broadcast, because re-executing the same
+    # signed transaction bytes is idempotent (same digest).
+    # Every other transport failure propagates as the requests
+    # exception it already is, so the caller can decide. The
+    # timing print only fires with APP_DEBUG on.
     #
     # Used by:
     #   - every query method below
@@ -114,11 +119,18 @@ class SuiGraphqlClient:
             raise ValueError('Sui GraphQL endpoint not configured')
 
         start_time = time.time()
-        response = self.session.post(
-            self.endpoint,
-            json={'query': query, 'variables': variables or {}},
-            timeout=SUI_TIMEOUT_S,
-        )
+        try:
+            response = self.session.post(
+                self.endpoint,
+                json={'query': query, 'variables': variables or {}},
+                timeout=SUI_TIMEOUT_S,
+            )
+        except requests.ConnectionError:
+            response = self.session.post(
+                self.endpoint,
+                json={'query': query, 'variables': variables or {}},
+                timeout=SUI_TIMEOUT_S,
+            )
         response.raise_for_status()
         answer = response.json()
 

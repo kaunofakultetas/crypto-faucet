@@ -3,7 +3,7 @@
 
 
 # STEP 1: Create necessary files and directories
-# ====================================
+# ==============================================
 mkdir -p ./_DATA/backend
 mkdir -p ./_DATA/dapps
 mkdir -p ./_DATA/etherpad
@@ -29,7 +29,7 @@ fi
 
 
 # STEP 3: Generate DBGATE_PASSWORD if it doesn't exist
-# =======================================================
+# ====================================================
 if [ ! -f .env ] || ! grep -q "^DBGATE_PASSWORD=" .env; then
     echo "Generating DBGATE_PASSWORD..."
     DBGATE_PASSWORD="$(openssl rand -hex 32)"

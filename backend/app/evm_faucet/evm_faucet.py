@@ -24,7 +24,8 @@
 #  contend), and every chain is warmed up at startup with a
 #  console report — including a chain-id check that catches a
 #  wrong RPC URL before the frontend and the faucet drift
-#  onto different chains.
+#  onto different chains (rerun before the first payout if
+#  the RPC was unreachable at startup — see _verify_chain_id).
 #
 #  The transaction-graph scraper that used to live here is
 #  explorer.py's EtherscanExplorer — a separate feature, a
@@ -86,7 +87,7 @@ DEFAULT_NETWORK = 'sepolia'
 # One instance serves every configured network. Methods in
 # groups:
 #
-#   setup   — __init__, _warm_up_networks
+#   setup   — __init__, _warm_up_networks, _verify_chain_id
 #   locks   — send_lock_for
 #   queries — _faucet_balance
 #   faucet  — is_supported_network, verify_signature,
@@ -191,6 +192,12 @@ class EVMFaucet:
         # warmup below.
         self._balance_cache = {}
 
+        # Networks whose RPC has passed the chain-id check — see
+        # _verify_chain_id. Filled by the warmup; a network whose
+        # RPC was down at startup earns its entry on its first
+        # payout instead.
+        self._verified_networks = set()
+
         self._warm_up_networks()
 
 
@@ -203,16 +210,14 @@ class EVMFaucet:
     ############################################################
     #
     # The startup warmup, one thread per network so the
-    # slowest RPC bounds the wall time: ask every chain for
-    # its chain id and compare it against the config — a
-    # mismatch means the frontend (which trusts the config)
-    # and the faucet (which pays over the RPC) would operate
-    # on DIFFERENT chains, so it screams instead of counting
-    # as ready. Then the faucet balance is pre-fetched into
-    # the cache, so the first page load answers instantly.
+    # slowest RPC bounds the wall time: run the chain-id check
+    # (see _verify_chain_id — a mismatch screams instead of
+    # counting as ready), then pre-fetch the faucet balance
+    # into the cache, so the first page load answers instantly.
     # Success and failure both go to the console; a failed
     # network does NOT kill the app — the other networks and
-    # faucets keep serving.
+    # faucets keep serving, and a network that was unreachable
+    # here gets its chain-id check on its first payout instead.
     #
     # Used by:
     #   - __init__ (above)
@@ -222,21 +227,16 @@ class EVMFaucet:
 
         def warm(network, w3):
             try:
-                actual_chain_id = int(w3.eth.chain_id)
-                expected_chain_id = self.NETWORK_CONFIGS[network].get('chain_id')
-                if actual_chain_id != expected_chain_id:
-                    logging.error(
-                        f"[EVM] {network} CHAIN ID MISMATCH — config says {expected_chain_id}, "
-                        f"the RPC answers {actual_chain_id}; check faucet.rpc_url"
-                    )
+                if not self._verify_chain_id(network):
                     return
 
+                chain_id = self.NETWORK_CONFIGS[network].get('chain_id')
                 if self.FAUCET_ADDRESS:
                     balance_eth = float(w3.from_wei(w3.eth.get_balance(self.FAUCET_ADDRESS), 'ether'))
                     self._balance_cache[network] = (int(time.time()), balance_eth)
-                    print(f"[EVM] {network} ready — chain id {actual_chain_id}, faucet balance {balance_eth:.4f}")
+                    print(f"[EVM] {network} ready — chain id {chain_id}, faucet balance {balance_eth:.4f}")
                 else:
-                    print(f"[EVM] {network} connected (chain id {actual_chain_id}) — but NO FAUCET KEY is configured, payouts will fail")
+                    print(f"[EVM] {network} connected (chain id {chain_id}) — but NO FAUCET KEY is configured, payouts will fail")
             except Exception:
                 logging.exception(f"[EVM] {network} FAILED to warm up")
 
@@ -248,6 +248,50 @@ class EVMFaucet:
             thread.start()
         for thread in threads:
             thread.join()
+
+
+
+
+
+
+    ############################################################
+    # _verify_chain_id
+    ############################################################
+    #
+    # THE config-sanity gate: the chain id the RPC answers must
+    # match the config's — a mismatch means the frontend (which
+    # trusts the config) and the faucet (which pays over the
+    # RPC) would operate on DIFFERENT chains. Checked once per
+    # network and cached, so the RPC round-trip happens only on
+    # the first call that gets an answer; a mismatch is NOT
+    # cached — a fixed RPC URL heals on the next check. The
+    # payout paths rerun it so a network whose RPC was down
+    # during the warmup can't skip the check for the life of
+    # the process. A transport failure propagates as-is: the
+    # caller decides.
+    #
+    # Used by:
+    #   - _warm_up_networks (above)
+    #   - request_eth (below) — refuses the payout on mismatch
+    #   - erc_faucet/erc20_faucet.py — request_tokens, the same
+    #     refusal before a token payout
+    ############################################################
+
+    def _verify_chain_id(self, network):
+        if network in self._verified_networks:
+            return True
+
+        actual_chain_id = int(self.w3_instances[network].eth.chain_id)
+        expected_chain_id = self.NETWORK_CONFIGS[network].get('chain_id')
+        if actual_chain_id != expected_chain_id:
+            logging.error(
+                f"[EVM] {network} CHAIN ID MISMATCH — config says {expected_chain_id}, "
+                f"the RPC answers {actual_chain_id}; check faucet.rpc_url"
+            )
+            return False
+
+        self._verified_networks.add(network)
+        return True
 
 
 
@@ -374,6 +418,15 @@ class EVMFaucet:
             return {"error": "Čiaupo adresas nesukonfigūruotas"}, 500
 
         w3 = self.w3_instances[network]
+
+        # A network whose RPC was down at startup skipped the
+        # warmup's chain-id check — settle it now (one cached
+        # round-trip) rather than pay out over a misconfigured RPC.
+        try:
+            if not self._verify_chain_id(network):
+                return {"error": "Tinklo konfigūracijos klaida. Praneškite dėstytojui."}, 500
+        except Exception:
+            return {"error": "Tinklas nepasiekiamas. Bandykite vėliau."}, 503
 
         amount_to_send = self.NETWORK_CONFIGS[network]['faucet']['chunk_size']
         amount_to_send_wei = Web3.to_wei(float(amount_to_send), 'ether')
