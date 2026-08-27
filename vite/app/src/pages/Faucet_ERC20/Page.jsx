@@ -52,6 +52,7 @@ import LocalGasStationIcon from '@mui/icons-material/LocalGasStation';
 import useMetamaskWallet, { getMetamaskProvider } from '@/hooks/useMetamaskWallet';
 import { WalletStepper, WalletGateButton, FadingAlert, useAlerts } from '@/components/WalletFlow';
 import AssetIcon from '@/components/AssetIcon';
+import ErrorCard from '@/components/ErrorCard';
 
 
 // How often the token payload (with the faucet's per-chain
@@ -80,8 +81,11 @@ const TOKEN_REFRESH_MS = 10000;
 // switch changes the key and shows skeletons; an account
 // change keeps the current rows on screen while the refresh
 // lands (placeholderData, same-symbol only). error holds the
-// backend's message for an unknown token; reload() (after a
-// claim) invalidates the query for an immediate refetch.
+// backend's message when the query NEVER got an answer (an
+// unknown token) — a failed repoll keeps the last payload on
+// screen, and a 4xx stops the interval so a stale bookmark
+// doesn't repoll forever. reload() (after a claim)
+// invalidates the query for an immediate refetch.
 //
 // Used by:
 //   - FaucetERC20 (below)
@@ -91,9 +95,15 @@ function useToken(symbol, account) {
 
   const queryClient = useQueryClient();
 
-  const { data = null, error: queryError } = useQuery({
+  const { data = null, error: queryError, isLoadingError } = useQuery({
     queryKey: ['erc20-token', symbol, account ?? null],
-    refetchInterval: TOKEN_REFRESH_MS,
+    // A 4xx is the backend's verdict on the SYMBOL (unknown
+    // token) — stop the interval; anything else keeps polling
+    // so a blip recovers on its own
+    refetchInterval: (query) => {
+      const status = query.state.error?.response?.status;
+      return status >= 400 && status < 500 ? false : TOKEN_REFRESH_MS;
+    },
     queryFn: async () => {
       const suffix = account ? `?address=${account}` : '';
       return (await axios.get(`/api/erc20/token/${symbol}${suffix}`)).data;
@@ -104,7 +114,10 @@ function useToken(symbol, account) {
       previousQuery?.queryKey?.[1] === symbol ? previousData : undefined,
   });
 
-  const error = queryError
+  // Only a query that never got data is an error for the page —
+  // the library keeps data through a failed repoll, so a blip
+  // never blanks a page that is already showing the token
+  const error = isLoadingError
     ? (queryError.response?.data?.error || 'Nepavyko gauti žetono informacijos')
     : null;
 
@@ -700,13 +713,7 @@ export default function FaucetERC20() {
 
 
   if (error) {
-    return (
-      <Box className="p-4">
-        <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4">
-          <p className="text-center text-red-600">{error}</p>
-        </div>
-      </Box>
-    );
+    return <ErrorCard>{error}</ErrorCard>;
   }
 
   if (!data) {

@@ -15,6 +15,7 @@
 //  plain functions, the hook wires their results into state:
 //
 //    CLUSTER_GENESIS    — cluster name → genesis hash
+//    PHANTOM_DETECT_MS  — how long a mount keeps looking
 //    getPhantomProvider — the injected provider, Phantom only
 //    addressOf          — publicKey (string or object) → base58
 //    isMethodMissing    — "this build has no changeNetwork"
@@ -53,6 +54,11 @@ const CLUSTER_GENESIS = {
   devnet: 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG',
   testnet: '4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY',
 };
+
+// Phantom injects on its own schedule (no announce event, unlike
+// EIP-6963) — a mount that finds nothing keeps looking this long,
+// in 250 ms ticks, before settling on "not installed"
+const PHANTOM_DETECT_MS = 5000;
 
 
 
@@ -98,7 +104,7 @@ const getPhantomProvider = () => {
 // toBase58/toString — this smooths the difference over.
 //
 // Used by:
-//   - connectPhantom (below)
+//   - connectPhantom / signClaimMessage (below)
 //   - usePhantomWallet (below) — the account event handlers
 // -----------------------------------------------------------
 
@@ -228,6 +234,10 @@ async function requestClusterHop(cluster) {
 // fixed message, signed in Phantom, base58-encoded for the
 // backend. The wording must match svm_faucet.request_sol
 // byte for byte — this is the only place it is written.
+// Phantom signs with whatever account it has SELECTED, and
+// the student can change that inside the approval popup —
+// the backend would refuse the mismatch with an opaque 403,
+// so it is caught here with a message that says what to do.
 //
 // Used by:
 //   - usePhantomWallet (below) — signMessage()
@@ -252,9 +262,18 @@ async function signClaimMessage(address) {
   }
 
   // The backend verifies a base58 signature; Phantom hands
-  // back raw bytes (older builds, the array itself)
+  // back raw bytes (older builds, the array itself). An empty
+  // array-like would encode to '' and fail server-side, so
+  // the length is checked, not just truthiness.
   const signatureBytes = result?.signature ?? result;
-  if (!signatureBytes) throw new Error('Phantom negrąžino parašo.');
+  if (!signatureBytes || signatureBytes.length === 0) {
+    throw new Error('Phantom negrąžino parašo.');
+  }
+
+  const signer = addressOf(result?.publicKey) ?? addressOf(provider.publicKey) ?? address;
+  if (signer !== address) {
+    throw new Error('Phantom pasirašė kita paskyra. Perjunkite paskyrą ir bandykite dar kartą.');
+  }
 
   return { nonce, signature: bs58.encode(Uint8Array.from(signatureBytes)) };
 }
@@ -297,55 +316,82 @@ export default function usePhantomWallet(expectedCluster) {
   const [clusterStatus, setClusterStatus] = useState(null);
 
 
-  // Detect Phantom once; the listeners keep the address in
-  // step with what the student does inside the extension
+  // Detect Phantom — the extension injects on its own
+  // schedule, so a miss at mount keeps looking for a few
+  // seconds instead of sticking the page on "install" for a
+  // wallet that is really there; the listeners keep the
+  // address in step with what the student does inside the
+  // extension
   useEffect(() => {
+    let alive = true;
+    let detach = () => {};
+
+    const wire = (provider) => {
+      setInstalled(true);
+
+      const handleConnect = (publicKey) => {
+        setAddress(addressOf(publicKey) ?? addressOf(provider.publicKey));
+      };
+      const handleDisconnect = () => {
+        setAddress(null);
+        setClusterStatus(null);
+      };
+      const handleAccountChanged = (publicKey) => {
+        if (publicKey) {
+          setAddress(addressOf(publicKey));
+          return;
+        }
+        // New account is not yet trusted for this origin —
+        // Phantom docs: reconnect so the student is not stranded
+        setAddress(null);
+        provider.connect().catch(() => {});
+      };
+
+      provider.on('connect', handleConnect);
+      provider.on('disconnect', handleDisconnect);
+      provider.on('accountChanged', handleAccountChanged);
+
+      if (provider.isConnected && provider.publicKey) {
+        setAddress(addressOf(provider.publicKey));
+      } else {
+        // Eager reconnect: no popup when this origin is already
+        // a Trusted App; 4001 is swallowed on purpose
+        provider.connect({ onlyIfTrusted: true }).catch(() => {});
+      }
+
+      detach = () => {
+        if (typeof provider.off === 'function') {
+          provider.off('connect', handleConnect);
+          provider.off('disconnect', handleDisconnect);
+          provider.off('accountChanged', handleAccountChanged);
+        } else if (typeof provider.removeListener === 'function') {
+          provider.removeListener('connect', handleConnect);
+          provider.removeListener('disconnect', handleDisconnect);
+          provider.removeListener('accountChanged', handleAccountChanged);
+        }
+      };
+    };
 
     const provider = getPhantomProvider();
-    if (!provider) return undefined;
-
-    setInstalled(true);
-
-    const handleConnect = (publicKey) => {
-      setAddress(addressOf(publicKey) ?? addressOf(provider.publicKey));
-    };
-    const handleDisconnect = () => {
-      setAddress(null);
-      setClusterStatus(null);
-    };
-    const handleAccountChanged = (publicKey) => {
-      if (publicKey) {
-        setAddress(addressOf(publicKey));
-        return;
-      }
-      // New account is not yet trusted for this origin —
-      // Phantom docs: reconnect so the student is not stranded
-      setAddress(null);
-      provider.connect().catch(() => {});
-    };
-
-    provider.on('connect', handleConnect);
-    provider.on('disconnect', handleDisconnect);
-    provider.on('accountChanged', handleAccountChanged);
-
-    if (provider.isConnected && provider.publicKey) {
-      setAddress(addressOf(provider.publicKey));
+    if (provider) {
+      wire(provider);
     } else {
-      // Eager reconnect: no popup when this origin is already
-      // a Trusted App; 4001 is swallowed on purpose
-      provider.connect({ onlyIfTrusted: true }).catch(() => {});
+      const started = Date.now();
+      const poll = setInterval(() => {
+        const late = getPhantomProvider();
+        if (late) {
+          clearInterval(poll);
+          if (alive) wire(late);
+        } else if (Date.now() - started > PHANTOM_DETECT_MS) {
+          clearInterval(poll);
+        }
+      }, 250);
+      detach = () => clearInterval(poll);
     }
 
     return () => {
-      if (typeof provider.off === 'function') {
-        provider.off('connect', handleConnect);
-        provider.off('disconnect', handleDisconnect);
-        provider.off('accountChanged', handleAccountChanged);
-      } else if (typeof provider.removeListener === 'function') {
-        provider.removeListener('connect', handleConnect);
-        provider.removeListener('disconnect', handleDisconnect);
-        provider.removeListener('accountChanged', handleAccountChanged);
-      }
+      alive = false;
+      detach();
     };
   }, []);
 

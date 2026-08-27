@@ -466,6 +466,7 @@ class EtherscanExplorer:
                             'to_address',           Graph_Transactions.to_address,
                             'to_name',              addr_to.name,
                             'to_timestamp',         latest_update_to.timestamp,
+                            'from_addr_contract',   addr_from.is_contract,
                             'to_addr_contract',     addr_to.is_contract,
                             'from_addr_hub',        addr_from.is_hub,
                             'to_addr_hub',          addr_to.is_hub,

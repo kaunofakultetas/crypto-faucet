@@ -31,9 +31,10 @@
 //    - pages/Faucet_EVM/Page.jsx
 //    - pages/Faucet_ERC20/Page.jsx
 //    - pages/Faucet_SVM/Page.jsx
+//    - pages/Faucet_MOVE/Page.jsx
 // -----------------------------------------------------------
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import { Button, Stack, Stepper, Step, StepLabel, StepConnector, stepConnectorClasses, Alert as MuiAlert } from '@mui/material';
 import { styled } from '@mui/material/styles';
@@ -344,8 +345,9 @@ export function FadingAlert({ severity, children }) {
 // useAlerts
 // -----------------------------------------------------------
 //
-//   const { alerts, addAlert } = useAlerts()
+//   const { alerts, addAlert, clearAlerts } = useAlerts()
 //   addAlert('success' | 'error', message, tag?)
+//   clearAlerts()
 //
 // The outcome list behind FadingAlert: every entry is dropped
 // again once its visible time plus fade have passed. The
@@ -353,6 +355,9 @@ export function FadingAlert({ severity, children }) {
 // cards route each row to the card that caused it — the
 // ERC-20 page tags by network; untagged rows are the page's
 // own to place (the EVM and SVM pages ignore tags entirely).
+// clearAlerts drops every row at once — the single-network
+// pages call it on a network switch, so an outcome issued for
+// the previous chain never sits on the new chain's page.
 //
 // Used by:
 //   - every faucet page (see the file header)
@@ -371,5 +376,8 @@ export function useAlerts() {
     }, ALERT_VISIBLE_MS + ALERT_FADE_MS);
   };
 
-  return { alerts, addAlert };
+  // Stable identity, so a page can list it as an effect dep
+  const clearAlerts = useCallback(() => setAlerts([]), []);
+
+  return { alerts, addAlert, clearAlerts };
 }

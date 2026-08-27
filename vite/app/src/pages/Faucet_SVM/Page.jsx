@@ -35,7 +35,7 @@
 //    FaucetSVM           — page state + layout (default export)
 // -----------------------------------------------------------
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import QRCode from 'react-qr-code';
@@ -45,6 +45,7 @@ import { Button, Box, Skeleton, Stack, CircularProgress } from '@mui/material';
 import PaidIcon from '@mui/icons-material/Paid';
 
 import AssetIcon from '@/components/AssetIcon';
+import ErrorCard from '@/components/ErrorCard';
 import { WalletStepper, WalletGateButton, FadingAlert, useAlerts } from '@/components/WalletFlow';
 
 import usePhantomWallet from './usePhantomWallet';
@@ -74,24 +75,27 @@ const lamportsToCoins = (lamports, decimals) => lamports / 10 ** decimals;
 // useNetworks
 // -----------------------------------------------------------
 //
-//   const networks = useNetworks()
+//   const { networks, failed } = useNetworks()
 //
 // The SVM network map, the page's own fetch — the navbar
 // reads the bundled /api/faucet/catalog instead, so nothing
-// shares this cache entry.
+// shares this cache entry. failed is true only when the map
+// NEVER arrived — a failed refresh of a map already on
+// screen keeps it.
 //
 // Used by:
 //   - FaucetSVM (below)
 // -----------------------------------------------------------
 
 function useNetworks() {
-  const { data } = useQuery({
+  const { data, isError } = useQuery({
     queryKey: ['svm-networks'],
     queryFn: async () => (await axios.get('/api/svm/networks')).data,
     staleTime: 5 * 60 * 1000,
   });
 
-  return data?.networks ?? null;
+  const networks = data?.networks ?? null;
+  return { networks, failed: isError && !networks };
 }
 
 
@@ -318,8 +322,9 @@ function ReturnAddressCard({ shortName, address }) {
 export default function FaucetSVM() {
 
   const { network } = useParams();
-  const networks = useNetworks();
+  const { networks, failed: catalogFailed } = useNetworks();
   const networkInfo = networks?.[network] ?? null;
+  const unknownNetwork = Boolean(networks) && !networkInfo;
 
   const clusterRpc = networkInfo?.rpc_urls?.[0] ?? null;
   const wallet = usePhantomWallet(networkInfo?.cluster);
@@ -327,35 +332,64 @@ export default function FaucetSVM() {
   const faucetInfo = useFaucetInfo(network, networkInfo);
   const walletBalance = useWalletBalance(clusterRpc, wallet.address);
 
-  const { alerts, addAlert } = useAlerts();
+  const { alerts, addAlert, clearAlerts } = useAlerts();
   const queryClient = useQueryClient();
-  const [claiming, setClaiming] = useState(false);
+
+  // Which network a claim is in flight FOR — a switch in the
+  // picker keeps this component mounted, so a plain boolean
+  // would lock the new chain's button behind the old chain's
+  // request, and a late answer would land on the wrong page
+  const [claimingFor, setClaimingFor] = useState(null);
+  const claiming = claimingFor === network;
+  const networkRef = useRef(network);
+
+
+  // A network switch drops the outcome rows — they talk about
+  // the previous chain — and notes the switch for any request
+  // still in flight
+  useEffect(() => {
+    networkRef.current = network;
+    clearAlerts();
+  }, [network, clearAlerts]);
 
 
   // Sign the ownership message and let the backend verify it
-  // before paying out — no transaction on the student's side
+  // before paying out — no transaction on the student's side.
+  // An answer that arrives after a network switch is dropped:
+  // it belongs to the chain it was issued for.
   const claim = async () => {
-    setClaiming(true);
+    const forNetwork = network;
+    setClaimingFor(forNetwork);
     try {
       const { nonce, signature } = await wallet.signMessage();
 
-      await axios.get(`/api/svm/${network}/request`, {
+      await axios.get(`/api/svm/${forNetwork}/request`, {
         params: { address: wallet.address, signature, nonce },
       });
 
-      addAlert('success', `${networkInfo.full_name} išsiųstas į jūsų piniginę.`);
-      queryClient.invalidateQueries({ queryKey: ['svm-faucet-balance', network] });
+      queryClient.invalidateQueries({ queryKey: ['svm-faucet-balance', forNetwork] });
       queryClient.invalidateQueries({ queryKey: ['svm-wallet-balance', clusterRpc, wallet.address] });
+      if (networkRef.current !== forNetwork) return;
+      addAlert('success', `${networkInfo.full_name} išsiųstas į jūsų piniginę.`);
     } catch (e) {
       // Backend refusals arrive as { error } in the response
       // body; wallet errors (signature refused) only carry a
       // message
+      if (networkRef.current !== forNetwork) return;
       addAlert('error', e.response?.data?.error || e.message || 'Nepavyko išsiųsti kriptovaliutos.');
     } finally {
-      setClaiming(false);
+      setClaimingFor((current) => (current === forNetwork ? null : current));
     }
   };
 
+
+  if (catalogFailed) {
+    return <ErrorCard>Nepavyko gauti tinklų sąrašo. Perkraukite puslapį.</ErrorCard>;
+  }
+
+  if (unknownNetwork) {
+    return <ErrorCard>Nežinomas tinklas: {network}</ErrorCard>;
+  }
 
   if (!networkInfo || !faucetInfo) {
     return <LoadingSkeleton />;

@@ -16,7 +16,9 @@
 //  takes a ready list of { key, primary, secondary, icon }
 //  items from the navbar and navigates to
 //  /faucet/<type>/<key>. The pick is remembered per type as
-//  lastPick:<type>. Each row's identity mark is an AssetIcon
+//  lastPick:<type>; favourites are stored as <type>:<key>,
+//  since catalog keys are only unique within a family. Each
+//  row's identity mark is an AssetIcon
 //  (components/AssetIcon.jsx) — the backend icon when one
 //  exists, a coloured hash-dot otherwise.
 //
@@ -195,8 +197,11 @@ export default function FaucetPicker({ items = [], loading = false, faucetType, 
     ? items.filter((i) => `${i.primary} ${i.secondary} ${i.key}`.toLowerCase().includes(needle))
     : items;
 
-  const favoriteItems = matching.filter((i) => favorites.includes(i.key));
-  const otherItems = matching.filter((i) => !favorites.includes(i.key));
+  // Favourites are namespaced by type — 'knf' the UTXO
+  // network and a 'knf' EVM chain must not star each other
+  const favKey = (key) => `${faucetType}:${key}`;
+  const favoriteItems = matching.filter((i) => favorites.includes(favKey(i.key)));
+  const otherItems = matching.filter((i) => !favorites.includes(favKey(i.key)));
 
 
   const closeMenu = () => {
@@ -208,8 +213,8 @@ export default function FaucetPicker({ items = [], loading = false, faucetType, 
   const toggleFavorite = (key) => {
     setFavorites((prev) => {
       const set = new Set(prev);
-      if (set.has(key)) set.delete(key);
-      else set.add(key);
+      if (set.has(favKey(key))) set.delete(favKey(key));
+      else set.add(favKey(key));
       return Array.from(set);
     });
   };
@@ -261,8 +266,11 @@ export default function FaucetPicker({ items = [], loading = false, faucetType, 
         transformOrigin={{ vertical: 'top', horizontal: 'left' }}
         slotProps={{ paper: { sx: { width: 320, maxHeight: 420, mt: 0.5 } } }}
       >
-        {/* Filter — keystrokes must not reach the menu's own
-            type-ahead, or the field loses focus on every letter */}
+        {/* Filter — printable keystrokes must not reach the
+            menu's own type-ahead, or the field loses focus on
+            every letter; named keys (Escape, the arrows, Tab)
+            must reach it, or the menu can't be closed or
+            walked from the keyboard */}
         <Box sx={{ px: 1.5, pt: 0.5, pb: 1 }}>
           <TextField
             autoFocus
@@ -271,7 +279,9 @@ export default function FaucetPicker({ items = [], loading = false, faucetType, 
             placeholder="Filtruoti…"
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
-            onKeyDown={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) e.stopPropagation();
+            }}
             slotProps={{
               input: {
                 startAdornment: (

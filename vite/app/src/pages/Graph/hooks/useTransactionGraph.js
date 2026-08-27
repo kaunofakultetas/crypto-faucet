@@ -13,17 +13,21 @@
 //  recomputes positions behind the user's back. Nodes drag
 //  horizontally only (fixed.y) and stay where they were
 //  dropped — the level rows themselves never move. Sweeps keep
-//  the data fresh: every known address is fetched in parallel
-//  (contracts and public hubs excepted — expanding those would
-//  pull the whole testnet in), newly discovered addresses are
-//  followed breadth-first up to DISCOVERY_MAX_DEPTH hops, and
-//  the next sweep is scheduled only after the previous one
-//  finished, so a slow backend can never stack sweeps. The
-//  first BOOT_SWEEPS sweeps run at a quick warm-up cadence —
-//  right after load the backend is often still indexing, so
-//  the graph fills fast. Recurring sweeps run only while live
-//  (viewing today); a past day gets its one boot discovery
-//  pass and then stands still.
+//  the data fresh: every known address is fetched, a few at a
+//  time (contracts and public hubs excepted — expanding those
+//  would pull the whole testnet in), newly discovered
+//  addresses are followed breadth-first up to
+//  DISCOVERY_MAX_DEPTH hops, and the next sweep is scheduled
+//  only after the previous one finished, so a slow backend
+//  can never stack sweeps. The first BOOT_SWEEPS sweeps run
+//  at a quick warm-up cadence — right after load the backend
+//  is often still indexing, so the graph fills fast.
+//  Recurring sweeps run only while live (viewing today) and
+//  only while the tab is visible; a past day gets its one
+//  boot discovery pass and then stands still. A fetch that
+//  fails is reported (`failed`), so an outage never looks
+//  like a quiet day; requests still in flight when the graph
+//  is torn down are aborted, never merged into the next one.
 //
 //  Split into (root last) — the store, the sweep and the
 //  event wiring are plain functions with no React in them;
@@ -38,6 +42,7 @@
 //    nodeLabel           — the one place labels are built
 //    VIS_OPTIONS         — static vis-network options
 //    createGraphStore    — model + vis DataSets in one object
+//    mapWithLimit        — a small worker pool for fetches
 //    sweepGraph          — one breadth-first refresh pass
 //    createSweepScheduler— the warm-up + steady cadence
 //    wireNetworkEvents   — vis events → plain callbacks
@@ -50,7 +55,7 @@ import axios from 'axios';
 import { Network } from 'vis-network';
 import { DataSet } from 'vis-data';
 
-import { ZOOM_CONFIG, LAYOUT_CONFIG, TIMING_CONFIG, NODE_CONFIG, EDGE_CONFIG, IMAGES } from '../constants';
+import { ZOOM_CONFIG, LAYOUT_CONFIG, TIMING_CONFIG, NODE_CONFIG, EDGE_CONFIG, IMAGES, NAME_MAX_LENGTH } from '../constants';
 import useNodePositions from './useNodePositions';
 
 
@@ -156,14 +161,15 @@ const formatTransactionLabel = (value, count, symbol = 'ETH') => {
 //
 // "prieš X sek./min./val./d./mėn./m." from a Date — the
 // largest unit that fits wins, and the abbreviations sidestep
-// Lithuanian declension entirely.
+// Lithuanian declension entirely. `now` lets a caller labeling
+// a whole graph read the clock once instead of per node.
 //
 // Used by:
 //   - nodeLabel (below) — the "Atnaujinta: …" line
 // -----------------------------------------------------------
 
-const timeSince = (date) => {
-  const seconds = Math.floor((new Date() - date) / 1000);
+const timeSince = (date, now = Date.now()) => {
+  const seconds = Math.floor((now - date) / 1000);
   let interval = seconds / 31536000; // seconds in a year
 
   if (interval > 1) {
@@ -234,9 +240,9 @@ const parseTimestamp = (timestamp) => {
 //   - createGraphStore (below) — sync
 // -----------------------------------------------------------
 
-const nodeLabel = (address, node) => {
+const nodeLabel = (address, node, now = Date.now()) => {
   const namePart = node.name ? `${node.name}\n` : '';
-  const ago = node.updatedAt ? timeSince(node.updatedAt) : 'ką tik';
+  const ago = node.updatedAt ? timeSince(node.updatedAt, now) : 'ką tik';
   return `${namePart}${formatAddress(address)}\nAtnaujinta: ${ago}`;
 };
 
@@ -303,7 +309,8 @@ const VIS_OPTIONS = {
 // createGraphStore
 // -----------------------------------------------------------
 //
-//   const store = createGraphStore({ positions, nextXForLevel })
+//   const store = createGraphStore({ positions, nextXForLevel,
+//                                    noteX })
 //
 // The graph's data layer, no React and no vis events in it:
 // the model Maps (the source of truth) TOGETHER WITH the two
@@ -311,10 +318,13 @@ const VIS_OPTIONS = {
 // DataSets behind the model's back. `positions` is the
 // persisted address → x Map (mutated in place — the caller
 // owns saving it); `nextXForLevel` deals an x slot for a
-// level's newcomer.
+// level's newcomer; `noteX` tells the dealer where a node
+// already sits, so a restored arrangement and the newcomers
+// after it never share a slot.
 //
 //   get(address)          — the model node, or undefined
-//   seedRoot(address)     — the faucet node at level 0, x 0
+//   seedRoot(address)     — the faucet node at level 0, at its
+//                           saved x (or 0)
 //   mergeTransaction(tx, parentLevel)
 //                         — two node sightings + one edge
 //   sync(currencySymbol)  — mirror the model into the DataSets
@@ -328,7 +338,7 @@ const VIS_OPTIONS = {
 //   - useTransactionGraph (below) — one store per graph life
 // -----------------------------------------------------------
 
-const createGraphStore = ({ positions, nextXForLevel }) => {
+const createGraphStore = ({ positions, nextXForLevel, noteX }) => {
 
   const nodes = new DataSet([]);
   const edges = new DataSet([]);
@@ -339,22 +349,25 @@ const createGraphStore = ({ positions, nextXForLevel }) => {
   const edgeModel = new Map();
 
 
-  // Merge one node sighting into the model. Level and kind are
+  // Merge one node sighting into the model. Level is
   // first-writer-wins (the tree keeps the shape it was
   // discovered in); name and timestamp always take the fresh
   // value, so the backend stays the authority on names. The
-  // hub flag only ever escalates — once the backend marks an
-  // address as a public hub it stays out of the sweeps.
+  // hub flag and the contract kind only ever escalate — once
+  // the backend marks an address as a public hub or a
+  // contract it stays out of the sweeps.
   const mergeNode = (address, incoming) => {
     const existing = model.get(address);
     if (existing) {
       existing.name = incoming.name;
       existing.updatedAt = incoming.updatedAt;
       existing.hub = existing.hub || incoming.hub;
+      if (existing.kind === 'user' && incoming.kind === 'contract') existing.kind = 'contract';
       return existing;
     }
 
     const x = positions.get(address) ?? nextXForLevel(incoming.level);
+    noteX(incoming.level, x);
     const node = { ...incoming, x };
     model.set(address, node);
     positions.set(address, x);
@@ -362,16 +375,22 @@ const createGraphStore = ({ positions, nextXForLevel }) => {
   };
 
 
+  // The backend's flags are 0/1 (NULL for an address it never
+  // classified) — only an explicit 1 makes a contract
+  const isContract = (flag) => parseInt(flag, 10) === 1;
+
   // One transaction → two node sightings and one edge. The
   // sender lands one level below the fetched address, the
-  // receiver one below the sender.
+  // receiver one below the sender. Both sides carry their own
+  // contract flag — a contract that only ever SENDS (a relayer,
+  // a proxy) must not be swept like a wallet.
   const mergeTransaction = (tx, parentLevel) => {
     const fromAddress = tx.from_address.toLowerCase();
     const toAddress = tx.to_address.toLowerCase();
 
     const fromNode = mergeNode(fromAddress, {
       name: tx.from_name || '',
-      kind: 'user',
+      kind: isContract(tx.from_addr_contract) ? 'contract' : 'user',
       hub: parseInt(tx.from_addr_hub, 10) === 1,
       level: parentLevel + 1,
       updatedAt: parseTimestamp(tx.from_timestamp),
@@ -379,7 +398,7 @@ const createGraphStore = ({ positions, nextXForLevel }) => {
 
     mergeNode(toAddress, {
       name: tx.to_name || '',
-      kind: parseInt(tx.to_addr_contract, 10) === 0 ? 'user' : 'contract',
+      kind: isContract(tx.to_addr_contract) ? 'contract' : 'user',
       hub: parseInt(tx.to_addr_hub, 10) === 1,
       level: fromNode.level + 1,
       updatedAt: parseTimestamp(tx.to_timestamp),
@@ -397,14 +416,17 @@ const createGraphStore = ({ positions, nextXForLevel }) => {
   // Mirror the model into the vis DataSets. Every added node
   // carries an explicit x AND y (Y = level × LEVEL_SEPARATION),
   // so vis draws it exactly where the model says — there is no
-  // layout engine to move it afterwards. Label refreshes are
-  // in-place updates that touch nothing else.
+  // layout engine to move it afterwards. Label and icon
+  // refreshes are in-place updates that touch nothing else;
+  // the clock is read once per mirror, not once per node.
   const sync = (currencySymbol) => {
+    const now = Date.now();
+
     model.forEach((node, address) => {
-      const label = nodeLabel(address, node);
+      const label = nodeLabel(address, node, now);
+      const presentation = NODE_PRESENTATION[node.kind];
       const existing = nodes.get(address);
       if (!existing) {
-        const presentation = NODE_PRESENTATION[node.kind];
         nodes.add({
           id: address,
           label,
@@ -414,8 +436,8 @@ const createGraphStore = ({ positions, nextXForLevel }) => {
           x: node.x,
           y: node.level * LAYOUT_CONFIG.LEVEL_SEPARATION,
         });
-      } else if (existing.label !== label) {
-        nodes.update({ id: address, label });
+      } else if (existing.label !== label || existing.image !== presentation.image) {
+        nodes.update({ id: address, label, image: presentation.image, size: presentation.size });
       }
     });
 
@@ -443,9 +465,13 @@ const createGraphStore = ({ positions, nextXForLevel }) => {
     edges,
     get: (address) => model.get(address),
 
+    // The root keeps its saved x like every other node — it is
+    // the node most likely to have been dragged aside
     seedRoot: (address) => {
-      model.set(address, { name: '', kind: 'faucet', level: 0, x: 0, updatedAt: null });
-      positions.set(address, 0);
+      const x = positions.get(address) ?? 0;
+      model.set(address, { name: '', kind: 'faucet', level: 0, x, updatedAt: null });
+      positions.set(address, x);
+      noteX(0, x);
     },
 
     mergeTransaction,
@@ -490,35 +516,73 @@ const createGraphStore = ({ positions, nextXForLevel }) => {
 
 
 // -----------------------------------------------------------
+// mapWithLimit
+// -----------------------------------------------------------
+//
+// Promise.all with a worker pool: at most `limit` calls of
+// `fn` in flight, results in input order. A sweep's frontier
+// is the whole graph, and a lab full of tabs firing every
+// address at once is the backend's busiest moment.
+//
+// Used by:
+//   - sweepGraph (below)
+// -----------------------------------------------------------
+
+async function mapWithLimit(items, limit, fn) {
+  const results = new Array(items.length);
+  let next = 0;
+
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await fn(items[index]);
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // sweepGraph
 // -----------------------------------------------------------
 //
 // One sweep: refresh all known non-contract, non-hub
-// addresses in parallel, then keep following newly discovered
-// addresses breadth-first until a pass finds nothing new
-// (bounded by DISCOVERY_MAX_DEPTH). `ingest` mirrors once per
-// address; `isCancelled` is probed between rounds so a torn-
-// down graph never gets late writes.
+// addresses (SWEEP_CONCURRENCY at a time), then keep
+// following newly discovered addresses breadth-first until a
+// pass finds nothing new (bounded by DISCOVERY_MAX_DEPTH).
+// `merge` folds one address's result into the model and
+// `mirror` syncs the DataSets ONCE per round — a round hands
+// over all its results synchronously, so per-address mirrors
+// would be unobservable work. `isCancelled` is probed between
+// rounds so a torn-down graph never gets late writes.
 //
 // Used by:
 //   - useTransactionGraph (below) — the boot pass and every
 //     scheduled live refresh
 // -----------------------------------------------------------
 
-async function sweepGraph({ store, fetchTransactions, ingest, isCancelled }) {
+async function sweepGraph({ store, fetchTransactions, merge, mirror, isCancelled }) {
   const fetched = new Set();
 
   for (let depth = 0; depth < TIMING_CONFIG.DISCOVERY_MAX_DEPTH; depth++) {
     const frontier = store.expandableAddresses().filter((address) => !fetched.has(address));
     if (frontier.length === 0 || isCancelled()) return;
 
-    const results = await Promise.all(frontier.map(async (address) => {
+    const results = await mapWithLimit(frontier, TIMING_CONFIG.SWEEP_CONCURRENCY, async (address) => {
       fetched.add(address);
       return { address, transactions: await fetchTransactions(address) };
-    }));
+    });
     if (isCancelled()) return;
 
-    results.forEach(({ address, transactions }) => ingest(transactions, address));
+    results.forEach(({ address, transactions }) => merge(transactions, address));
+    mirror();
   }
 }
 
@@ -538,9 +602,12 @@ async function sweepGraph({ store, fetchTransactions, ingest, isCancelled }) {
 // transactions, so the graph fills in seconds instead of
 // waiting out the steady cadence — then every following pass
 // at UPDATE_INTERVAL. The next sweep is scheduled only after
-// `runSweep` resolved, so a slow backend can never stack
-// sweeps; `isCancelled` stops the chain and stop() kills the
-// pending timer.
+// `runSweep` settled — resolved OR rejected, the chain always
+// re-arms — so a slow backend can never stack sweeps and one
+// throw can never silently end the live refresh. A hidden
+// tab keeps its place in the cadence but does no work.
+// `isCancelled` stops the chain and stop() kills the pending
+// timer.
 //
 // Used by:
 //   - useTransactionGraph (below) — started after boot while
@@ -560,8 +627,13 @@ function createSweepScheduler(runSweep, isCancelled) {
       : TIMING_CONFIG.UPDATE_INTERVAL;
     timerId = setTimeout(async () => {
       if (warmupRemaining > 0) warmupRemaining--;
-      await runSweep();
-      scheduleNext();
+      try {
+        if (!document.hidden) await runSweep();
+      } catch (err) {
+        console.error('Sweep failed:', err);
+      } finally {
+        scheduleNext();
+      }
     }, delay);
   };
 
@@ -635,7 +707,7 @@ function wireNetworkEvents(network, { onScale, onExpand, onRightClick, onMoves }
 // -----------------------------------------------------------
 //
 //   const { containerRef, scale, setZoom, zoomIn, zoomOut,
-//           renameNode } = useTransactionGraph({
+//           renameNode, failed } = useTransactionGraph({
 //     faucetAddress, network, dateRange, live, day,
 //     currencySymbol, onNodeRightClick })
 //
@@ -643,6 +715,8 @@ function wireNetworkEvents(network, { onScale, onExpand, onRightClick, onMoves }
 // plain functions above. The store (model + DataSets) exists
 // only between boot and cleanup; everything outside the
 // effect reaches it through storeRef and tolerates null.
+// `failed` is the last fetch's verdict, for the shell's
+// notice; renameNode resolves to whether the name was saved.
 //
 // Used by:
 //   - CryptoFlowGraph.jsx — the shell around the canvas
@@ -656,19 +730,35 @@ export default function useTransactionGraph({ faucetAddress, network, dateRange,
 
   // Positions are scoped per (network, day) — each day is a
   // different graph with its own hand-arranged layout
-  const { positionsRef: nodePositions, save: savePositions, setLevelNextX } = useNodePositions(`${network}:${day}`);
+  const { positionsRef: nodePositions, save: savePositions, setLevelNextX, noteX } = useNodePositions(`${network}:${day}`);
 
   // Zoom scale mirrored into React for the ZoomControls slider
   const [scale, setScale] = useState(1);
 
-  // Callbacks and the positions API live in refs so a parent
-  // re-render (or useNodePositions re-creating its functions)
-  // never tears the graph down
+  // The last fetch's verdict — an outage must not look like a
+  // quiet day, so the shell shows a notice while this is true
+  const [failed, setFailed] = useState(false);
+
+  // Callbacks, the positions API and the currency symbol live
+  // in refs so a parent re-render (useNodePositions
+  // re-creating its functions, the symbol arriving after the
+  // catalog fetch) never tears the graph down
   const onNodeRightClickRef = useRef(onNodeRightClick);
   onNodeRightClickRef.current = onNodeRightClick;
 
   const positionsApiRef = useRef(null);
-  positionsApiRef.current = { savePositions, setLevelNextX };
+  positionsApiRef.current = { savePositions, setLevelNextX, noteX };
+
+  const currencySymbolRef = useRef(currencySymbol);
+  currencySymbolRef.current = currencySymbol;
+
+
+  // The symbol is presentation only — a cold load starts with
+  // the 'ETH' placeholder and relabels in place when the
+  // catalog answers, instead of rebuilding the whole graph
+  useEffect(() => {
+    storeRef.current?.sync(currencySymbol);
+  }, [currencySymbol]);
 
 
   // Boot + steady state. Boot seeds the faucet root, builds
@@ -677,23 +767,32 @@ export default function useTransactionGraph({ faucetAddress, network, dateRange,
   // and runs one sweep immediately so the deeper hops appear
   // without waiting. Recurring sweeps run only when LIVE
   // (viewing today), on createSweepScheduler's cadence.
-  // Cleanup wipes store, Network and the pending sweep timer,
-  // so a :network switch or a new day window rebuilds from
-  // scratch.
+  // Cleanup aborts the fetches still in flight and wipes
+  // store, Network and the pending sweep timer, so a :network
+  // switch or a new day window rebuilds from scratch — and a
+  // late answer can never land in the next graph's layout.
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
 
     // The backend's stored-transactions endpoint, always scoped
     // to the picked day's [from, to) window; an address with no
-    // history that day (or a failed request) just yields []
+    // history that day yields [], and so does a failed request
+    // — but that one is remembered in `failed`, so the page can
+    // say so
     const fetchTransactions = async (address) => {
       try {
         const { data } = await axios.get(`/api/evm/${network}/get-stored-transactions`, {
           params: { address, from: dateRange.from, to: dateRange.to },
+          signal: controller.signal,
         });
+        setFailed(false);
         return data.transactions;
       } catch (err) {
-        console.error('Error fetching transactions:', err);
+        if (!axios.isCancel(err)) {
+          console.error('Error fetching transactions:', err);
+          setFailed(true);
+        }
         return [];
       }
     };
@@ -704,31 +803,41 @@ export default function useTransactionGraph({ faucetAddress, network, dateRange,
     const store = createGraphStore({
       positions: nodePositions.current,
       nextXForLevel: (level) => positionsApiRef.current.setLevelNextX(level),
+      noteX: (level, x) => positionsApiRef.current.noteX(level, x),
     });
     storeRef.current = store;
 
-    // Merge a fetch result and mirror it — every live data path
-    // (sweep passes, double-click expands) funnels through here.
-    // The networkRef guard drops late responses that land after
-    // the cleanup wiped everything.
-    const ingest = (transactions, centralAddress) => {
-      if (!networkRef.current) return;
+    // Fold a fetch result into the model (`merge`) and mirror
+    // the model into the DataSets (`mirror`) — sweep rounds
+    // merge every result and mirror once, a double-click
+    // expand does both for one address. The guards drop late
+    // responses that land after the cleanup wiped everything:
+    // the store is this effect's, the ref would already belong
+    // to the next graph.
+    const merge = (transactions, centralAddress) => {
+      if (cancelled || !networkRef.current) return;
 
       const parentLevel = store.get(centralAddress)?.level ?? 0;
       transactions.forEach((tx) => store.mergeTransaction(tx, parentLevel));
+    };
 
-      store.sync(currencySymbol);
+    const mirror = () => {
+      if (cancelled || !networkRef.current) return;
+      store.sync(currencySymbolRef.current);
     };
 
     // Double-click: pull that address's own transactions in
     const expandAddress = async (address) => {
-      ingest(await fetchTransactions(address), address);
+      const transactions = await fetchTransactions(address);
+      merge(transactions, address);
+      mirror();
     };
 
     const sweep = () => sweepGraph({
       store,
       fetchTransactions,
-      ingest,
+      merge,
+      mirror,
       isCancelled: () => cancelled,
     });
 
@@ -740,7 +849,7 @@ export default function useTransactionGraph({ faucetAddress, network, dateRange,
 
       store.seedRoot(faucetAddress);
       transactions.forEach((tx) => store.mergeTransaction(tx, 0));
-      store.sync(currencySymbol);
+      store.sync(currencySymbolRef.current);
 
       networkRef.current = new Network(
         containerRef.current,
@@ -765,7 +874,7 @@ export default function useTransactionGraph({ faucetAddress, network, dateRange,
         onExpand: (nodeId) => {
           const node = store.get(nodeId);
           if (node?.kind === 'contract' || node?.hub) return;
-          expandAddress(nodeId);
+          expandAddress(nodeId).catch((err) => console.error('Expand failed:', err));
         },
 
         onRightClick: (nodeId) => {
@@ -782,17 +891,18 @@ export default function useTransactionGraph({ faucetAddress, network, dateRange,
       if (live) scheduler.start();
     };
 
-    boot();
+    boot().catch((err) => console.error('Graph boot failed:', err));
 
     return () => {
       cancelled = true;
+      controller.abort();
       scheduler.stop();
       networkRef.current?.destroy();
       networkRef.current = null;
       store.clear();
       storeRef.current = null;
     };
-  }, [faucetAddress, network, dateRange.from, dateRange.to, live, currencySymbol, nodePositions]);
+  }, [faucetAddress, network, dateRange.from, dateRange.to, live, nodePositions]);
 
 
   // Single entry for zoom changes — slider, buttons and the
@@ -810,17 +920,35 @@ export default function useTransactionGraph({ faucetAddress, network, dateRange,
   const zoomOut = () => setZoom(scale - ZOOM_CONFIG.BUTTON_STEP);
 
 
-  // Rename: update the model, re-derive the label, tell the
-  // backend (fire-and-forget GET — the next sweep comes back
-  // with the saved name). No layout runs, so nothing moves.
-  const renameNode = (address, name) => {
-    const trimmed = (name || '').trim();
-    if (!trimmed || !storeRef.current?.setName(address, trimmed)) return;
+  // Rename: tell the backend and, once it agreed, update the
+  // model and re-derive the label — awaited, so the dialog
+  // learns whether the name was saved instead of closing over
+  // a lost write. An EMPTY name clears the label (the backend
+  // stores ''), the one way to remove a label from the UI. No
+  // layout runs, so nothing moves.
+  const renameNode = async (address, name) => {
+    if (!address) return false;
+    const trimmed = (name || '').trim().slice(0, NAME_MAX_LENGTH);
 
-    fetch(`/api/evm/set-address-name?address=${address}&name=${encodeURIComponent(trimmed)}`);
-    storeRef.current.sync(currencySymbol);
+    try {
+      const response = await fetch(
+        `/api/evm/set-address-name?address=${encodeURIComponent(address)}&name=${encodeURIComponent(trimmed)}`,
+      );
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    } catch (err) {
+      console.error('Rename failed:', err);
+      return false;
+    }
+
+    // The store may have been rebuilt under the dialog (a new
+    // day or network) — the name is saved either way, and the
+    // next sweep brings it back
+    if (storeRef.current?.setName(address, trimmed)) {
+      storeRef.current.sync(currencySymbolRef.current);
+    }
+    return true;
   };
 
 
-  return { containerRef, scale, setZoom, zoomIn, zoomOut, renameNode };
+  return { containerRef, scale, setZoom, zoomIn, zoomOut, renameNode, failed };
 }

@@ -28,6 +28,7 @@
     "react-router-dom": "^7.6.2",
     "reactflow": "^11.11.4",
     "tailwindcss": "^4.1.10",
+    "vis-data": "^8.0.5",
     "vis-network": "^10.0.1",
     "web3": "^4.16.0"
   },

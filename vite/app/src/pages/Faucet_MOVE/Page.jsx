@@ -17,20 +17,30 @@
 //  address renders as text + QR — hex is case-insensitive,
 //  but it is kept as the backend prints it.
 //
+//  One thing the wallet will not do for the student: a Sui
+//  address is the same on every network, but the wallet UI
+//  has a network selector (shipped on Mainnet), and the
+//  faucet pays on the network in the URL — so the page keeps
+//  a note on screen naming the network to select, amber when
+//  the wallet says it is on another one.
+//
 //  Split into (root component last):
 //
 //    MOVE_REFRESH_MS   — balance repoll cadence
+//    NETWORK_LABELS    — flavour key → the wallet's label
 //    mistToCoins       — the only unit maths on this page
 //    useNetworks       — the MOVE network map (own fetch)
 //    useFaucetInfo     — faucet address + balance, polled
 //    useWalletBalance  — the student's balance, from the
 //                        public GraphQL endpoint
 //    LoadingSkeleton   — full-page skeleton layout
+//    WalletPicker      — a choice when two Sui wallets announce
+//    NetworkNote       — which network to select in the wallet
 //    ReturnAddressCard — return address + QR
 //    FaucetMOVE        — page state + layout (default export)
 // -----------------------------------------------------------
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import QRCode from 'react-qr-code';
@@ -40,6 +50,7 @@ import { Button, Box, Skeleton, Stack, CircularProgress } from '@mui/material';
 import PaidIcon from '@mui/icons-material/Paid';
 
 import AssetIcon from '@/components/AssetIcon';
+import ErrorCard from '@/components/ErrorCard';
 import { WalletStepper, WalletGateButton, FadingAlert, useAlerts } from '@/components/WalletFlow';
 
 import useSuiWallet from './useSuiWallet';
@@ -47,6 +58,10 @@ import useSuiWallet from './useSuiWallet';
 
 // How often both balances repoll
 const MOVE_REFRESH_MS = 5000;
+
+// The wallet UI's own network labels, by the config's flavour
+// key — what the student has to click on in the selector
+const NETWORK_LABELS = { mainnet: 'Mainnet', testnet: 'Testnet', devnet: 'Devnet' };
 
 
 // MIST are integers; the chain's decimals come from the
@@ -64,24 +79,27 @@ const mistToCoins = (mist, decimals) => mist / 10 ** decimals;
 // useNetworks
 // -----------------------------------------------------------
 //
-//   const networks = useNetworks()
+//   const { networks, failed } = useNetworks()
 //
 // The MOVE network map, the page's own fetch — the navbar
 // reads the bundled /api/faucet/catalog instead, so nothing
-// shares this cache entry.
+// shares this cache entry. failed is true only when the map
+// NEVER arrived — a failed refresh of a map already on
+// screen keeps it.
 //
 // Used by:
 //   - FaucetMOVE (below)
 // -----------------------------------------------------------
 
 function useNetworks() {
-  const { data } = useQuery({
+  const { data, isError } = useQuery({
     queryKey: ['move-networks'],
     queryFn: async () => (await axios.get('/api/move/networks')).data,
     staleTime: 5 * 60 * 1000,
   });
 
-  return data?.networks ?? null;
+  const networks = data?.networks ?? null;
+  return { networks, failed: isError && !networks };
 }
 
 
@@ -221,6 +239,90 @@ function LoadingSkeleton() {
 
 
 // -----------------------------------------------------------
+// WalletPicker
+// -----------------------------------------------------------
+//
+// Shown only when the browser announced MORE than one
+// Sui-capable wallet (Slush beside a Sui-capable Phantom):
+// the hook talks to the first one announced, which the
+// student did not choose — this row lets them.
+//
+// Used by:
+//   - FaucetMOVE (below) — above the gate button
+// -----------------------------------------------------------
+
+function WalletPicker({ wallets, current, onSelect }) {
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+      <span className="text-gray-700">Piniginė:</span>
+      {wallets.map((candidate) => (
+        <Button
+          key={candidate.name}
+          size="small"
+          variant={candidate.name === current ? 'contained' : 'outlined'}
+          onClick={() => onSelect(candidate)}
+        >
+          {candidate.name}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// NetworkNote
+// -----------------------------------------------------------
+//
+// The clicks a Sui wallet will not do for us: a Sui address
+// is the same on every network, but the wallet UI still has
+// a network selector (Slush and Suiet ship on Mainnet), and
+// the faucet pays on the network in the URL — so a student on
+// the wrong one sees the page's balance rise and the wallet
+// show nothing. Always on screen once a wallet is known;
+// amber when the account advertises chains that do not
+// include ours, quiet otherwise (a wallet that lists every
+// network it supports cannot be checked).
+//
+// Used by:
+//   - FaucetMOVE (below) — under the gate / claim button
+// -----------------------------------------------------------
+
+function NetworkNote({ walletName, network, chains }) {
+  const label = NETWORK_LABELS[network] ?? network;
+  const wrong = chains.length > 0 && !chains.includes(`sui:${network}`);
+  const tone = wrong
+    ? 'border-amber-200 bg-amber-50 text-amber-900'
+    : 'border-gray-200 bg-gray-50 text-gray-700';
+
+  return (
+    <div className={`mt-3 rounded-md border px-3 py-2 text-sm ${tone}`}>
+      <p className="font-semibold">
+        {wrong
+          ? `${walletName} šiuo metu rodo kitą tinklą.`
+          : `Tinklas pasirenkamas pačioje ${walletName} piniginėje.`}
+      </p>
+      <p className="mt-1">
+        Atidarykite {walletName} ir tinklo sąraše pasirinkite „{label}“.
+        Čiaupo monetos visada keliauja į {label} tinklą — jei piniginė
+        rodo kitą tinklą, gautų monetų ten nematysite.
+      </p>
+    </div>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // ReturnAddressCard
 // -----------------------------------------------------------
 //
@@ -266,8 +368,9 @@ function ReturnAddressCard({ shortName, address }) {
 export default function FaucetMOVE() {
 
   const { network } = useParams();
-  const networks = useNetworks();
+  const { networks, failed: catalogFailed } = useNetworks();
   const networkInfo = networks?.[network] ?? null;
+  const unknownNetwork = Boolean(networks) && !networkInfo;
 
   const graphqlUrl = networkInfo?.rpc_urls?.[0] ?? null;
   const wallet = useSuiWallet();
@@ -275,35 +378,64 @@ export default function FaucetMOVE() {
   const faucetInfo = useFaucetInfo(network, networkInfo);
   const walletBalance = useWalletBalance(graphqlUrl, networkInfo?.coin_type, wallet.address);
 
-  const { alerts, addAlert } = useAlerts();
+  const { alerts, addAlert, clearAlerts } = useAlerts();
   const queryClient = useQueryClient();
-  const [claiming, setClaiming] = useState(false);
+
+  // Which network a claim is in flight FOR — a switch in the
+  // picker keeps this component mounted, so a plain boolean
+  // would lock the new chain's button behind the old chain's
+  // request, and a late answer would land on the wrong page
+  const [claimingFor, setClaimingFor] = useState(null);
+  const claiming = claimingFor === network;
+  const networkRef = useRef(network);
+
+
+  // A network switch drops the outcome rows — they talk about
+  // the previous chain — and notes the switch for any request
+  // still in flight
+  useEffect(() => {
+    networkRef.current = network;
+    clearAlerts();
+  }, [network, clearAlerts]);
 
 
   // Sign the ownership message and let the backend verify it
-  // before paying out — no transaction on the student's side
+  // before paying out — no transaction on the student's side.
+  // An answer that arrives after a network switch is dropped:
+  // it belongs to the chain it was issued for.
   const claim = async () => {
-    setClaiming(true);
+    const forNetwork = network;
+    setClaimingFor(forNetwork);
     try {
       const { nonce, signature } = await wallet.signMessage();
 
-      await axios.get(`/api/move/${network}/request`, {
+      await axios.get(`/api/move/${forNetwork}/request`, {
         params: { address: wallet.address, signature, nonce },
       });
 
-      addAlert('success', `${networkInfo.full_name} išsiųstas į jūsų piniginę.`);
-      queryClient.invalidateQueries({ queryKey: ['move-faucet-balance', network] });
+      queryClient.invalidateQueries({ queryKey: ['move-faucet-balance', forNetwork] });
       queryClient.invalidateQueries({ queryKey: ['move-wallet-balance', graphqlUrl, wallet.address] });
+      if (networkRef.current !== forNetwork) return;
+      addAlert('success', `${networkInfo.full_name} išsiųstas į jūsų piniginę.`);
     } catch (e) {
       // Backend refusals arrive as { error } in the response
       // body; wallet errors (signature refused) only carry a
       // message
+      if (networkRef.current !== forNetwork) return;
       addAlert('error', e.response?.data?.error || e.message || 'Nepavyko išsiųsti kriptovaliutos.');
     } finally {
-      setClaiming(false);
+      setClaimingFor((current) => (current === forNetwork ? null : current));
     }
   };
 
+
+  if (catalogFailed) {
+    return <ErrorCard>Nepavyko gauti tinklų sąrašo. Perkraukite puslapį.</ErrorCard>;
+  }
+
+  if (unknownNetwork) {
+    return <ErrorCard>Nežinomas tinklas: {network}</ErrorCard>;
+  }
 
   if (!networkInfo || !faucetInfo) {
     return <LoadingSkeleton />;
@@ -372,6 +504,10 @@ export default function FaucetMOVE() {
         </div>
 
         <div className="mt-3">
+          {wallet.wallets.length > 1 && (
+            <WalletPicker wallets={wallet.wallets} current={wallet.walletName} onSelect={wallet.selectWallet} />
+          )}
+
           <WalletGateButton
             step={wallet.step}
             networkInfo={networkInfo}
@@ -395,6 +531,10 @@ export default function FaucetMOVE() {
                 ? <CircularProgress size={22} color="inherit" />
                 : `Gauti ${networkInfo.full_name} valiutos`}
             </Button>
+          )}
+
+          {wallet.installed && (
+            <NetworkNote walletName={wallet.walletName} network={networkInfo.network} chains={wallet.chains} />
           )}
         </div>
 

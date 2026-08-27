@@ -15,7 +15,11 @@
 //  travels into every graph fetch as a half-open [from, to)
 //  unix window computed from the STUDENT'S local midnight;
 //  viewing a past day freezes the live sweeps and skips the
-//  Etherscan refresh — history can't change.
+//  Etherscan refresh — history can't change. "Today" is
+//  state that ticks over at local midnight, so a tab left
+//  open follows the calendar instead of live-polling
+//  yesterday. A network without an explorer section gets a
+//  one-line notice — the graph needs Etherscan behind it.
 //
 //  Split into (root component last):
 //
@@ -27,7 +31,7 @@
 //                    (default export)
 // -----------------------------------------------------------
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import axios from 'axios';
@@ -67,7 +71,7 @@ const STEP_BUTTON_SX = {
 // tz_offset.
 //
 // Used by:
-//   - GraphPage (below)
+//   - GraphPage (below) — the ticking `today` state
 // -----------------------------------------------------------
 
 function todayString() {
@@ -131,11 +135,15 @@ function rangeOfDay(dayString) {
 //   - GraphPage (below)
 // -----------------------------------------------------------
 
-function DateSliderBar({ days, selectedDay, onCommit }) {
+function DateSliderBar({ days, selectedDay, today, onCommit }) {
 
   const [draftIndex, setDraftIndex] = useState(null);
 
-  const selectedIndex = Math.max(0, days.indexOf(selectedDay));
+  // A day that fell out of the list (it had no root activity
+  // and midnight moved "today" on) shows as the newest, not
+  // the oldest
+  const foundIndex = days.indexOf(selectedDay);
+  const selectedIndex = foundIndex === -1 ? days.length - 1 : foundIndex;
   const shownIndex = draftIndex ?? selectedIndex;
 
   const commitIndex = (index) => {
@@ -144,7 +152,7 @@ function DateSliderBar({ days, selectedDay, onCommit }) {
     onCommit(days[clamped]);
   };
 
-  const dayText = (day) => (day === todayString() ? `${day} (šiandien)` : day);
+  const dayText = (day) => (day === today ? `${day} (šiandien)` : day);
 
   return (
     <Box
@@ -232,7 +240,24 @@ function DateSliderBar({ days, selectedDay, onCommit }) {
 export default function GraphPage() {
 
   const { network } = useParams();
-  const [selectedDay, setSelectedDay] = useState(todayString);
+  const [today, setToday] = useState(todayString);
+  const [selectedDay, setSelectedDay] = useState(today);
+
+
+  // Tick over at local midnight: the day list gains the new
+  // day, and a tab that was watching "today" follows it —
+  // otherwise it would live-poll yesterday's window forever
+  useEffect(() => {
+    const midnight = new Date();
+    midnight.setHours(24, 0, 0, 0);
+    const id = setTimeout(() => {
+      const next = todayString();
+      setSelectedDay((day) => (day === today ? next : day));
+      setToday(next);
+    }, midnight - Date.now() + 1000);
+    return () => clearTimeout(id);
+  }, [today]);
+
 
   const { data, isPending, isError } = useQuery({
     queryKey: ['evm-faucet-balance', network],
@@ -241,15 +266,17 @@ export default function GraphPage() {
   });
   const address = data?.address ?? null;
 
-  // The viewed network's native currency symbol for the graph's
-  // edge labels — same cache entry the EVM faucet page uses,
-  // so coming from there this costs no request
+  // The viewed network's entry — its native currency symbol for
+  // the graph's edge labels and whether it has an explorer at
+  // all; same cache entry the EVM faucet page uses, so coming
+  // from there this costs no request
   const { data: networksData } = useQuery({
     queryKey: ['evm-networks'],
     queryFn: async () => (await axios.get('/api/evm/networks')).data,
     staleTime: 5 * 60 * 1000,
   });
-  const currencySymbol = networksData?.networks?.[network]?.native_currency?.symbol ?? 'ETH';
+  const networkInfo = networksData?.networks?.[network] ?? null;
+  const currencySymbol = networkInfo?.native_currency?.symbol ?? 'ETH';
 
   // The root address's used days (+ per-day counts), bucketed
   // with the browser's UTC offset so backend days == local days
@@ -267,14 +294,17 @@ export default function GraphPage() {
   // Today is always offered, even before its first transaction
   const days = useMemo(() => {
     const known = (daysData?.days ?? []).map((entry) => entry.day);
-    const today = todayString();
     return known.includes(today) ? known : [...known, today];
-  }, [daysData]);
+  }, [daysData, today]);
 
 
   // Live sweeps only make sense for today — a past day is
   // frozen history
   const range = useMemo(() => rangeOfDay(selectedDay), [selectedDay]);
+
+  if (networkInfo && networkInfo.has_explorer === false) {
+    return <div className="p-4 text-center">Šiam tinklui transakcijų srautas neprieinamas</div>;
+  }
 
   if (isPending) {
     return <div className="p-4 text-center">Kraunama…</div>;
@@ -289,18 +319,17 @@ export default function GraphPage() {
   }
 
   return (
-    // A fixed-height flex column matching the shell's viewport
-    // budget (100dvh minus navbar + footer) — the bar takes its
-    // natural height, the graph canvas absorbs the rest, and
-    // the page never scrolls
-    <div className="flex h-[calc(100dvh-105px)] flex-col p-4">
-      <DateSliderBar days={days} selectedDay={selectedDay} onCommit={setSelectedDay} />
+    // The shell hands the page the viewport's remaining height
+    // as a flex column — the bar takes its natural height, the
+    // graph canvas absorbs the rest, and the page never scrolls
+    <div className="flex min-h-0 flex-1 flex-col p-4">
+      <DateSliderBar days={days} selectedDay={selectedDay} today={today} onCommit={setSelectedDay} />
 
       <CryptoFlowGraph
         faucetAddress={address}
         network={network}
         dateRange={range}
-        live={selectedDay === todayString()}
+        live={selectedDay === today}
         day={selectedDay}
         currencySymbol={currencySymbol}
       />

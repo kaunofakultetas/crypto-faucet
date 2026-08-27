@@ -7,7 +7,7 @@
 //
 //  Used by:
 //    - useTransactionGraph.js, useNodePositions.js
-//    - CryptoFlowGraph.jsx, ZoomControls.jsx
+//    - CryptoFlowGraph.jsx, ZoomControls.jsx, AddressDialog.jsx
 // -----------------------------------------------------------
 
 
@@ -82,6 +82,7 @@ export const TIMING_CONFIG = {
   BOOT_SWEEPS: 5,            // quick warm-up sweeps right after load
   BOOT_SWEEP_INTERVAL: 1000, // ms between the warm-up sweeps
   DISCOVERY_MAX_DEPTH: 5,    // BFS hops a single sweep may follow
+  SWEEP_CONCURRENCY: 4,      // fetches in flight per sweep round
 };
 
 
@@ -200,3 +201,23 @@ export const IMAGES = {
   CONTRACT: '/img/contract.png',
   FAUCET: '/img/faucet.png',
 };
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// NAME_MAX_LENGTH
+// -----------------------------------------------------------
+//
+// The longest address label the dialog accepts — a label is a
+// node caption drawn on the canvas, not a paragraph.
+//
+// Used by:
+//   - AddressDialog.jsx — the field's maxLength + counter
+//   - useTransactionGraph.js — renameNode, the same cut
+// -----------------------------------------------------------
+
+export const NAME_MAX_LENGTH = 64;

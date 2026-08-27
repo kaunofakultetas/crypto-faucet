@@ -69,6 +69,7 @@ class EvmFaucetTests(unittest.TestCase):
         self.assertIsInstance(entry['rpc_urls'], list)
         self.assertIsInstance(entry['block_explorer_urls'], list)
         self.assertEqual(entry['native_currency']['decimals'], 18)
+        self.assertTrue(entry['has_explorer'])
 
     def test_send_lock_is_per_network(self):
         # Same network -> same lock object; different -> different

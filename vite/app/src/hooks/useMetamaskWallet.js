@@ -13,6 +13,7 @@
 //
 //    WALLET_REFRESH_MS   — balance repoll cadence
 //    getMetamaskProvider — MetaMask's provider, nobody else's
+//    onMetamaskProvider  — called back when it announces late
 //    connectMetamask     — the connect conversation
 //    requestChainHop     — the switch/add-chain conversation
 //    signClaimMessage    — the ownership-proof conversation
@@ -40,7 +41,7 @@ const WALLET_REFRESH_MS = 1000;
 
 
 // -----------------------------------------------------------
-// getMetamaskProvider
+// getMetamaskProvider / onMetamaskProvider
 // -----------------------------------------------------------
 //
 // THE MetaMask provider — never bare window.ethereum, which
@@ -48,14 +49,21 @@ const WALLET_REFRESH_MS = 1000;
 // there too, with isMetaMask set to true, so with both
 // extensions installed every "MetaMask" call was answered by
 // Phantom's popup. EIP-6963 discovery settles it — installed
-// wallets announce themselves synchronously on request, and
-// rdns io.metamask* is an identity, not a flag anyone can
-// fake in the same way. null = treat MetaMask as not
-// installed rather than talk to a stranger.
+// wallets announce themselves on request, and rdns
+// io.metamask* is an identity, not a flag anyone can fake in
+// the same way. null = treat MetaMask as not installed rather
+// than talk to a stranger.
 //
-// Cached after the first hit — the winner cannot change
-// within a page load; a miss is retried on every call, so a
-// late-injecting extension still gets picked up.
+// Discovery is EVENT-DRIVEN and lives for the whole page: the
+// announce listener stays registered (wallets also announce
+// on their own, and some answer a request from a later tick
+// — a listener removed right after the request misses them),
+// the request is re-issued once the page has loaded, and a
+// hook that found nothing at mount is called back the moment
+// a provider shows up (onMetamaskProvider). The first
+// announcement wins, except that the stable io.metamask
+// build outranks flask / mmi — with two builds installed the
+// student gets the one they mean.
 //
 // Used by:
 //   - connectMetamask / requestChainHop (below)
@@ -64,21 +72,29 @@ const WALLET_REFRESH_MS = 1000;
 // -----------------------------------------------------------
 
 let cachedProvider = null;
+let cachedRdns = null;
+const waiters = new Set();
 
-export const getMetamaskProvider = () => {
-  if (cachedProvider) return cachedProvider;
-  if (typeof window === 'undefined') return null;
-
-  const onAnnounce = (event) => {
-    if (event.detail?.info?.rdns?.startsWith('io.metamask')) {
-      cachedProvider = event.detail.provider;
-    }
-  };
-  window.addEventListener('eip6963:announceProvider', onAnnounce);
+if (typeof window !== 'undefined') {
+  window.addEventListener('eip6963:announceProvider', (event) => {
+    const rdns = event.detail?.info?.rdns;
+    if (!rdns?.startsWith('io.metamask')) return;
+    // First one wins — unless the stable build announces after
+    // a flask / mmi build did
+    if (cachedProvider && (cachedRdns === 'io.metamask' || rdns !== 'io.metamask')) return;
+    cachedProvider = event.detail.provider;
+    cachedRdns = rdns;
+    waiters.forEach((notify) => notify(cachedProvider));
+  });
   window.dispatchEvent(new Event('eip6963:requestProvider'));
-  window.removeEventListener('eip6963:announceProvider', onAnnounce);
+  window.addEventListener('load', () => window.dispatchEvent(new Event('eip6963:requestProvider')));
+}
 
-  return cachedProvider;
+export const getMetamaskProvider = () => cachedProvider;
+
+export const onMetamaskProvider = (notify) => {
+  waiters.add(notify);
+  return () => waiters.delete(notify);
 };
 
 
@@ -120,10 +136,13 @@ async function connectMetamask() {
 //
 // The chain-hop conversation: switch MetaMask to the
 // faucet's chain. A chain it doesn't know (error 4902) is
-// added first from the network config, and the landing is
-// verified afterwards, because MetaMask can silently stay
-// put. Throws a ready-to-display Lithuanian message. Touches
-// no state — the chainChanged event reports the outcome.
+// added first from the network config — and switched to
+// again afterwards, because adding does not necessarily
+// switch (MetaMask asks twice, and a declined second prompt
+// still resolves the add). The landing is verified at the
+// end, because MetaMask can silently stay put. Throws a
+// ready-to-display Lithuanian message. Touches no state —
+// the caller records the verified landing.
 //
 // Used by:
 //   - useMetamaskWallet (below) — switchNetwork()
@@ -165,11 +184,19 @@ async function requestChainHop(networkInfo) {
     }).catch((addErr) => {
       throw new Error(`Nepavyko pridėti tinklo: ${addErr.message}`);
     });
+
+    // Adding does not necessarily switch — ask again now that
+    // the chain is known; a rejection here is the student
+    // declining, which the landing check below reports
+    await provider.request({
+      method: 'wallet_switchEthereumChain',
+      params: [{ chainId: chainIdHex }],
+    }).catch(() => {});
   }
 
   const landedOn = await provider.request({ method: 'eth_chainId' });
   if (landedOn !== chainIdHex) {
-    throw new Error('Nepavyko persijungti į reikiamą tinklą. Patikrinkite MetaMask nustatymus.');
+    throw new Error('Tinklas dar neįjungtas — paspauskite mygtuką dar kartą arba perjunkite tinklą MetaMask lange.');
   }
 }
 
@@ -215,9 +242,9 @@ async function signClaimMessage(web3, account) {
 // useMetamaskWallet (default export)
 // -----------------------------------------------------------
 //
-//   const { web3, installed, account, chainId, balance, step,
-//           connect, switchNetwork, signMessage } =
-//     useMetamaskWallet(expectedChainId)
+//   const { web3, installed, account, chainId, balance,
+//           balanceFailed, step, connect, switchNetwork,
+//           signMessage } = useMetamaskWallet(expectedChainId)
 //
 // expectedChainId is the faucet network's chain id; the
 // balance is only fetched while the wallet is actually on it,
@@ -240,30 +267,58 @@ export default function useMetamaskWallet(expectedChainId) {
   const [chainId, setChainId] = useState(null);
 
 
-  // Detect MetaMask once — its OWN provider, so another
-  // wallet squatting on window.ethereum is never mistaken for
-  // it; the listeners keep account/chain in step with what
-  // the student does inside the extension
+  // Detect MetaMask — its OWN provider, so another wallet
+  // squatting on window.ethereum is never mistaken for it. A
+  // provider that announces AFTER mount (a cold browser start,
+  // an extension that just updated) is wired the moment it
+  // arrives, so the install step can't stick on a wallet that
+  // is really there. The listeners keep account/chain in step
+  // with what the student does inside the extension; the two
+  // bootstrap reads can reject while the extension port is
+  // briefly down — the balance tick below writes the chain
+  // back, so nothing stays wrong for long.
   useEffect(() => {
+    let alive = true;
+    let detach = () => {};
+
+    const wire = (provider) => {
+      setInstalled(true);
+      const w3 = new Web3(provider);
+      setWeb3(w3);
+
+      const handleAccountsChanged = (acc) => setAccount(acc[0] ?? null);
+      const handleChainChanged = (id) => setChainId(parseInt(id, 16));
+
+      provider.on('accountsChanged', handleAccountsChanged);
+      provider.on('chainChanged', handleChainChanged);
+
+      w3.eth.getAccounts()
+        .then((acc) => { if (alive) handleAccountsChanged(acc); })
+        .catch((e) => console.warn('[metamask] eth_accounts failed', e));
+      w3.eth.getChainId()
+        .then((id) => { if (alive) setChainId(Number(id)); })
+        .catch((e) => console.warn('[metamask] eth_chainId failed', e));
+
+      detach = () => {
+        provider.removeListener('accountsChanged', handleAccountsChanged);
+        provider.removeListener('chainChanged', handleChainChanged);
+      };
+    };
+
     const provider = getMetamaskProvider();
-    if (!provider) return;
-
-    setInstalled(true);
-    const w3 = new Web3(provider);
-    setWeb3(w3);
-
-    const handleAccountsChanged = (acc) => setAccount(acc[0] ?? null);
-    const handleChainChanged = (id) => setChainId(parseInt(id, 16));
-
-    provider.on('accountsChanged', handleAccountsChanged);
-    provider.on('chainChanged', handleChainChanged);
-
-    w3.eth.getAccounts().then(handleAccountsChanged);
-    w3.eth.getChainId().then((id) => setChainId(Number(id)));
+    if (provider) {
+      wire(provider);
+    } else {
+      const forget = onMetamaskProvider((late) => {
+        forget();
+        if (alive) wire(late);
+      });
+      detach = forget;
+    }
 
     return () => {
-      provider.removeListener('accountsChanged', handleAccountsChanged);
-      provider.removeListener('chainChanged', handleChainChanged);
+      alive = false;
+      detach();
     };
   }, []);
 
@@ -271,16 +326,22 @@ export default function useMetamaskWallet(expectedChainId) {
   // Balance repoll — TanStack Query owns the timer and the
   // stale-response handling. The chain is re-checked on every
   // tick because the student can switch networks in MetaMask
-  // at any moment; a wrong-chain wallet reports null so pages
-  // never show a number from somewhere else.
-  const { data: balance = null } = useQuery({
+  // at any moment, and the read is written BACK: chainChanged
+  // is not reliably emitted (see switchNetwork), so this tick
+  // is what keeps the stepper honest. A wrong-chain wallet
+  // reports null so pages never show a number from somewhere
+  // else. A poll that FAILS (MetaMask's own RPC rejecting
+  // eth_getBalance) is reported as balanceFailed, so a page
+  // shows a dash instead of "Loading…" forever.
+  const { data: balance = null, isError: balanceFailed } = useQuery({
     queryKey: ['wallet-balance', account, expectedChainId],
     enabled: Boolean(web3 && account && expectedChainId),
     refetchInterval: WALLET_REFRESH_MS,
     retry: false,
     queryFn: async () => {
-      const currentId = await web3.eth.getChainId();
-      if (Number(currentId) !== Number(expectedChainId)) return null;
+      const currentId = Number(await web3.eth.getChainId());
+      setChainId(currentId);
+      if (currentId !== Number(expectedChainId)) return null;
       return await web3.eth.getBalance(account);
     },
   });
@@ -315,5 +376,5 @@ export default function useMetamaskWallet(expectedChainId) {
     : 3;
 
 
-  return { web3, installed, account, chainId, balance, step, connect, switchNetwork, signMessage };
+  return { web3, installed, account, chainId, balance, balanceFailed, step, connect, switchNetwork, signMessage };
 }

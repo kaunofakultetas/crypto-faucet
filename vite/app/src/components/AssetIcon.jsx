@@ -30,7 +30,7 @@
 //    - pages/Faucet_UTXO/Page.jsx — page title
 // -----------------------------------------------------------
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { Box } from '@mui/material';
 
@@ -89,6 +89,15 @@ function colorFromString(input) {
 export default function AssetIcon({ assetKey, icon = null, size = 10, inline = false }) {
 
   const [broken, setBroken] = useState(false);
+
+
+  // The latch is per INSTANCE, and a page title keeps its
+  // instance across network switches — without this reset one
+  // failed fetch would show the dot for every asset after it
+  useEffect(() => {
+    setBroken(false);
+  }, [icon]);
+
 
   // vertical-align: middle centres on the x-height, which sits
   // a hair LOW beside a title's capital letters — the translate

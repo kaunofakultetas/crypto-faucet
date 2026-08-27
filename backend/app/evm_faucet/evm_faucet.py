@@ -614,6 +614,10 @@ class EVMFaucet:
                 'native_currency': metamask.get('native_currency'),
                 'rpc_urls': metamask.get('rpc_urls', []),
                 'block_explorer_urls': metamask.get('block_explorer_urls', []),
+                # Whether /graph exists for this chain — an explorer
+                # section with an API URL; the page hides the graph
+                # button without it instead of showing an empty graph
+                'has_explorer': bool(config.get('explorer', {}).get('etherscan_api_url')),
             }
 
         default_key = DEFAULT_NETWORK if DEFAULT_NETWORK in networks else min(

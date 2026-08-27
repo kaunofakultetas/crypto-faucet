@@ -13,10 +13,12 @@
 //  its own arrangement.
 //
 //  This file is only the thin shell: the canvas div, the zoom
-//  panel and the right-click naming dialog. All graph state
-//  and logic live in useTransactionGraph.js (which pulls in
-//  useNodePositions.js for the dragged-X persistence);
-//  ZoomControls.jsx and AddressDialog.jsx render the chrome.
+//  panel, the right-click naming dialog and the notice shown
+//  while the backend cannot be reached (an outage must not
+//  look like a quiet day). All graph state and logic live in
+//  useTransactionGraph.js (which pulls in useNodePositions.js
+//  for the dragged-X persistence); ZoomControls.jsx and
+//  AddressDialog.jsx render the chrome.
 // -----------------------------------------------------------
 
 import { useState } from 'react';
@@ -44,12 +46,14 @@ import AddressDialog from './AddressDialog';
 
 export default function CryptoFlowGraph({ faucetAddress, network, dateRange, live, day, currencySymbol }) {
 
-  // Right-click dialog: which address, and the name draft
+  // Right-click dialog: which address, the name draft, and
+  // the save error that keeps the dialog open
   const [nameDialogOpen, setNameDialogOpen] = useState(false);
   const [selectedAddress, setSelectedAddress] = useState(null);
   const [tempName, setTempName] = useState('');
+  const [saveError, setSaveError] = useState(null);
 
-  const { containerRef, scale, setZoom, zoomIn, zoomOut, renameNode } = useTransactionGraph({
+  const { containerRef, scale, setZoom, zoomIn, zoomOut, renameNode, failed } = useTransactionGraph({
     faucetAddress,
     network,
     dateRange,
@@ -59,28 +63,52 @@ export default function CryptoFlowGraph({ faucetAddress, network, dateRange, liv
     onNodeRightClick: (address, currentName) => {
       setSelectedAddress(address);
       setTempName(currentName);
+      setSaveError(null);
       setNameDialogOpen(true);
     },
   });
 
 
-  const saveAddressName = () => {
-    renameNode(selectedAddress, tempName);
+  const closeDialog = () => {
+    setSaveError(null);
     setNameDialogOpen(false);
+  };
+
+  // The dialog closes only on a saved name — a lost write is
+  // shown under the field, not swallowed
+  const saveAddressName = async () => {
+    const saved = await renameNode(selectedAddress, tempName);
+    if (saved) {
+      closeDialog();
+    } else {
+      setSaveError('Nepavyko išsaugoti pavadinimo. Bandykite dar kartą.');
+    }
   };
 
 
   return (
     // flex-1 + min-h-0: the canvas fills whatever height the
     // page's flex column has left after the date bar — sizing
-    // lives in the parent, not in a hardcoded calc here
-    <div className="min-h-0 flex-1">
+    // lives in the parent, not in a hardcoded calc here. The
+    // canvas box is positioned ABSOLUTELY inside that area: a
+    // flex-grown height is not "definite" for a percentage
+    // child (height: 100% collapsed to nothing), while inset: 0
+    // takes the laid-out size as is.
+    <div className="relative min-h-0 flex-1">
       {/* The graph canvas with the zoom panel floating on top */}
-      <Box sx={{ position: 'relative', height: '100%' }}>
+      <Box sx={{ position: 'absolute', inset: 0 }}>
         <div
           ref={containerRef}
           style={{ height: '100%', width: '100%', border: '1px solid #ddd' }}
         />
+
+        {/* Outage notice — the last fetch failed; the canvas keeps
+            showing what was fetched before it */}
+        {failed && (
+          <div className="pointer-events-none absolute left-1/2 top-3 -translate-x-1/2 rounded-md border border-red-200 bg-red-50 px-3 py-1 text-sm text-red-700">
+            Nepavyko atnaujinti grafiko — rodomi paskutiniai gauti duomenys
+          </div>
+        )}
 
         <ZoomControls
           scale={scale}
@@ -95,10 +123,11 @@ export default function CryptoFlowGraph({ faucetAddress, network, dateRange, liv
 
       <AddressDialog
         open={nameDialogOpen}
-        onClose={() => setNameDialogOpen(false)}
+        onClose={closeDialog}
         name={tempName}
         setName={setTempName}
         address={selectedAddress}
+        error={saveError}
         onSave={saveAddressName}
       />
     </div>

@@ -422,6 +422,7 @@ class ExplorerServeTests(ExplorerTestCase):
 
         self.assertEqual(flows[0]['from_name'], 'KNF Faucet')
         self.assertEqual(flows[0]['to_addr_contract'], 1)
+        self.assertEqual(flows[0]['from_addr_contract'], 0)
 
     def test_other_networks_are_not_mixed_in(self):
         self.store([make_tx(FAUCET, STUDENT, 100, timestamp=str(self.DAY))])

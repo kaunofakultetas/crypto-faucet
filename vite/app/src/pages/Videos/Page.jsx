@@ -120,7 +120,7 @@ function VideoCard({ title, description, src }) {
 
 export default function VideosPage() {
   return (
-    <Box className="flex justify-center min-h-[calc(100vh-105px)] p-8">
+    <Box className="flex flex-1 justify-center p-8">
       <Box className="max-w-4xl w-full">
 
         {/* Title */}

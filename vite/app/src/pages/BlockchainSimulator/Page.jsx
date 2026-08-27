@@ -14,6 +14,16 @@
 //  SHA256 online tool. The backend's example blocks were
 //  mined against the same format.
 //
+//  Mining runs in animation-frame slices: the tab keeps
+//  painting, the pickaxe counts the hashes tried and turns
+//  into a stop button — the wait at difficulty 5 is still
+//  the lesson, a frozen "page unresponsive" tab is not.
+//
+//  Styling note: Tailwind utilities on a RoundedBox or a MUI
+//  Button lose to the emotion rules on the same element
+//  (unlayered CSS beats Tailwind v4's layers), so card sizing
+//  lives in sx and the class lists carry only what applies.
+//
 //  Split into (root component last):
 //
 //    LITHUANIAN_NAMES            — cast for the transactions
@@ -24,6 +34,7 @@
 //    createGenesisBlock          — block #0 (Satoshi coinbase)
 //    createFirstBlock            — block #1 chained onto #0
 //    useBlockchain               — chain state + mining logic
+//                                  (sliced, counted, stoppable)
 //    RoundedBox                  — the white card every
 //                                  section sits in (styled)
 //    CopiedToast                 — "Nukopijuota!" bubble
@@ -156,6 +167,9 @@ const createFirstBlock = (genesisBlock) => {
 //     isValidHash,           — does a hash meet difficulty?
 //     modifyBlockField,      — (index, 'data'|'nonce', event)
 //     mineBlock,             — (index) brute-force the nonce
+//     mining,                — { index, tried } while a search
+//                              runs, null when idle
+//     stopMining,            — abandon the running search
 //     addBlock,              — append an unmined block
 //     loadExampleBlockchain, — replace chain from the backend
 //     exampleLoading,        — that request is in flight
@@ -178,6 +192,16 @@ function useBlockchain() {
   // Difficulty = required count of leading hash zeros
   const [difficulty, setDifficulty] = useState(4);
 
+  // The block being mined and how many nonces it has tried —
+  // shown on its pickaxe button; null when idle. cancelRef is
+  // the stop button's flag, read between animation frames.
+  const [mining, setMining] = useState(null);
+  const cancelRef = useRef(false);
+
+
+  // Leaving the page abandons a search in progress
+  useEffect(() => () => { cancelRef.current = true; }, []);
+
 
   // Reads the live difficulty, so moving the selector
   // re-colours every block without touching a single hash
@@ -187,19 +211,18 @@ function useBlockchain() {
 
 
   // The ripple: re-link and re-hash every block from
-  // startIndex to the end. Blocks keep their old nonce, which
-  // is why one upstream edit turns the whole tail red. Mutates
-  // the block objects in place — callers fork the array, and
-  // the fresh array reference is what triggers the re-render.
-  const recalculateFromIndex = (updatedBlocks, startIndex) => {
-    for (let i = startIndex; i < updatedBlocks.length; i++) {
-      updatedBlocks[i].previousHash = i > 0 ? updatedBlocks[i - 1].hash : '0';
-      updatedBlocks[i].hash = calculateHash(
-        updatedBlocks[i].previousHash,
-        updatedBlocks[i].nonce,
-        updatedBlocks[i].data
-      );
+  // startIndex to the end, as a NEW array of new objects —
+  // the blocks held in React state are never written to, so
+  // a memoized BlockCard or a functional setBlocks would see
+  // the change too. Blocks keep their old nonce, which is why
+  // one upstream edit turns the whole tail red.
+  const recalculateFromIndex = (blocksIn, startIndex) => {
+    const out = blocksIn.slice();
+    for (let i = startIndex; i < out.length; i++) {
+      const previousHash = i > 0 ? out[i - 1].hash : '0';
+      out[i] = { ...out[i], previousHash, hash: calculateHash(previousHash, out[i].nonce, out[i].data) };
     }
+    return out;
   };
 
 
@@ -210,45 +233,76 @@ function useBlockchain() {
   const modifyBlockField = (blockIndex, field, event) => {
     const updatedBlocks = [...blocks];
     updatedBlocks[blockIndex] = { ...updatedBlocks[blockIndex], [field]: event.target.value };
-    recalculateFromIndex(updatedBlocks, blockIndex);
-    setBlocks(updatedBlocks);
+    setBlocks(recalculateFromIndex(updatedBlocks, blockIndex));
   };
 
 
   // Proof-of-work: brute-force the nonce from 0 until the hash
-  // gains its zeros. Runs synchronously on the UI thread, so
-  // difficulty 5 visibly freezes the tab for a moment — that
-  // pause is part of the lesson.
+  // gains its zeros. Runs in ~16 ms animation-frame slices, so
+  // the tab keeps painting: the pickaxe counts the hashes
+  // tried and offers a stop — the wait at difficulty 5 (about
+  // a million SHA-256s) is still the lesson, a frozen tab is
+  // not. The preimage is fixed when the search starts; if the
+  // student edits the block meanwhile, the result is dropped
+  // rather than committed against the wrong data.
   const mineBlock = (blockIndex) => {
-    const updatedBlocks = [...blocks];
-    const block = updatedBlocks[blockIndex];
-    let newNonce = 0;
-    let newHash = block.hash;
+    const block = blocks[blockIndex];
+    const prefix = '0'.repeat(difficulty);
+    let nonce = 0;
+    cancelRef.current = false;
+    setMining({ index: blockIndex, tried: 0 });
 
-    while (!isValidHash(newHash)) {
-      newNonce++;
-      newHash = calculateHash(block.previousHash, newNonce, block.data);
-    }
+    const step = () => {
+      if (cancelRef.current) {
+        setMining(null);
+        return;
+      }
 
-    // Only the tail after this block needs the ripple — this
-    // block was just re-hashed by the loop
-    updatedBlocks[blockIndex] = { ...block, nonce: newNonce, hash: newHash };
-    recalculateFromIndex(updatedBlocks, blockIndex + 1);
-    setBlocks(updatedBlocks);
+      const deadline = performance.now() + 16;
+      while (performance.now() < deadline) {
+        const hash = calculateHash(block.previousHash, nonce, block.data);
+        if (hash.startsWith(prefix)) {
+          const found = nonce;
+          setBlocks((current) => {
+            const target = current[blockIndex];
+            if (!target || target.previousHash !== block.previousHash || target.data !== block.data) return current;
+            const updated = [...current];
+            updated[blockIndex] = { ...target, nonce: found, hash };
+            // Only the tail after this block needs the ripple —
+            // this block was just hashed by the search
+            return recalculateFromIndex(updated, blockIndex + 1);
+          });
+          setMining(null);
+          return;
+        }
+        nonce++;
+      }
+
+      setMining({ index: blockIndex, tried: nonce });
+      requestAnimationFrame(step);
+    };
+
+    requestAnimationFrame(step);
+  };
+
+  const stopMining = () => {
+    cancelRef.current = true;
   };
 
 
   // Appends an unmined block (nonce 0 → arrives red) chained
-  // onto the current tail, with a random coinbase + payment
+  // onto the current tail — or onto '0' like a genesis block,
+  // should the chain ever be empty — with a random coinbase +
+  // payment
   const addBlock = () => {
-    const lastBlock = blocks[blocks.length - 1];
+    const lastHash = blocks.length ? blocks[blocks.length - 1].hash : '0';
     const data = `${generateCoinbaseTransaction(randomName())}\n${generateRandomTransaction()}`;
 
     const newBlock = {
       data,
-      previousHash: lastBlock.hash,
+      previousHash: lastHash,
       nonce: 0,
-      hash: calculateHash(lastBlock.hash, 0, data),
+      hash: calculateHash(lastHash, 0, data),
     };
 
     setBlocks([...blocks, newBlock]);
@@ -259,9 +313,18 @@ function useBlockchain() {
   // the backend. A mutation, not a query: the student decides
   // when their edits are thrown away, and on failure the
   // current chain stays untouched while the control panel
-  // shows the error.
+  // shows the error. The answer is checked before it replaces
+  // anything — an emptied table (dbgate) or a wrong shape is a
+  // failure, not a chain of nothing.
   const exampleChain = useMutation({
-    mutationFn: async () => (await axios.get('/api/get-example-blockchain')).data,
+    mutationFn: async () => {
+      const { data } = await axios.get('/api/get-example-blockchain');
+      const wellFormed = Array.isArray(data) && data.length > 0 && data.every(
+        (block) => typeof block?.hash === 'string' && typeof block?.previousHash === 'string' && typeof block?.data === 'string',
+      );
+      if (!wellFormed) throw new Error('Malformed example chain');
+      return data;
+    },
     onSuccess: (data) => setBlocks(data),
   });
 
@@ -273,6 +336,8 @@ function useBlockchain() {
     isValidHash,
     modifyBlockField,
     mineBlock,
+    mining,
+    stopMining,
     addBlock,
     loadExampleBlockchain: exampleChain.mutate,
     exampleLoading: exampleChain.isPending,
@@ -377,7 +442,7 @@ function CopiedToast({ copiedMessage }) {
 
 function ControlPanel({ difficulty, onDifficultyChange, onLoadExample, exampleLoading, exampleError }) {
   return (
-    <RoundedBox className="w-full max-w-6xl p-6" sx={{ width: 1000, maxWidth: '95vw' }}>
+    <RoundedBox sx={{ width: 1000, maxWidth: '95vw' }}>
 
       <FormControl fullWidth sx={{ marginBottom: 2 }}>
         <InputLabel>Sudėtingumas - (Pradiniai Nuliukai)</InputLabel>
@@ -399,7 +464,17 @@ function ControlPanel({ difficulty, onDifficultyChange, onLoadExample, exampleLo
           {exampleLoading ? 'Kraunama…' : 'Užkrauti pavyzdinę blokų grandinę'}
         </Button>
 
-        <Button variant="contained" color="primary" onClick={() => window.open('https://emn178.github.io/online-tools/sha256.html', '_blank')}>
+        {/* An anchor, not window.open: the anchor form gets an
+            implicit noopener, so the tool's page cannot steer
+            this tab */}
+        <Button
+          component="a"
+          href="https://emn178.github.io/online-tools/sha256.html"
+          target="_blank"
+          rel="noopener noreferrer"
+          variant="contained"
+          color="primary"
+        >
           SHA256 Online Įrankis
         </Button>
       </Box>
@@ -426,30 +501,43 @@ function ControlPanel({ difficulty, onDifficultyChange, onLoadExample, exampleLo
 //
 // One editable block: both hashes, the nonce and transactions
 // inputs, the copy button and the pickaxe mining button
-// (disabled once the block is already valid). Green while
-// valid, red once broken. Owns the copy flow end-to-end: puts
-// the exact hash preimage on the clipboard and flashes its
-// own "Nukopijuota!" toast at the cursor.
+// (disabled once the block is already valid, or while another
+// block is being mined; while THIS block is being mined it
+// shows the hashes tried and stops the search on click).
+// Green while valid, red once broken. Owns the copy flow
+// end-to-end: puts the exact hash preimage on the clipboard
+// and flashes its own "Nukopijuota!" toast at the cursor —
+// only when the copy actually happened.
 //
 // Used by:
 //   - BlockchainSimulator (below) — one per block
 // -----------------------------------------------------------
 
-function BlockCard({ block, index, isValid, onNonceChange, onDataChange, onMine }) {
+function BlockCard({ block, index, isValid, mining, miningElsewhere, onNonceChange, onDataChange, onMine, onStop }) {
 
   const [copiedMessage, setCopiedMessage] = useState({ visible: false, x: 0, y: 0 });
 
 
   // Copies the block's exact hash preimage (what calculateHash
   // hashes) and flashes the toast 10px above the cursor for
-  // 2 seconds — coords are document-absolute (cursor + scroll)
-  const copyBlockData = (event) => {
-    navigator.clipboard.writeText(`${block.previousHash}\n${block.nonce}\n${block.data}`);
+  // 2 seconds — coords are document-absolute (cursor + scroll).
+  // The clipboard API is missing on a plain-http dev host and
+  // rejects on denied permission — neither may claim success,
+  // or the student verifies a stale clipboard in the SHA256
+  // tool and blames the simulator.
+  const copyBlockData = async (event) => {
+    const { clientX, clientY } = event;
+    try {
+      await navigator.clipboard.writeText(`${block.previousHash}\n${block.nonce}\n${block.data}`);
+    } catch (error) {
+      console.warn('Copy failed:', error);
+      return;
+    }
 
     setCopiedMessage({
       visible: true,
-      x: event.clientX + window.scrollX,
-      y: event.clientY + window.scrollY - 10,
+      x: clientX + window.scrollX,
+      y: clientY + window.scrollY - 10,
     });
 
     setTimeout(() => {
@@ -459,7 +547,7 @@ function BlockCard({ block, index, isValid, onNonceChange, onDataChange, onMine 
 
 
   return (
-    <RoundedBox className="w-full max-w-6xl p-6" sx={{ width: 1000, maxWidth: '95vw' }}>
+    <RoundedBox sx={{ width: 1000, maxWidth: '95vw' }}>
 
       <CopiedToast copiedMessage={copiedMessage} />
 
@@ -513,11 +601,13 @@ function BlockCard({ block, index, isValid, onNonceChange, onDataChange, onMine 
           <Button
             variant="contained"
             color="primary"
-            disabled={isValid}
-            onClick={onMine}
-            className="px-8"
+            disabled={isValid || miningElsewhere}
+            onClick={mining !== null ? onStop : onMine}
+            sx={{ textTransform: 'none' }}
           >
-            <GiMining size={35} />
+            {mining !== null
+              ? `Stabdyti · ${mining.toLocaleString('lt-LT')} bandymų`
+              : <GiMining size={35} />}
           </Button>
         </div>
 
@@ -542,7 +632,7 @@ function BlockCard({ block, index, isValid, onNonceChange, onDataChange, onMine 
 
 function AddBlockButton({ onClick }) {
   return (
-    <RoundedBox className="w-full max-w-6xl flex justify-center mb-20" sx={{ width: 1000, maxWidth: '95vw' }}>
+    <RoundedBox className="flex justify-center" sx={{ width: 1000, maxWidth: '95vw' }}>
       <Button
         variant="contained"
         color="primary"
@@ -571,6 +661,9 @@ function AddBlockButton({ onClick }) {
 // block, green/red by validity. Scroll-syncs itself: the
 // window's scroll ratio is mapped onto its own scrollbar, so
 // it tracks the page as the chain grows beyond one screen.
+// Shown from the xl breakpoint up only — on a narrower window
+// it floated over the cards' column and covered the pickaxe;
+// the page reserves its width with xl:pr-56.
 //
 // Used by:
 //   - BlockchainSimulator (below) — the right column
@@ -599,7 +692,7 @@ function Minimap({ blocks, isValidHash }) {
   return (
     <div
       ref={minimapRef}
-      className="fixed top-24 right-4 flex flex-col items-center bg-gray-100 rounded-lg p-4 shadow-lg max-h-[80vh] overflow-y-auto"
+      className="hidden xl:flex fixed top-24 right-4 z-30 flex-col items-center bg-gray-100 rounded-lg p-4 shadow-lg max-h-[80vh] overflow-y-auto"
     >
       <Typography variant="h6" className="text-center mb-4">
         Blokų Grandinės<br />
@@ -644,7 +737,7 @@ export default function BlockchainSimulator() {
 
   const {
     blocks, difficulty, setDifficulty, isValidHash,
-    modifyBlockField, mineBlock, addBlock,
+    modifyBlockField, mineBlock, mining, stopMining, addBlock,
     loadExampleBlockchain, exampleLoading, exampleError,
   } = useBlockchain();
 
@@ -652,8 +745,9 @@ export default function BlockchainSimulator() {
   return (
     // A single centered column — the minimap doesn't need a
     // column of its own, it floats position:fixed at the
-    // page's top-right regardless of where it is rendered
-    <div className="mx-auto flex max-w-7xl flex-col items-center">
+    // page's top-right regardless of where it is rendered;
+    // the xl right padding keeps the cards out from under it
+    <div className="mx-auto flex max-w-7xl flex-col items-center xl:pr-56">
 
       {/* Title */}
       <div className="mx-auto p-4 min-w-80 max-w-2xl w-full">
@@ -682,9 +776,12 @@ export default function BlockchainSimulator() {
             block={block}
             index={index}
             isValid={isValidHash(block.hash)}
+            mining={mining?.index === index ? mining.tried : null}
+            miningElsewhere={mining !== null && mining.index !== index}
             onNonceChange={(event) => modifyBlockField(index, 'nonce', event)}
             onDataChange={(event) => modifyBlockField(index, 'data', event)}
             onMine={() => mineBlock(index)}
+            onStop={stopMining}
           />
         ))}
       </Box>

@@ -2,12 +2,17 @@
 //  [*] Graph — AddressDialog
 //
 //  The right-click dialog of a node: rename the address (the
-//  parent saves on Išsaugoti) and copy the raw address, with a
-//  1 s "Nukopijuota" tooltip as feedback. The backdrop blurs
-//  the graph instead of dimming it.
+//  parent saves on Išsaugoti — an empty name clears the label,
+//  the field is capped at NAME_MAX_LENGTH, and a failed save
+//  shows under the field instead of closing the dialog) and
+//  copy the raw address, with a 1 s "Nukopijuota" tooltip as
+//  feedback. The backdrop blurs the graph instead of dimming
+//  it.
 // -----------------------------------------------------------
 
 import { useState } from 'react';
+
+import { NAME_MAX_LENGTH } from '../constants';
 
 import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
@@ -62,7 +67,7 @@ const copyToClipboard = async (text) => {
 //   - CryptoFlowGraph.jsx — opened by the right-click handler
 // -----------------------------------------------------------
 
-export default function AddressDialog({ open, onClose, name, setName, address, onSave }) {
+export default function AddressDialog({ open, onClose, name, setName, address, error = null, onSave }) {
 
   const [copyHintOpen, setCopyHintOpen] = useState(false);
 
@@ -89,7 +94,15 @@ export default function AddressDialog({ open, onClose, name, setName, address, o
 
       <DialogContent dividers>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-          <TextField fullWidth label="Adreso pavadinimas" value={name} onChange={(e) => setName(e.target.value)} />
+          <TextField
+            fullWidth
+            label="Adreso pavadinimas"
+            value={name}
+            onChange={(e) => setName(e.target.value.slice(0, NAME_MAX_LENGTH))}
+            inputProps={{ maxLength: NAME_MAX_LENGTH }}
+            error={Boolean(error)}
+            helperText={error ?? `${name.length}/${NAME_MAX_LENGTH}`}
+          />
         </Box>
 
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>

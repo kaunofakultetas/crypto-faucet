@@ -17,7 +17,9 @@
 //  /api/evm/networks and also feeds MetaMask's
 //  wallet_addEthereumChain when the chain is missing there.
 //  The page shows skeletons until both the metadata and the
-//  faucet info have arrived.
+//  faucet info have arrived; a catalog that failed, or a
+//  :network the catalog does not know, gets an error card
+//  instead of skeletons forever.
 //
 //  Split into (root component last):
 //
@@ -27,7 +29,7 @@
 //    FaucetEVM         — page state + layout (default export)
 // -----------------------------------------------------------
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import QRCode from 'react-qr-code';
@@ -39,6 +41,7 @@ import HubIcon from '@mui/icons-material/Hub';
 import useMetamaskWallet from '@/hooks/useMetamaskWallet';
 import { WalletStepper, WalletGateButton, FadingAlert, useAlerts } from '@/components/WalletFlow';
 import AssetIcon from '@/components/AssetIcon';
+import ErrorCard from '@/components/ErrorCard';
 
 
 // How often the faucet balance repolls
@@ -54,7 +57,8 @@ const FAUCET_REFRESH_MS = 3000;
 // useFaucetInfo
 // -----------------------------------------------------------
 //
-//   const { networkInfo, faucetInfo } = useFaucetInfo(network)
+//   const { networkInfo, faucetInfo, catalogFailed,
+//           unknownNetwork } = useFaucetInfo(network)
 //
 // The backend side of the page as two TanStack queries: the
 // network's metadata (chain id, names, RPC urls — from
@@ -63,8 +67,11 @@ const FAUCET_REFRESH_MS = 3000;
 // the faucet info ({ address, balance, chunk_size }),
 // polling every 3 s once the metadata is in.
 // A network switch changes the query keys, so the previous
-// chain's numbers never linger. Failures leave the data
-// empty — the page keeps its skeletons.
+// chain's numbers never linger. A failed faucet poll keeps
+// the last payload; a catalog that never arrived
+// (catalogFailed) and a :network the catalog does not know
+// (unknownNetwork) are reported apart, so the page can say
+// so instead of showing skeletons forever.
 //
 // Used by:
 //   - FaucetEVM (below)
@@ -72,12 +79,15 @@ const FAUCET_REFRESH_MS = 3000;
 
 function useFaucetInfo(network) {
 
-  const { data: networksData } = useQuery({
+  const { data: networksData, isError: catalogError } = useQuery({
     queryKey: ['evm-networks'],
     queryFn: async () => (await axios.get('/api/evm/networks')).data,
     staleTime: 5 * 60 * 1000,
   });
-  const networkInfo = networksData?.networks?.[network] ?? null;
+  const networks = networksData?.networks ?? null;
+  const networkInfo = networks?.[network] ?? null;
+  const catalogFailed = catalogError && !networks;
+  const unknownNetwork = Boolean(networks) && !networkInfo;
 
   const { data: faucetInfo = null } = useQuery({
     queryKey: ['evm-faucet-balance', network],
@@ -86,7 +96,7 @@ function useFaucetInfo(network) {
     refetchInterval: FAUCET_REFRESH_MS,
   });
 
-  return { networkInfo, faucetInfo };
+  return { networkInfo, faucetInfo, catalogFailed, unknownNetwork };
 }
 
 
@@ -162,40 +172,67 @@ export default function FaucetEVM() {
   const { network } = useParams();
   const navigate = useNavigate();
 
-  const { networkInfo, faucetInfo } = useFaucetInfo(network);
+  const { networkInfo, faucetInfo, catalogFailed, unknownNetwork } = useFaucetInfo(network);
   const wallet = useMetamaskWallet(networkInfo?.chain_id);
-  const { alerts, addAlert } = useAlerts();
+  const { alerts, addAlert, clearAlerts } = useAlerts();
   const queryClient = useQueryClient();
 
-  const [claiming, setClaiming] = useState(false);
+  // Which network a claim is in flight FOR — a switch in the
+  // picker keeps this component mounted, so a plain boolean
+  // would lock the new chain's button behind the old chain's
+  // request, and a late answer would land on the wrong page
+  const [claimingFor, setClaimingFor] = useState(null);
+  const claiming = claimingFor === network;
+  const networkRef = useRef(network);
+
+
+  // A network switch drops the outcome rows — they talk about
+  // the previous chain — and notes the switch for any request
+  // still in flight
+  useEffect(() => {
+    networkRef.current = network;
+    clearAlerts();
+  }, [network, clearAlerts]);
 
 
   // Sign the ownership message and let the backend verify it
   // before paying out — no transaction on the student's side.
   // A successful claim invalidates the balance query, so the
   // faucet's number drops immediately instead of on the next
-  // poll.
+  // poll. An answer that arrives after a network switch is
+  // dropped: it belongs to the chain it was issued for.
   const claimNative = async () => {
-    setClaiming(true);
+    const forNetwork = network;
+    setClaimingFor(forNetwork);
     try {
       const { nonce, signature } = await wallet.signMessage();
 
-      await axios.get(`/api/evm/${network}/request`, {
+      await axios.get(`/api/evm/${forNetwork}/request`, {
         params: { address: wallet.account, signature, nonce },
       });
 
+      queryClient.invalidateQueries({ queryKey: ['evm-faucet-balance', forNetwork] });
+      if (networkRef.current !== forNetwork) return;
       addAlert('success', `${networkInfo.full_name} išsiųstas į jūsų piniginę.`);
-      queryClient.invalidateQueries({ queryKey: ['evm-faucet-balance', network] });
     } catch (e) {
       // Backend refusals arrive as { error } in the response
       // body; wallet errors (sign refused, not connected) only
       // carry a message
+      if (networkRef.current !== forNetwork) return;
       addAlert('error', e.response?.data?.error || e.message || 'Nepavyko išsiųsti kriptovaliutos.');
     } finally {
-      setClaiming(false);
+      setClaimingFor((current) => (current === forNetwork ? null : current));
     }
   };
 
+
+  if (catalogFailed) {
+    return <ErrorCard>Nepavyko gauti tinklų sąrašo. Perkraukite puslapį.</ErrorCard>;
+  }
+
+  if (unknownNetwork) {
+    return <ErrorCard>Nežinomas tinklas: {network}</ErrorCard>;
+  }
 
   if (!networkInfo || !faucetInfo) {
     return <LoadingSkeleton />;
@@ -203,9 +240,11 @@ export default function FaucetEVM() {
 
   const faucetAddress = faucetInfo.address.toLowerCase();
 
+  // Three states that must not blur: no wallet or a dead RPC
+  // is a dash, a poll still in flight is "Loading…"
   const formatBalance = (bal) => {
+    if (!wallet.web3 || wallet.balanceFailed) return '-';
     if (bal == null) return 'Loading…';
-    if (!wallet.web3) return '-';
     return `${parseFloat(wallet.web3.utils.fromWei(bal, 'ether')).toFixed(3)} ${networkInfo.short_name}`;
   };
 
@@ -291,15 +330,22 @@ export default function FaucetEVM() {
           <span className="flex-1">
             Grąžinkite nebereikalingą <u><b>{networkInfo.short_name}</b></u> krypto atgal:
             <br /><br />{faucetAddress}
-            <br /><br />
-            <Button
-              variant="contained"
-              onClick={() => navigate(`/graph/${network}`)}
-              startIcon={<HubIcon />}
-              sx={{ padding: '10px 16px' }}
-            >
-              Transakcijų srautas
-            </Button>
+            {/* The graph needs an explorer behind it — a chain
+                without one gets no button rather than an empty
+                graph */}
+            {networkInfo.has_explorer !== false && (
+              <>
+                <br /><br />
+                <Button
+                  variant="contained"
+                  onClick={() => navigate(`/graph/${network}`)}
+                  startIcon={<HubIcon />}
+                  sx={{ padding: '10px 16px' }}
+                >
+                  Transakcijų srautas
+                </Button>
+              </>
+            )}
           </span>
           <QRCode value={faucetAddress} size={128} />
         </div>
