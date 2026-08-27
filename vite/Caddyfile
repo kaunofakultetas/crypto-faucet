@@ -1,4 +1,5 @@
 :80 {
+    encode zstd gzip
     handle {
         root * /app/dist
         try_files {path} /index.html
