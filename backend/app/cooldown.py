@@ -9,7 +9,15 @@
 #  lock and get paid twice. Here the first request claims the
 #  slot under the lock and every later one is refused until
 #  the claim expires — a failed payout releases the slot so a
-#  student is never locked out by an error.
+#  student is never locked out by an error. EVERY failure
+#  releases, including a broadcast that timed out and may
+#  have reached the node anyway, so the retry can pay a
+#  second chunk. Accepted: a rare double payout of testnet
+#  coin beats a student stuck behind an error. release()
+#  likewise gives back whatever claim the key holds: a
+#  payout that outlives the window and then fails releases
+#  the NEWER claim recorded meanwhile — a claim token would
+#  fix it; the same rare extra chunk is accepted.
 #
 #  Deliberately in-memory: the table resets on restart and a
 #  freshly generated wallet walks around it — both accepted

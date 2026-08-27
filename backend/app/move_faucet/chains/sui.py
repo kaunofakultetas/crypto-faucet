@@ -29,4 +29,8 @@ COIN_TYPE = '0x2::sui::SUI'
 # margin is deliberately generous
 FEE_MIST = 10_000_000
 
+# 'mainnet' is listed for completeness only: the faucet signs
+# node-built transaction bytes unverified (see
+# MoveFaucet._sign_transaction), so point it at nothing that
+# holds real value.
 NETWORKS = ('mainnet', 'testnet', 'devnet')

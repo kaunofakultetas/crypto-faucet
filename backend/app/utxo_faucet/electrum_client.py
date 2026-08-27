@@ -6,7 +6,13 @@
 #  faucet needs. Knows NOTHING about faucets, configs or
 #  networks — it gets an endpoint string and talks protocol.
 #  The servers run self-signed certificates, so certificate
-#  verification is off.
+#  verification is off — weighed, not forgotten: the hop is
+#  raw TLS end to end (the exit proxies bytes), so an on-path
+#  attacker could feed false balances or swallow a broadcast,
+#  but never sees the key (embit signs locally) and cannot
+#  redirect a payout (the recipient comes from the HTTP
+#  request). Accepted over shipping and rotating a pinned
+#  certificate.
 #
 #  Built to stay ALIVE: one instance per network lives for
 #  the whole process. The internal lock serializes the strict

@@ -7,7 +7,7 @@
 #
 #  Used by:
 #    - main.py, the evm/erc20 explorer, the blockchain
-#      simulator route, the reorg attack module, db_init.py
+#      simulator route, db_init.py
 #      and tools/ — every SQL statement in the app goes
 #      through this helper
 ############################################################

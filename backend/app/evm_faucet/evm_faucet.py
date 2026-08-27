@@ -320,11 +320,17 @@ class EVMFaucet:
     #
     # Recovers the signer from an EIP-191 personal_sign
     # signature and checks it matches the address asking for
-    # coins — proves the requester actually controls that
-    # wallet. Any decoding hiccup counts as "not verified".
+    # coins — proves the requester controls (or once
+    # controlled) that wallet, nothing more: the message is
+    # bound to no chain, token or moment, so a captured claim
+    # stays valid. Accepted — it can only ever pay the
+    # signer's own address with testnet coin, and a fresh
+    # keypair is cheaper than a replay anyway. Any decoding
+    # hiccup counts as "not verified".
     #
     # Used by:
     #   - request_eth (below)
+    #   - erc_faucet/erc20_faucet.py — request_tokens
     ############################################################
 
     def verify_signature(self, network, address, message, signature):
@@ -495,8 +501,11 @@ class EVMFaucet:
         # fills the nonce and chain id, signs and broadcasts.
         # gasPrice is passed explicitly to force a LEGACY transaction
         # — several of the configured testnets have spotty EIP-1559
-        # support. The generous gas limit costs nothing, unused gas
-        # is refunded.
+        # support — and is quoted once, never bumped: an
+        # under-priced payout waits until the mempool drops it, and
+        # the chain's payouts queue behind it meanwhile. Accepted
+        # over a fee-bump daemon. The generous gas limit costs
+        # nothing, unused gas is refunded.
         # ===========================================================
         try:
             with self.send_lock_for(network):

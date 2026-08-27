@@ -498,7 +498,10 @@ class ERC20Faucet:
         # per chain (zkSync-style chains want very different numbers
         # than the classic 100k) with a safe fallback; gasPrice is
         # explicit to force a LEGACY transaction — several testnets
-        # have spotty EIP-1559 support.
+        # have spotty EIP-1559 support — and is quoted once, never
+        # bumped: an under-priced payout waits until the mempool
+        # drops it, and the chain's payouts queue behind it
+        # meanwhile. Accepted over a fee-bump daemon.
         # ===========================================================
         transfer_fn = contract.functions.transfer(to_address, amount_to_send)
 

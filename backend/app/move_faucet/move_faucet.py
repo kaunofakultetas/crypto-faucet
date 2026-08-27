@@ -373,8 +373,13 @@ class MoveFaucet:
     # public key must hash back to the claiming ADDRESS
     # (blake2b over flag+pubkey), and the Ed25519 signature
     # must verify over the digest. Confirmed against the
-    # node's own verifySignature endpoint. Anything malformed
-    # answers False rather than raising.
+    # node's own verifySignature endpoint. It proves the
+    # requester controls (or once controlled) that wallet,
+    # nothing more: the message is bound to no network or
+    # moment, so a captured claim stays valid. Accepted — it
+    # can only ever pay the signer's own address with testnet
+    # coin, and a fresh keypair is cheaper than a replay.
+    # Anything malformed answers False rather than raising.
     #
     # Used by:
     #   - request_move (below)
@@ -411,7 +416,11 @@ class MoveFaucet:
     # blake2b-256 over intent (0,0,0) + the TransactionData
     # BCS, signed Ed25519, serialized as base64 of
     # flag || sig64 || pubkey32 — the format executeTransaction
-    # expects.
+    # expects. The bytes are signed as the node built them,
+    # UNINSPECTED: the endpoint is trusted with this chain's
+    # balance (never with the key). Accepted for testnet coin
+    # against Mysten's own node — see chains/sui.py before
+    # configuring anything else.
     #
     # Used by:
     #   - request_move (below)

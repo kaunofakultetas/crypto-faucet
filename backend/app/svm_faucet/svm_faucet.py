@@ -334,8 +334,13 @@ class SVMFaucet:
     # The ownership proof: the wallet signed the message with
     # the secret behind `address`, so the signature verifies
     # against that public key directly — there is no key
-    # recovery step. Anything malformed (bad base58, wrong
-    # length, junk) answers False rather than raising.
+    # recovery step. It proves the requester controls (or once
+    # controlled) that wallet, nothing more: the message is
+    # bound to no cluster or moment, so a captured claim stays
+    # valid. Accepted — it can only ever pay the signer's own
+    # address with devnet coin, and a fresh keypair is cheaper
+    # than a replay anyway. Anything malformed (bad base58,
+    # wrong length, junk) answers False rather than raising.
     #
     # Used by:
     #   - request_sol (below)

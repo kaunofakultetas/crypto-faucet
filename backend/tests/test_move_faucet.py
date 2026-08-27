@@ -244,6 +244,16 @@ class MoveRequestFlowTests(unittest.TestCase):
         digest = hashlib.blake2b(bytes([0, 0, 0]) + tx_bcs, digest_size=32).digest()
         self.assertTrue(Signature.from_bytes(sig).verify(Pubkey.from_bytes(pubkey), digest))
 
+    def test_payout_encodes_the_recipient_and_amount_exactly(self):
+        # What the node is asked to build: the 32 raw address bytes
+        # (no 0x) and the amount as a little-endian u64 of MIST
+        client = self.fake()
+        self.claim()
+
+        self.assertEqual(client.built['sender'], self.faucet.FAUCET_ADDRESS)
+        self.assertEqual(base64.b64decode(client.built['recipient']), bytes.fromhex(self.address[2:]))
+        self.assertEqual(base64.b64decode(client.built['amount']), self.CHUNK_MIST.to_bytes(8, 'little'))
+
     def test_payout_drops_the_cached_balance(self):
         self.fake()
         self.faucet._balance_cache['testmove'] = (9999999999, 42.0)

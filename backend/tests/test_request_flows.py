@@ -271,6 +271,27 @@ class EvmRequestFlowTests(unittest.TestCase):
             data, status = self.faucet.request_eth('testchain', *args)
             self.assertEqual(status, 400)
 
+    def test_wrong_chain_id_is_500_without_claiming(self):
+        # The RPC answers another chain than the config says — no
+        # payout over a misconfigured endpoint, and no slot taken
+        eth = self.fake(chain_id=999)
+        data, status = self.claim()
+
+        self.assertEqual(status, 500)
+        self.assertIn('konfigūracijos', data['error'])
+        self.assertEqual(eth.sent, [])
+        self.assertFalse(self.claimed())
+
+    def test_chain_id_check_is_cached_after_the_first_success(self):
+        # One good answer settles the gate for the process — a later
+        # bad one is never asked for, so the cooldown refusal wins
+        eth = self.fake()
+        self.claim()
+        eth.chain_id = 999
+
+        data, status = self.claim()
+        self.assertEqual(status, 429)
+
 
 
 
@@ -415,6 +436,16 @@ class Erc20RequestFlowTests(unittest.TestCase):
         self.fake()
         data, status = self.faucet.request_tokens('testchain', 'TST', self.address, '', self.nonce)
         self.assertEqual(status, 400)
+
+    def test_wrong_chain_id_is_500_without_claiming(self):
+        # The native faucet's config-sanity gate guards token payouts too
+        self.fake(chain_id=999)
+        with helpers.fake_token_contract({self.evm.FAUCET_ADDRESS: 100 * 10 ** 18}) as contract:
+            data, status = self.claim()
+
+        self.assertEqual(status, 500)
+        self.assertEqual(contract.transfers, [])
+        self.assertFalse(self.claimed())
 
 
 if __name__ == '__main__':

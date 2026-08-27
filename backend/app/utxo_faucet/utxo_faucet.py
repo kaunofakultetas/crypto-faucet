@@ -738,17 +738,21 @@ class UTXOFaucet:
                 }, 429
 
 
-            # STEP 3: does the faucet have the coins? Only confirmed
-            # balance counts — unconfirmed change can't be re-spent on
-            # every chain config. The cached balance is fine here: the
-            # UTXO selection inside the payout checks for real. From
-            # here on every failure — balance shortage, Electrum
-            # trouble, a failed broadcast — releases the cooldown
-            # slot claimed in STEP 2 before the error propagates.
+            # STEP 3: does the faucet have the coins? The gate counts
+            # CONFIRMED balance only — a conservative floor. The
+            # selection itself spends unconfirmed change too; that is
+            # what keeps a burst of claims flowing, up to the node's
+            # ~25-deep unconfirmed-chain limit per block (accepted —
+            # the next block clears it). The cached balance is fine
+            # here: the UTXO selection inside the payout checks for
+            # real. From here on every failure — balance shortage,
+            # Electrum trouble, a failed broadcast — releases the
+            # cooldown slot claimed in STEP 2 before the error
+            # propagates.
             # ========================================================
             try:
                 balance_info = self._faucet_balance(ctx)
-                current_balance = balance_info["confirmed"]  # only spend confirmed coins
+                current_balance = balance_info["confirmed"]  # the conservative floor, see above
                 if current_balance < ctx.chunk_size_btc:
                     self.cooldowns.release(cooldown_key)
                     return {"error": "Čiaupas nebeturi kriptovaliutos. Praneškite dėstytojui."}, 503

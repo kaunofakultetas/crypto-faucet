@@ -2,8 +2,8 @@
 #  [*] Database initialization
 #
 #  The idempotent SQLite schema: every feature's tables
-#  (blockchain simulator, faucet transaction graph, reorg
-#  attack) created IF NOT EXISTS on every boot, plus the
+#  (blockchain simulator, faucet transaction graph)
+#  created IF NOT EXISTS on every boot, plus the
 #  pre-mined demo chain the simulator page starts from.
 #  Nothing here migrates or drops — a fresh volume gets the
 #  full schema, an existing one is left untouched.

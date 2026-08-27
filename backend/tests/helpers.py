@@ -481,6 +481,27 @@ def sign_claim(nonce='1785666345742', address_key=RECIPIENT_PRIVATE_KEY, signer_
 
 
 ############################################################
+# _as_exception
+############################################################
+#
+# The fakes' *_error knobs take either a string — raised as
+# a RuntimeError with that text, the node REJECTING the call
+# — or an exception instance, raised as-is: how a typed
+# failure such as web3's ContractLogicError is staged.
+#
+# Used by:
+#   - FakeEth, FakeErc20Contract — every *_error raise
+############################################################
+
+def _as_exception(error):
+    if isinstance(error, BaseException):
+        return error
+    return RuntimeError(error)
+
+
+
+
+############################################################
 # FakeEth
 ############################################################
 #
@@ -489,7 +510,10 @@ def sign_claim(nonce='1785666345742', address_key=RECIPIENT_PRIVATE_KEY, signer_
 # the real signature recovery) delegates to the genuine
 # module — so tests exercise real crypto and only the network
 # is faked. broadcast_error makes the send raise, which is
-# how the release-the-cooldown paths are tested.
+# how the release-the-cooldown paths are tested (see
+# _as_exception for what the *_error knobs accept). chain_id
+# answers the payout path's config-sanity gate — the test
+# config's id by default, anything else to test the refusal.
 #
 # Used by:
 #   - fake_web3 (below)
@@ -497,10 +521,11 @@ def sign_claim(nonce='1785666345742', address_key=RECIPIENT_PRIVATE_KEY, signer_
 
 class FakeEth:
 
-    def __init__(self, real_eth, balances, gas_price=1, broadcast_error=None, balance_error=None):
+    def __init__(self, real_eth, balances, gas_price=1, chain_id=12345, broadcast_error=None, balance_error=None):
         self._real = real_eth
         self._balances = balances
         self.gas_price = gas_price
+        self.chain_id = chain_id
         self.broadcast_error = broadcast_error
         self.balance_error = balance_error
         self.sent = []
@@ -510,12 +535,12 @@ class FakeEth:
 
     def get_balance(self, address, *args, **kwargs):
         if self.balance_error:
-            raise RuntimeError(self.balance_error)
+            raise _as_exception(self.balance_error)
         return self._balances.get(address.lower(), 0)
 
     def send_transaction(self, tx):
         if self.broadcast_error:
-            raise RuntimeError(self.broadcast_error)
+            raise _as_exception(self.broadcast_error)
         self.sent.append(tx)
         return bytes.fromhex('ab' * 32)
 
@@ -575,7 +600,7 @@ class FakeErc20Contract:
         class Call:
             def call(self):
                 if contract.balance_error:
-                    raise RuntimeError(contract.balance_error)
+                    raise _as_exception(contract.balance_error)
                 return contract._balances.get(address.lower(), 0)
 
         return Call()
@@ -586,12 +611,12 @@ class FakeErc20Contract:
         class Transfer:
             def estimate_gas(self, tx):
                 if contract.estimate_error:
-                    raise RuntimeError(contract.estimate_error)
+                    raise _as_exception(contract.estimate_error)
                 return 60000
 
             def transact(self, tx):
                 if contract.transfer_error:
-                    raise RuntimeError(contract.transfer_error)
+                    raise _as_exception(contract.transfer_error)
                 contract.transfers.append((to_address, amount, tx))
                 return bytes.fromhex('cd' * 32)
 

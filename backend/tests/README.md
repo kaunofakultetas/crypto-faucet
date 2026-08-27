@@ -1,11 +1,12 @@
 # Backend regression tests
 
-Three layers, from cheapest to heaviest:
+Four layers, from cheapest to heaviest:
 
 | Layer | Files | Needs network? | When to run |
 |---|---|---|---|
 | Config invariants | `test_configs.py`, `test_config_models.py` | no | always |
-| Offline regression | `test_utxo_engine.py`, `test_evm_faucet.py`, `test_erc20_faucet.py` | no | always |
+| Offline regression | `test_utxo_engine.py`, `test_electrum_client.py`, `test_evm_faucet.py`, `test_erc20_faucet.py`, `test_svm_faucet.py`, `test_move_faucet.py`, `test_sui_graphql_client.py`, `test_request_flows.py`, `test_explorer.py`, `test_cooldown.py` | no | always |
+| Pinned defects | `test_evm_defects.py`, `test_erc20_defects.py`, `test_utxo_defects.py`, `test_electrum_defects.py`, `test_svm_defects.py`, `test_move_defects.py`, `test_cooldown_defects.py`, `test_explorer_defects.py`, `test_core_defects.py` | no | always — every test is an expected failure |
 | Live smoke | `integration/test_live_smoke.py` | yes (running backend) | opt-in via `RUN_LIVE=1` |
 
 The offline layers are the safety net: they must pass with no internet,
@@ -44,3 +45,9 @@ From a fresh container (after the image has been rebuilt with embit):
 - Style: test files carry the house file/class banners, but test
   methods use a one-line comment and single blank lines instead of full
   method banners — a test's name is its documentation.
+- A defect found by review but not yet fixed gets its regression test
+  UP FRONT, in `test_<area>_defects.py`, decorated
+  `@unittest.expectedFailure`: the test states the wanted behavior and
+  fails today. Once the fix lands, unittest reports it as an "unexpected
+  success" — which fails the run — and that is the cue to drop the
+  decorator and move the test into its home file.

@@ -35,10 +35,12 @@ SOLANA_TIMEOUT_S = 20
 # Some RPC providers filter the default python-requests agent
 SOLANA_USER_AGENT = 'knf-faucet'
 
-# Commitment level for every read and for broadcast
-# confirmation: 'confirmed' is the classroom sweet spot —
-# ~1 slot of latency, and effectively final on devnet.
-# 'finalized' would add ~13 s to every balance poll.
+# Commitment level for every read and for the broadcast's
+# PRE-FLIGHT simulation — nothing here waits for a
+# confirmation; a payout is reported on acceptance, like in
+# every faucet family. 'confirmed' is the classroom sweet
+# spot — ~1 slot of latency, and effectively final on
+# devnet. 'finalized' would add ~13 s to every balance poll.
 SOLANA_COMMITMENT = 'confirmed'
 
 
