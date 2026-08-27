@@ -400,11 +400,21 @@ class MoveFaucet:
     def _faucet_balance(self, network: str) -> float:
         cached = self._balance_cache.get(network)
         if cached and int(time.time()) - cached[0] < BALANCE_CACHE_TTL:
+            if isinstance(cached[1], Exception):
+                raise cached[1]
             return cached[1]
 
         params = self._chain_params[network]
-        balance = self._clients[network].get_balance(
-            self.FAUCET_ADDRESS, params['coin_type']) / (10 ** params['decimals'])
+        try:
+            balance = self._clients[network].get_balance(
+                self.FAUCET_ADDRESS, params['coin_type']) / (10 ** params['decimals'])
+        except Exception as error:
+            # A FAILED read is remembered for the same TTL: during an
+            # outage every poll from every tab would otherwise repeat
+            # the full round-trip (and its timeout) instead of
+            # answering from the remembered failure
+            self._balance_cache[network] = (int(time.time()), error)
+            raise
         self._balance_cache[network] = (int(time.time()), balance)
         return balance
 

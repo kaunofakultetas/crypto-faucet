@@ -106,7 +106,7 @@ class LiveSmokeTests(unittest.TestCase):
         # the slider's day list: the root address's days, each
         # with a positive count, sorted ascending
         address = get('/api/evm/sepolia/faucet-balance')['address']
-        data = get(f'/api/evm/sepolia/transaction-days?address={address}&tz_offset=10800')
+        data = get(f'/api/evm/sepolia/transaction-days?address={address}&tz=Europe%2FVilnius')
         self.assertIsInstance(data['days'], list)
         for entry in data['days']:
             self.assertRegex(entry['day'], r'^\d{4}-\d{2}-\d{2}$')

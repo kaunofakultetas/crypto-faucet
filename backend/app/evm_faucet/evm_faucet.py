@@ -201,6 +201,10 @@ class EVMFaucet:
         # payout instead.
         self._verified_networks = set()
 
+        # network -> (unix time, exception) of the last chain-id probe
+        # that could not reach the RPC — see _verify_chain_id
+        self._chain_probe_failures = {}
+
         self._warm_up_networks()
 
 
@@ -284,7 +288,18 @@ class EVMFaucet:
         if network in self._verified_networks:
             return True
 
-        actual_chain_id = int(self.w3_instances[network].eth.chain_id)
+        # An unreachable RPC is remembered for BALANCE_CACHE_TTL —
+        # every claim during an outage would otherwise repeat the
+        # probe and its timeout, one parked thread per claim
+        failed = self._chain_probe_failures.get(network)
+        if failed and int(time.time()) - failed[0] < BALANCE_CACHE_TTL:
+            raise failed[1]
+
+        try:
+            actual_chain_id = int(self.w3_instances[network].eth.chain_id)
+        except Exception as error:
+            self._chain_probe_failures[network] = (int(time.time()), error)
+            raise
         expected_chain_id = self.NETWORK_CONFIGS[network].get('chain_id')
         if actual_chain_id != expected_chain_id:
             logging.error(
@@ -392,10 +407,20 @@ class EVMFaucet:
     def _faucet_balance(self, network):
         cached = self._balance_cache.get(network)
         if cached and int(time.time()) - cached[0] < BALANCE_CACHE_TTL:
+            if isinstance(cached[1], Exception):
+                raise cached[1]
             return cached[1]
 
         w3 = self.w3_instances[network]
-        balance_eth = float(w3.from_wei(w3.eth.get_balance(self.FAUCET_ADDRESS), 'ether'))
+        try:
+            balance_eth = float(w3.from_wei(w3.eth.get_balance(self.FAUCET_ADDRESS), 'ether'))
+        except Exception as error:
+            # A FAILED read is remembered for the same TTL: during an
+            # outage every poll from every tab would otherwise repeat
+            # the full round-trip (and its timeout) instead of
+            # answering from the remembered failure
+            self._balance_cache[network] = (int(time.time()), error)
+            raise
         self._balance_cache[network] = (int(time.time()), balance_eth)
         return balance_eth
 
@@ -515,13 +540,17 @@ class EVMFaucet:
         # nothing, unused gas is refunded.
         # ===========================================================
         try:
+            # The price quote is a plain read — it needs no lock, and on
+            # a slow provider it would hold the whole chain's payouts
+            # for up to the RPC timeout. Lock only for nonce + broadcast.
+            gas_price = w3.eth.gas_price
             with self.send_lock_for(network):
                 tx_hash = w3.eth.send_transaction({
                     'from': self.FAUCET_ADDRESS,
                     'to': to_address,
                     'value': int(amount_to_send_wei),
                     'gas': 210000,
-                    'gasPrice': w3.eth.gas_price,
+                    'gasPrice': gas_price,
                 })
         except Exception:
             logging.exception(f"Failed to broadcast {network} payout")

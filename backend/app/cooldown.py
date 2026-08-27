@@ -80,6 +80,8 @@ class CooldownTable:
         self.seconds = int(seconds)
         self._lock = threading.Lock()
         self._last_claim = {}
+        # When the expired entries were last swept — see claim
+        self._last_sweep = 0
 
 
 
@@ -96,7 +98,9 @@ class CooldownTable:
     # down. No RPC or I/O ever happens under the lock. A claim
     # recorded in the FUTURE (the host clock stepped back — NTP,
     # a VM resume) counts as expired: it must never inflate the
-    # wait beyond the window.
+    # wait beyond the window. Expired entries are swept once per
+    # window, here, under the same lock — nothing else ever
+    # removes a key, and every fresh wallet is a new one.
     #
     # Used by:
     #   - the faucets' payout paths, right before the slow work
@@ -105,6 +109,10 @@ class CooldownTable:
     def claim(self, key):
         now = int(time.time())
         with self._lock:
+            if now - self._last_sweep >= self.seconds:
+                self._last_claim = {k: t for k, t in self._last_claim.items() if 0 <= now - t < self.seconds}
+                self._last_sweep = now
+
             last = self._last_claim.get(key)
             if last is not None and 0 <= now - last < self.seconds:
                 return self.seconds - (now - last)

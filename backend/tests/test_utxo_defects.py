@@ -294,38 +294,6 @@ class BalanceGateTests(UtxoClaimCase):
 
 
 ############################################################
-# FailedBalanceReadRememberedTests
-############################################################
-#
-# Only successful balance reads are cached. While an
-# Electrum server is down, every poll from every open tab
-# (one per 5 s) repeats the full round-trip — 15 s timeout,
-# reconnect, retry, all under the client's lock — instead of
-# answering from the remembered failure. Same shape as the
-# EVM faucet's pinned test.
-############################################################
-
-class FailedBalanceReadRememberedTests(UtxoClaimCase):
-
-    @unittest.expectedFailure
-    def test_a_failed_balance_read_is_not_retried_on_the_next_poll(self):
-        reads = []
-
-        def down(scripthash):
-            reads.append(1)
-            raise OSError('electrum down')
-
-        self.faucet._electrum_clients['btc4'].get_balance = down
-
-        self.faucet.get_faucet_balance('btc4')
-        self.faucet.get_faucet_balance('btc4')
-
-        self.assertEqual(len(reads), 1)
-
-
-
-
-############################################################
 # DustBoundaryChangeTests
 ############################################################
 #

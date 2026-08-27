@@ -28,6 +28,9 @@ import time
 import logging
 import tempfile
 import unittest
+import threading
+import contextlib
+from datetime import datetime, timezone
 from unittest.mock import patch
 
 import requests
@@ -64,7 +67,7 @@ STUDENT = '0x' + '01' * 20
 TOKEN = '0x' + '02' * 20
 
 
-def make_tx(sender, recipient, block, calldata='0x', timestamp='1750000000'):
+def make_tx(sender, recipient, block, calldata='0x', timestamp='1750000000', is_error='0'):
     return {
         'from': sender,
         'to': recipient,
@@ -73,7 +76,40 @@ def make_tx(sender, recipient, block, calldata='0x', timestamp='1750000000'):
         'blockNumber': str(block),
         'timeStamp': timestamp,
         'input': calldata,
+        'isError': is_error,
+        'txreceipt_status': '0' if is_error == '1' else '1',
     }
+
+
+class FakeResponse:
+    # One Etherscan HTTP answer: a JSON body, or an HTTP error on
+    # raise_for_status
+    def __init__(self, payload, error=None):
+        self.payload = payload
+        self.error = error
+
+    def raise_for_status(self):
+        if self.error:
+            raise self.error
+
+    def json(self):
+        return self.payload
+
+
+def scripted(replies, calls=None):
+    # A requests.get stand-in: each entry answers the NEXT call — a
+    # FakeResponse, or an Exception to raise instead
+    queue = list(replies)
+
+    def get(url, params=None, **kwargs):
+        if calls is not None:
+            calls.append(dict(params or {}))
+        reply = queue.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
+
+    return get
 
 
 
@@ -338,12 +374,14 @@ class ExplorerFetchGateTests(ExplorerTestCase):
         self.assertEqual(status, 200)
         self.assertEqual(len(data['transactions']), 1)
 
-    def test_a_failed_refresh_is_retried_next_time(self):
-        # The throttle stamp is only recorded after a SUCCESSFUL
-        # refresh — an outage must not buy Etherscan a minute of quiet
+    def test_a_failed_refresh_is_retried_next_interval(self):
+        # A failed refresh spends its interval like a successful one
+        # (every sweep of every tab retrying would park a thread per
+        # timeout) — the NEXT interval retries
         with patch.object(self.explorer, '_refresh_address', side_effect=RuntimeError('api down')) as refresh:
             self.explorer.get_stored_transactions('testchain', STUDENT, self.now() - 86400, self.now())
-            self.explorer.get_stored_transactions('testchain', STUDENT, self.now() - 86400, self.now())
+            with patch('app.evm_faucet.explorer.time.time', return_value=time.time() + 61):
+                self.explorer.get_stored_transactions('testchain', STUDENT, self.now() - 86400, self.now())
         self.assertEqual(refresh.call_count, 2)
 
     def test_invalid_ranges_are_400(self):
@@ -597,6 +635,201 @@ class AddressNameTests(ExplorerTestCase):
         self.explorer.set_address_name(FAUCET, 'second')
         self.assertEqual(self.stored_name(FAUCET), 'second')
         self.assertEqual(self.row_count(), 1)
+
+
+
+
+
+############################################################
+# ExplorerRefreshTests
+############################################################
+#
+# How a refresh behaves under trouble: the slot is claimed
+# BEFORE the fetch (concurrent requests fetch once, a failed
+# refresh spends its interval), pages fetched before a
+# failure are kept, a runaway server is cut off, and an
+# address that grows into a hub across batches is flagged.
+############################################################
+
+class ExplorerRefreshTests(ExplorerTestCase):
+
+    DAY = 1750000000
+
+    def full_page(self):
+        return [make_tx(FAUCET, '0x' + f'{i:040x}', 100 + i) for i in range(1, 1001)]
+
+    def test_a_failed_refresh_still_spends_the_interval(self):
+        now = int(time.time())
+        with patch.object(self.explorer, '_refresh_address', side_effect=RuntimeError('api down')) as refresh:
+            self.explorer.get_stored_transactions('testchain', STUDENT, now - 86400, now)
+            self.explorer.get_stored_transactions('testchain', STUDENT, now - 86400, now)
+
+        self.assertEqual(refresh.call_count, 1)
+
+    def test_concurrent_requests_for_one_address_fetch_once(self):
+        now = int(time.time())
+
+        def slow_refresh(network, address):
+            time.sleep(0.3)
+
+        with patch.object(self.explorer, '_refresh_address', side_effect=slow_refresh) as refresh:
+            threads = [
+                threading.Thread(target=self.explorer.get_stored_transactions,
+                                 args=('testchain', STUDENT, now - 86400, now))
+                for _ in range(4)
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+        self.assertEqual(refresh.call_count, 1)
+
+    def test_pages_fetched_before_a_failure_are_kept(self):
+        replies = [FakeResponse({'status': '1', 'result': self.full_page()}),
+                   requests.ConnectionError('rate limited')]
+
+        with patch('app.evm_faucet.explorer.requests.get', scripted(replies)):
+            self.explorer._refresh_address('testchain', FAUCET)
+
+        self.assertEqual(self.stored_tx_count(), 1000)
+
+    def test_a_failure_on_the_first_page_still_raises(self):
+        with patch('app.evm_faucet.explorer.requests.get', scripted([requests.ConnectionError('down')])):
+            with self.assertRaises(requests.ConnectionError):
+                self.explorer._refresh_address('testchain', FAUCET)
+
+    def test_a_server_that_never_sends_a_short_page_is_cut_off(self):
+        calls = []
+        page = FakeResponse({'status': '1', 'result': self.full_page()})
+        replies = [page] * 50 + [RuntimeError('runaway')]
+
+        with patch('app.evm_faucet.explorer.requests.get', scripted(replies, calls)):
+            with contextlib.suppress(Exception):
+                self.explorer._refresh_address('testchain', FAUCET)
+
+        self.assertLessEqual(len(calls), 20)
+
+    def test_an_address_that_grows_into_a_hub_is_flagged(self):
+        # The degree is counted against the cache, not the batch
+        hub = '0x' + 'ab' * 20
+        strangers = ['0x' + f'{i:040x}' for i in range(1, HUB_COUNTERPARTY_THRESHOLD + 60)]
+        first = [make_tx(s, hub, 100 + i) for i, s in enumerate(strangers[:150])]
+        later = [make_tx(s, hub, 100 + i) for i, s in enumerate(strangers[150:], start=150)]
+
+        with patch.object(self.explorer, 'fetch_all_transactions_from_etherscan', return_value=first):
+            self.explorer._refresh_address('testchain', hub)
+        self.assertNotEqual(self.address_flags(hub)[1], 1)        # not a hub yet (NULL or 0)
+        with patch.object(self.explorer, 'fetch_all_transactions_from_etherscan', return_value=later):
+            self.explorer._refresh_address('testchain', hub)
+
+        self.assertEqual(self.address_flags(hub)[1], 1)
+
+
+
+
+############################################################
+# ExplorerClassificationTests
+############################################################
+#
+# What a stored row says about its endpoints: calldata to a
+# trusted root or to a proven wallet (it sent a transaction)
+# never brands it a contract, and a reverted transfer moves
+# nothing.
+############################################################
+
+class ExplorerClassificationTests(ExplorerTestCase):
+
+    DAY = 1750000000
+
+    def flows(self, address, from_ts, to_ts):
+        with patch.object(self.explorer, '_refresh_address'):
+            data, status = self.explorer.get_stored_transactions('testchain', address, from_ts, to_ts)
+        self.assertEqual(status, 200)
+        return data['transactions']
+
+    def test_calldata_to_the_faucet_never_brands_it_a_contract(self):
+        self.explorer.store_transactions([make_tx(STUDENT, FAUCET, 100, calldata='0x00')], 'testchain')
+        self.assertEqual(self.address_flags(FAUCET)[0], 0)
+
+    def test_an_address_that_sent_a_transaction_is_never_a_contract(self):
+        wallet_b = '0x' + '02' * 20
+        self.explorer.store_transactions([
+            make_tx(wallet_b, STUDENT, 100),                          # wallet_b originates: a wallet
+            make_tx(STUDENT, wallet_b, 101, calldata='0x00'),         # …and later receives calldata
+        ], 'testchain')
+        self.assertEqual(self.address_flags(wallet_b)[0], 0)
+
+    def test_a_later_batch_unbrands_a_wallet_that_sent(self):
+        wallet_b = '0x' + '02' * 20
+        self.explorer.store_transactions([make_tx(STUDENT, wallet_b, 100, calldata='0x00')], 'testchain')
+        self.assertEqual(self.address_flags(wallet_b)[0], 1)
+        self.explorer.store_transactions([make_tx(wallet_b, STUDENT, 101)], 'testchain')
+        self.assertEqual(self.address_flags(wallet_b)[0], 0)
+
+    def test_a_reverted_transfer_moves_no_value(self):
+        self.explorer.store_transactions([make_tx(FAUCET, STUDENT, 100, timestamp=str(self.DAY), is_error='1')], 'testchain')
+
+        flows = self.flows(FAUCET, self.DAY - 10, self.DAY + 10)
+
+        self.assertEqual(sum(flow['value'] for flow in flows), 0)
+
+
+
+
+############################################################
+# ExplorerWindowTests
+############################################################
+#
+# The day pipeline end to end: rows are bucketed in the
+# browser's IANA zone with each date's own offset (a winter
+# evening viewed in summer stays on its own day), a numeric
+# offset is still accepted, and a node's "last seen" is
+# scoped to the window on screen, not to all history.
+############################################################
+
+class ExplorerWindowTests(ExplorerTestCase):
+
+    DAY = 1750000000
+
+    def one_transaction_at(self, *utc_time):
+        moment = int(datetime(*utc_time, tzinfo=timezone.utc).timestamp())
+        self.explorer.store_transactions([make_tx(FAUCET, STUDENT, 100, timestamp=str(moment))], 'testchain')
+
+    def test_a_winter_evening_is_filed_under_its_own_local_day(self):
+        self.one_transaction_at(2026, 1, 15, 21, 30)          # 23:30 EET on the 15th
+
+        days, status = self.explorer.get_transaction_days('testchain', 'Europe/Vilnius', FAUCET)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(days['days'], [{'day': '2026-01-15', 'count': 1}])
+
+    def test_a_summer_night_is_filed_under_the_day_it_became(self):
+        self.one_transaction_at(2026, 7, 15, 21, 30)          # 00:30 EEST on the 16th
+
+        days, status = self.explorer.get_transaction_days('testchain', 'Europe/Vilnius', FAUCET)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(days['days'], [{'day': '2026-07-16', 'count': 1}])
+
+    def test_an_unknown_zone_falls_back_to_utc(self):
+        self.one_transaction_at(2026, 1, 15, 23, 30)
+
+        days, _ = self.explorer.get_transaction_days('testchain', 'Mars/Olympus_Mons', FAUCET)
+
+        self.assertEqual(days['days'][0]['day'], '2026-01-15')
+
+    def test_node_timestamps_are_scoped_to_the_viewed_window(self):
+        self.explorer.store_transactions([make_tx(FAUCET, STUDENT, 100, timestamp=str(self.DAY))], 'testchain')
+        self.explorer.store_transactions([make_tx(FAUCET, STUDENT, 200, timestamp=str(self.DAY + 30 * 86400))], 'testchain')
+
+        with patch.object(self.explorer, '_refresh_address'):
+            data, _ = self.explorer.get_stored_transactions('testchain', FAUCET, self.DAY - 10, self.DAY + 86400)
+        flows = data['transactions']
+
+        self.assertEqual(len(flows), 1)
+        self.assertEqual(flows[0]['from_timestamp'], self.DAY)
+        self.assertEqual(flows[0]['to_timestamp'], self.DAY)
 
 
 if __name__ == '__main__':

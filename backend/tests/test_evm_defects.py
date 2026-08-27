@@ -58,8 +58,7 @@ FAUCET = '0x' + 'fa' * 20
 # fake/claim/claimed shorthands.
 #
 # Used by:
-#   - GasReservationTests, TokenFaucetGasTests,
-#     GasQuoteUnderLockTests
+#   - GasReservationTests, TokenFaucetGasTests
 ############################################################
 
 class EvmClaimCase(unittest.TestCase):
@@ -156,93 +155,6 @@ class TokenFaucetGasTests(Erc20ClaimCase):
         self.assertEqual(status, 503)
         self.assertEqual(contract.transfers, [])
         self.assertFalse(self.claimed())
-
-
-
-
-############################################################
-# RpcFailuresAreRememberedTests
-############################################################
-#
-# only SUCCESSFUL RPC answers are cached. During an
-# outage every 3-second poll from every open tab, and every
-# claim, repeats the full round-trip (10 s timeout each,
-# one Werkzeug thread parked per call) instead of answering
-# from the remembered failure.
-############################################################
-
-class RpcFailuresAreRememberedTests(unittest.TestCase):
-
-    def setUp(self):
-        self.faucet = helpers.make_evm_faucet()
-
-    @unittest.expectedFailure
-    def test_failed_balance_read_is_not_retried_on_the_next_poll(self):
-        eth = helpers.fake_web3(self.faucet, 'testchain', balance_error='rpc down')
-        reads = []
-        real_get_balance = eth.get_balance
-        eth.get_balance = lambda *args, **kwargs: (reads.append(1), real_get_balance(*args, **kwargs))[1]
-
-        self.faucet.get_faucet_balance('testchain')
-        self.faucet.get_faucet_balance('testchain')
-
-        self.assertEqual(len(reads), 1)
-
-    @unittest.expectedFailure
-    def test_unreachable_chain_id_probe_is_not_repeated_per_claim(self):
-        eth = helpers.unreachable_web3(self.faucet, 'testchain')
-        address, signature, nonce = helpers.sign_claim()
-
-        self.faucet.request_eth('testchain', address, signature, nonce)
-        self.faucet.request_eth('testchain', address, signature, nonce)
-
-        self.assertEqual(eth.probes, 1)
-
-
-
-
-############################################################
-# GasQuoteUnderLockTests
-############################################################
-#
-# The eth_gasPrice round-trip is evaluated inside the send
-# lock — the lock native and token payouts on a chain share
-# to take turns at the pending nonce. A price quote needs no
-# such protection, and on a slow provider it holds the whole
-# chain's payouts for up to the 10 s RPC timeout. Quote it
-# first, lock only for nonce + broadcast.
-############################################################
-
-class LockWatchingEth(helpers.FakeEth):
-
-    def __init__(self, real_eth, balances, lock, **kwargs):
-        self.lock = lock
-        self.quoted_under_lock = None       # None until asked, then True/False
-        super().__init__(real_eth, balances, **kwargs)
-
-    @property
-    def gas_price(self):
-        self.quoted_under_lock = self.lock.locked()
-        return 1
-
-    @gas_price.setter
-    def gas_price(self, value):
-        pass
-
-
-class GasQuoteUnderLockTests(EvmClaimCase):
-
-    @unittest.expectedFailure
-    def test_gas_price_is_quoted_outside_the_send_lock(self):
-        w3 = self.faucet.w3_instances['testchain']
-        balances = {self.address.lower(): 0, self.faucet.FAUCET_ADDRESS.lower(): 10 ** 20}
-        eth = LockWatchingEth(w3.eth, balances, self.faucet.send_lock_for('testchain'))
-        w3.eth = eth
-
-        data, status = self.claim()
-
-        self.assertEqual(status, 200)
-        self.assertIs(eth.quoted_under_lock, False)
 
 
 

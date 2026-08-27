@@ -41,6 +41,10 @@ import re
 import time
 import json
 import logging
+import threading
+from collections import Counter
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -60,6 +64,11 @@ ADDRESS_PATTERN = re.compile(r'^0x[0-9a-fA-F]{40}$')
 # same length) — a URL's worth of text is not a label
 MAX_NAME_LENGTH = 64
 
+# Pages of 1000 one refresh will fetch before stopping — the
+# next refresh resumes from the last stored block, so a long
+# history arrives in chunks instead of one unbounded pull
+MAX_PAGES_PER_REFRESH = 20
+
 
 # How many blocks an incremental refresh re-fetches BELOW the
 # last stored block — a small overlap so a testnet reorg near
@@ -76,6 +85,41 @@ REORG_OVERLAP_BLOCKS = 10
 # handful of counterparties; the real hubs found in the wild had
 # 1900+.
 HUB_COUNTERPARTY_THRESHOLD = 200
+
+
+
+
+
+
+
+
+############################################################
+# _zone_of
+############################################################
+#
+# The tzinfo a day list is bucketed in: an IANA zone name
+# ("Europe/Vilnius") resolves through zoneinfo, a numeric
+# offset in seconds (the old form, clamped to the real-world
+# ±14 h) becomes a fixed-offset zone, anything else is UTC.
+#
+# Used by:
+#   - EtherscanExplorer.get_transaction_days
+############################################################
+
+def _zone_of(tz):
+    if isinstance(tz, str) and not re.fullmatch(r'-?\d+', tz.strip()):
+        try:
+            return ZoneInfo(tz.strip())
+        except Exception:
+            return timezone.utc
+
+    try:
+        offset = int(tz or 0)
+    except (TypeError, ValueError):
+        return timezone.utc
+    if abs(offset) > 14 * 3600:
+        offset = 0
+    return timezone(timedelta(seconds=offset))
 
 
 
@@ -141,6 +185,9 @@ class EtherscanExplorer:
         # otherwise hammer Etherscan into its rate limit.
         self.ETHERSCAN_REFRESH_INTERVAL = 60
         self.last_etherscan_fetch = {}
+        # Guards the stamp above: the slot is claimed BEFORE the
+        # fetch, so concurrent requests for one address fetch once
+        self._refresh_lock = threading.Lock()
 
 
 
@@ -180,7 +227,10 @@ class EtherscanExplorer:
     # starting at start_block, 1000 records per page, until a
     # short page signals the end. An unknown API answer logs
     # the raw response (rate limits and bad API keys are the
-    # usual suspects) and raises.
+    # usual suspects) and raises — unless earlier pages already
+    # arrived: those are kept and the failure only ends this
+    # refresh. At most MAX_PAGES_PER_REFRESH pages per call; the
+    # incremental resume fetches the rest next time.
     #
     # Used by:
     #   - _refresh_address (below)
@@ -196,7 +246,7 @@ class EtherscanExplorer:
         all_transactions = []
         page = 1
 
-        while True:
+        while page <= MAX_PAGES_PER_REFRESH:
             params = {
                 'module': 'account',
                 'action': 'txlist',
@@ -209,26 +259,36 @@ class EtherscanExplorer:
                 'chainid': self.NETWORK_CONFIGS[network]['chain_id'],
                 'apikey': self.ETHERSCAN_API_KEY
             }
-            response = requests.get(url, params=params, timeout=ETHERSCAN_TIMEOUT_S)
-            response.raise_for_status()
-            result = response.json()
+            try:
+                response = requests.get(url, params=params, timeout=ETHERSCAN_TIMEOUT_S)
+                response.raise_for_status()
+                result = response.json()
 
-            if result.get('status') == '1':
-                transactions = result['result']
-                all_transactions.extend(transactions)
-
-                # A page shorter than the limit means we've seen everything.
-                if len(transactions) < 1000:
+                if result.get('status') == '1':
+                    transactions = result['result']
+                elif result.get('message') == 'No transactions found':
+                    transactions = []
+                else:
+                    logging.error(f"Unexpected Etherscan answer for {address} on {network}: {json.dumps(result)[:500]}")
+                    raise Exception(f"Etherscan API error: {result.get('message', 'Unknown error')}")
+            except Exception:
+                # A failure mid-sequence (a rate limit on the class'
+                # shared free key is routine) keeps the pages already
+                # fetched: they are stored, the resume point moves, and
+                # the next refresh continues from there instead of
+                # replaying the same doomed fetch
+                if all_transactions:
+                    logging.warning(f"Etherscan page {page} for {address} on {network} failed — keeping the {len(all_transactions)} rows fetched so far")
                     break
+                raise
 
-                page += 1
+            all_transactions.extend(transactions)
 
-            elif result.get('message') == 'No transactions found':
+            # A page shorter than the limit means we've seen everything.
+            if len(transactions) < 1000:
                 break
 
-            else:
-                logging.error(f"Unexpected Etherscan answer for {address} on {network}: {json.dumps(result)[:500]}")
-                raise Exception(f"Etherscan API error: {result.get('message', 'Unknown error')}")
+            page += 1
 
         return all_transactions
 
@@ -260,7 +320,18 @@ class EtherscanExplorer:
         tx_rows = []
         address_rows = set()
 
+        # Only a wallet can ORIGINATE a transaction — a sender is
+        # never a contract, whatever calldata it receives; nor is one
+        # of the graph's own trusted roots
+        senders = {tx['from'].lower() for tx in transactions}
+
         for tx in transactions:
+            # A reverted transaction moved nothing — Etherscan lists
+            # it with the value the sender ATTEMPTED; the graph shows
+            # flows that happened
+            if str(tx.get('isError', '0')) == '1' or str(tx.get('txreceipt_status', '1')) == '0':
+                continue
+
             # Contract deployments have no 'to' — the recipient is
             # the freshly created contract address. A recipient that
             # receives CALLDATA is a contract too (token transfers,
@@ -275,6 +346,8 @@ class EtherscanExplorer:
             else:
                 calldata = tx.get('input') or '0x'
                 is_contract = 1 if calldata not in ('', '0x') else 0
+                if recipient.lower() in senders or recipient.lower() in self.TRUSTED_ADDRESSES:
+                    is_contract = 0
 
             tx_rows.append((
                 network.lower(), tx['from'].lower(), recipient.lower(),
@@ -298,13 +371,49 @@ class EtherscanExplorer:
 
             # Escalation-only upsert: an address once recognized as a
             # contract STAYS a contract, even if it was first seen as
-            # a plain recipient — never the other way around.
+            # a plain recipient — never the other way around…
             conn.executemany('''
                 INSERT INTO Graph_Addresses (address, name, is_contract)
                 VALUES (?, ?, ?)
                 ON CONFLICT(address) DO UPDATE SET
                     is_contract = MAX(COALESCE(Graph_Addresses.is_contract, 0), excluded.is_contract)
             ''', sorted(address_rows))
+
+            # …except that a proven WALLET (it sent a transaction) is
+            # never a contract, whatever an earlier batch guessed
+            conn.executemany('''
+                INSERT INTO Graph_Addresses (address, name, is_contract)
+                VALUES (?, '', 0)
+                ON CONFLICT(address) DO UPDATE SET is_contract = 0
+            ''', [(sender,) for sender in sorted(senders)])
+
+
+
+
+
+
+    ############################################################
+    # _claim_refresh_slot
+    ############################################################
+    #
+    # Take this address' refresh slot for the next interval —
+    # atomically, BEFORE the fetch, so concurrent requests (a
+    # lecture hall opening the graph in the same minute) fetch
+    # once, and a failed refresh spends its interval like a
+    # successful one instead of being retried by every sweep of
+    # every tab. True when the caller should refresh now.
+    #
+    # Used by:
+    #   - get_stored_transactions (below)
+    ############################################################
+
+    def _claim_refresh_slot(self, fetch_key):
+        now = int(time.time())
+        with self._refresh_lock:
+            if now - self.last_etherscan_fetch.get(fetch_key, 0) < self.ETHERSCAN_REFRESH_INTERVAL:
+                return False
+            self.last_etherscan_fetch[fetch_key] = now
+            return True
 
 
 
@@ -352,6 +461,18 @@ class EtherscanExplorer:
             for tx in transactions:
                 counterparties.add(tx['from'].lower())
                 counterparties.add((tx.get('to') or '').lower())
+
+            # The degree is counted against the CACHE, not the batch:
+            # an address first indexed while small and refreshed a few
+            # rows at a time must still trip the threshold as it grows
+            with get_db_connection() as conn:
+                for row in conn.execute('''
+                    SELECT from_address, to_address FROM Graph_Transactions
+                    WHERE network = ? AND (from_address = ? OR to_address = ?)
+                ''', [network.lower(), address.lower(), address.lower()]):
+                    counterparties.add(row[0])
+                    counterparties.add(row[1])
+
             counterparties.discard(address.lower())
             counterparties.discard('')
 
@@ -439,14 +560,13 @@ class EtherscanExplorer:
                 needs_first_fetch = seen is None
 
         should_refresh = (is_live_window or needs_first_fetch) and not never_scrape
-        if should_refresh and int(time.time()) - self.last_etherscan_fetch.get(fetch_key, 0) >= self.ETHERSCAN_REFRESH_INTERVAL:
+        if should_refresh and self._claim_refresh_slot(fetch_key):
             try:
                 self._refresh_address(network, address)
-                self.last_etherscan_fetch[fetch_key] = int(time.time())
             except Exception:
                 # Etherscan being down must not blank the graph — log
-                # it and serve whatever SQLite already has; the next
-                # sweep retries anyway.
+                # it and serve whatever SQLite already has; the slot
+                # stays spent, the next interval retries.
                 logging.exception(f"Etherscan refresh failed for {address} on {network}; serving cached data")
 
 
@@ -473,7 +593,7 @@ class EtherscanExplorer:
                             MAX(timestamp) as timestamp
                         FROM
                             Graph_Transactions
-                        WHERE network = ?
+                        WHERE network = ? AND timestamp >= ? AND timestamp < ?
                         GROUP BY from_address
 
                         UNION ALL
@@ -482,7 +602,7 @@ class EtherscanExplorer:
                             MAX(timestamp)
                         FROM
                             Graph_Transactions
-                        WHERE network = ?
+                        WHERE network = ? AND timestamp >= ? AND timestamp < ?
                         GROUP BY to_address
                     )
                     GROUP BY address
@@ -535,7 +655,8 @@ class EtherscanExplorer:
                     )
                 FROM
                     GetFlows
-            ''', [network.lower(), network.lower(), network.lower(), address.lower(), address.lower(), from_ts, to_ts])
+            ''', [network.lower(), from_ts, to_ts, network.lower(), from_ts, to_ts,
+                  network.lower(), address.lower(), address.lower(), from_ts, to_ts])
 
             result = sqlQueryResult.fetchone()
             transactions_json = result[0] if result else '[]'
@@ -556,29 +677,21 @@ class EtherscanExplorer:
     # count — the page's date slider lists exactly these. Days
     # where only unrelated addresses moved are deliberately
     # absent: the graph grows breadth-first from the root, so
-    # such a day would render one lonely faucet node. tz_offset
-    # is the BROWSER'S offset from UTC in seconds AT THE MOMENT
-    # OF THE REQUEST, clamped to the real-world ±14 h range, and
-    # applied to EVERY row regardless of that row's own date.
-    #
-    # KNOWN GAP (pinned in test_explorer_defects.py): the page's
-    # rangeOfDay() turns a picked day back into a window using
-    # that date's TRUE offset, so for every day in the other
-    # DST regime (all of winter, viewed in summer, and vice
-    # versa) the bucket here sits an hour off the window the
-    # page will ask for — one hour of transactions is filed
-    # under the neighbouring day, and a day offered here can
-    # come back as an empty graph. The fix is bucketing each
-    # row in its own zone (a zone NAME from the browser +
-    # zoneinfo in Python); rangeOfDay is the correct half and
-    # must not change. Do not touch one side without the other.
+    # such a day would render one lonely faucet node. `tz` is
+    # the BROWSER'S IANA zone name (Intl's timeZone), and every
+    # row is bucketed in that zone with its OWN date's offset —
+    # DST-correct, so the list always matches the page's
+    # rangeOfDay(), which turns a picked day back into a window
+    # the same way. A bare numeric offset (seconds from UTC,
+    # clamped to ±14 h) is still accepted as the old form; an
+    # unknown zone falls back to UTC.
     #
     # Used by:
     #   - evm_routes.py —
     #     GET /api/evm/<network>/transaction-days
     ############################################################
 
-    def get_transaction_days(self, network, tz_offset, address):
+    def get_transaction_days(self, network, tz, address):
         if not self.is_supported_network(network):
             return {"error": f"Nepalaikomas tinklas: {network}"}, 400
         if not address:
@@ -586,21 +699,20 @@ class EtherscanExplorer:
         if not ADDRESS_PATTERN.match(address):
             return {"error": "Neteisingas adresas"}, 400
 
-        offset = int(tz_offset or 0)
-        if abs(offset) > 14 * 3600:
-            offset = 0
-
+        zone = _zone_of(tz)
         with get_db_connection() as conn:
             rows = conn.execute('''
-                SELECT date(timestamp + ?, 'unixepoch') AS day, COUNT(*) AS tx_count
+                SELECT timestamp
                 FROM Graph_Transactions
                 WHERE network = ?
                   AND (from_address = ? OR to_address = ?)
-                GROUP BY day
-                ORDER BY day
-            ''', [offset, network.lower(), address.lower(), address.lower()]).fetchall()
+            ''', [network.lower(), address.lower(), address.lower()]).fetchall()
 
-        return {"days": [{"day": row[0], "count": row[1]} for row in rows]}, 200
+        counts = Counter(
+            datetime.fromtimestamp(row[0], timezone.utc).astimezone(zone).strftime('%Y-%m-%d')
+            for row in rows
+        )
+        return {"days": [{"day": day, "count": counts[day]} for day in sorted(counts)]}, 200
 
 
 

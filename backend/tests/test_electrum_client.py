@@ -23,6 +23,7 @@
 
 import io
 import json
+import socket
 import contextlib
 import unittest
 from unittest.mock import patch
@@ -384,6 +385,93 @@ class ElectrumQueryTests(unittest.TestCase):
         sent = sockets[0].requests()[1]
         self.assertEqual(sent['method'], 'blockchain.scripthash.listunspent')
         self.assertEqual(sent['params'], ['cd' * 32])
+
+
+
+
+
+############################################################
+# ElectrumSessionTests
+############################################################
+#
+# The session invariants: a failed handshake leaves no socket
+# behind (its late reply can never answer the next request),
+# a reply carrying another id is a broken stream and never
+# the answer, and a reply that never ends is abandoned within
+# a bound instead of buffered without one.
+############################################################
+
+class DribblingSocket(FakeElectrumSocket):
+    # Answers the handshake, then streams 1 MB of 'x' per read,
+    # never a newline, up to LIMIT — then hangs up
+
+    CHUNK = b'x' * (1024 * 1024)
+    LIMIT = 40 * 1024 * 1024
+
+    def __init__(self):
+        super().__init__([HANDSHAKE])
+        self.streamed = 0
+
+    def sendall(self, data):
+        if self.script:
+            super().sendall(data)
+
+    def recv(self, size):
+        if self._chunks:
+            return super().recv(size)
+        if self.streamed >= self.LIMIT:
+            return b''
+        self.streamed += len(self.CHUNK)
+        return self.CHUNK
+
+
+class ElectrumSessionTests(unittest.TestCase):
+
+    def test_a_failed_handshake_leaves_no_socket_behind(self):
+        client = ElectrumClient('host:1')
+        with fake_transport([[socket.timeout('timed out')]]) as sockets:
+            with self.assertRaises(OSError):
+                client.connect()
+
+        self.assertIsNone(client.ssock)
+        self.assertTrue(sockets[0].closed)
+
+    def test_the_request_after_a_failed_handshake_gets_a_real_answer(self):
+        client = ElectrumClient('host:1')
+        with fake_transport(
+            [[socket.timeout('timed out')], HANDSHAKE],     # socket 1: the handshake reply arrives late, on the NEXT read
+            [HANDSHAKE, rpc_ok([])],                         # socket 2: a clean session
+        ):
+            with self.assertRaises(OSError):
+                client.connect()
+            self.assertEqual(client.list_unspent('ff'), [])
+
+    def test_a_reply_for_another_request_is_not_taken_as_the_answer(self):
+        stale = (json.dumps({'jsonrpc': '2.0', 'id': 'someone-else', 'result': 'WRONG'}) + '\n').encode()
+        client = ElectrumClient('host:1')
+        with fake_transport([HANDSHAKE, stale], [HANDSHAKE, rpc_ok('RIGHT')]) as sockets:
+            self.assertEqual(client.request('m', []), 'RIGHT')
+        self.assertEqual(len(sockets), 2)                    # the desynced session was dropped
+
+    def test_a_reply_that_never_ends_is_abandoned_within_a_bound(self):
+        dribbler = DribblingSocket()
+        sockets = [dribbler, FakeElectrumSocket([OSError('down')])]     # the retry's socket fails at once
+        client = ElectrumClient('host:1')
+
+        class NoTls:
+            check_hostname = True
+            verify_mode = None
+
+            def wrap_socket(self, sock, server_hostname=None):
+                return sock
+
+        with patch('app.utxo_faucet.electrum_client.socket.create_connection',
+                   lambda address, timeout=None: sockets.pop(0)):
+            with patch('app.utxo_faucet.electrum_client.ssl.create_default_context', NoTls):
+                with self.assertRaises(Exception):
+                    client.request('m', [])
+
+        self.assertLessEqual(dribbler.streamed, 16 * 1024 * 1024)
 
 
 if __name__ == '__main__':

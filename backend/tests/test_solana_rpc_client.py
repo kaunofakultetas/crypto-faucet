@@ -104,6 +104,15 @@ class SolanaRpcClientTests(unittest.TestCase):
             self.client.get_version()
         self.assertEqual(len(sent), 2)
 
+    def test_a_connect_timeout_is_not_retried(self):
+        # ConnectTimeout is a ConnectionError subclass, but the host
+        # never answered — dialling again only burns the timeout twice
+        sent = scripted(self.client, requests.ConnectTimeout('no answer'))
+
+        with self.assertRaises(requests.ConnectTimeout):
+            self.client.get_version()
+        self.assertEqual(len(sent), 1)
+
     def test_a_timeout_is_not_retried(self):
         # The request may have REACHED the node — re-sending a
         # broadcast on a timeout is the caller's decision, not the

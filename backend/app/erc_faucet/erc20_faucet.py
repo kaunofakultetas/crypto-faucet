@@ -38,6 +38,8 @@ import time
 import logging
 import threading
 
+from web3.exceptions import ContractLogicError
+
 from .token_contracts import get_erc20_contract
 from ..cooldown import CooldownTable
 from ..icons import icon_url
@@ -509,17 +511,30 @@ class ERC20Faucet:
         # ===========================================================
         transfer_fn = contract.functions.transfer(to_address, amount_to_send)
 
+        # estimate_gas EXECUTES the transfer against current state: a
+        # ContractLogicError is the node saying it reverts (the faucet
+        # drained by an unmined payout, a wrong contract address) —
+        # refuse rather than broadcast a transfer that burns gas and
+        # moves nothing. Any other failure is an estimator that merely
+        # can't estimate (zkSync-style chains): fall back to a fixed
+        # limit, as before.
         try:
             gas_limit = int(transfer_fn.estimate_gas({'from': self.evm_faucet.FAUCET_ADDRESS}) * 1.5)
+        except ContractLogicError:
+            logging.exception(f"{token_symbol} transfer on {network} would revert — payout refused")
+            self.cooldowns.release(cooldown_key)
+            return {"error": "Čiaupas nebeturi žetonų. Praneškite dėstytojui."}, 503
         except Exception:
             gas_limit = 100000
 
         try:
+            # The price quote needs no lock — see the native flow
+            gas_price = w3.eth.gas_price
             with self.evm_faucet.send_lock_for(network):
                 tx_hash = transfer_fn.transact({
                     'from': self.evm_faucet.FAUCET_ADDRESS,
                     'gas': gas_limit,
-                    'gasPrice': w3.eth.gas_price,
+                    'gasPrice': gas_price,
                 })
         except Exception:
             logging.exception(f"Failed to broadcast {token_symbol} payout on {network}")

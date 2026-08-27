@@ -27,6 +27,7 @@ from app.evm_faucet.evm_faucet import EVMFaucet
 from app.erc_faucet.erc20_faucet import ERC20Faucet
 from app.svm_faucet.svm_faucet import SVMFaucet
 from app.move_faucet.move_faucet import MoveFaucet
+from app.svm_faucet.chains import solana as solana_chain
 
 
 # Throwaway secp256k1 keys — NEVER the real faucet key. The UTXO
@@ -312,10 +313,20 @@ def fake_solana_rpc(faucet, network, balances=None, broadcast_error=None, balanc
         client.sent.append(signed_base64)
         return 'sig' + '1' * 85
 
+    # The cluster probe goes through request() itself, so a test can
+    # answer it with another cluster's genesis by replacing request
+    genesis = solana_chain.GENESIS_HASHES[faucet.NETWORK_CONFIGS[network]['faucet']['network']]
+
+    def request(method, params=None):
+        if method == 'getGenesisHash':
+            return genesis
+        raise RuntimeError(f'unexpected Solana RPC call {method}')
+
     client.get_balance = get_balance
     client.get_latest_blockhash = lambda: blockhash
     client.send_transaction = send_transaction
     client.get_version = lambda: '4.2.0'
+    client.request = request
     return client
 
 
@@ -704,5 +715,48 @@ class UnreachableEth(FakeEth):
 def unreachable_web3(faucet, network, balances=None):
     w3 = faucet.w3_instances[network]
     eth = UnreachableEth(w3.eth, {k.lower(): v for k, v in (balances or {}).items()})
+    w3.eth = eth
+    return eth
+
+
+
+
+
+
+
+
+############################################################
+# LockWatchingEth / lock_watching_web3
+############################################################
+#
+# w3.eth that notes whether the network's send lock was HELD
+# at the moment eth_gasPrice was asked for — None until the
+# quote happens, then True/False. The pin for "the price
+# quote never holds the chain's payouts".
+#
+# Used by:
+#   - test_request_flows.py — the gas-quote tests
+############################################################
+
+class LockWatchingEth(FakeEth):
+
+    def __init__(self, real_eth, balances, lock, **kwargs):
+        self.lock = lock
+        self.quoted_under_lock = None
+        super().__init__(real_eth, balances, **kwargs)
+
+    @property
+    def gas_price(self):
+        self.quoted_under_lock = self.lock.locked()
+        return 1
+
+    @gas_price.setter
+    def gas_price(self, value):
+        pass
+
+
+def lock_watching_web3(faucet, network, balances=None):
+    w3 = faucet.w3_instances[network]
+    eth = LockWatchingEth(w3.eth, {k.lower(): v for k, v in (balances or {}).items()}, faucet.send_lock_for(network))
     w3.eth = eth
     return eth

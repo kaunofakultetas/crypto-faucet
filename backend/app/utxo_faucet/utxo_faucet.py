@@ -472,9 +472,19 @@ class UTXOFaucet:
     def _faucet_balance(self, ctx: NetworkContext) -> dict:
         cached = self._balance_cache.get(ctx.network_key)
         if cached and int(time.time()) - cached[0] < BALANCE_CACHE_TTL:
+            if isinstance(cached[1], Exception):
+                raise cached[1]
             return cached[1]
 
-        balance_info = ctx.electrum.get_balance(ctx.scripthash)
+        try:
+            balance_info = ctx.electrum.get_balance(ctx.scripthash)
+        except Exception as error:
+            # A FAILED read is remembered for the same TTL: during an
+            # outage every poll from every tab would otherwise repeat
+            # the full round-trip (and its timeout) instead of
+            # answering from the remembered failure
+            self._balance_cache[ctx.network_key] = (int(time.time()), error)
+            raise
         self._balance_cache[ctx.network_key] = (int(time.time()), balance_info)
         return balance_info
 

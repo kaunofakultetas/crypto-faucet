@@ -9,10 +9,9 @@
 #    - main.py — the blockchain simulator route
 #    - app/evm_faucet/explorer.py — the transaction graph cache
 #    - app/database/db_init.py — the schema
-#    — every SQL statement in the APP goes through this helper.
-#    tools/prune_unreachable_transactions.py does not: it opens
-#    SQLite itself with its own default path (pinned in
-#    test_explorer_defects.py — the two defaults disagree).
+#    - tools/prune_unreachable_transactions.py — the cache pruner
+#    — every SQL statement, app and tools alike, goes through
+#    this helper.
 ############################################################
 
 

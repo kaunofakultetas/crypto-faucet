@@ -9,7 +9,7 @@
 //
 //  The slider offers ONLY the days the faucet address itself
 //  transacted on (GET /api/evm/<network>/transaction-days,
-//  bucketed with the browser's timezone offset) plus today,
+//  bucketed in the browser's IANA zone) plus today,
 //  and defaults to today. Days without root activity would render a lone
 //  faucet node, so they are not listed. The picked day
 //  travels into every graph fetch as a half-open [from, to)
@@ -68,7 +68,7 @@ const STEP_BUTTON_SX = {
 //
 // Today as 'YYYY-MM-DD' in the student's LOCAL timezone —
 // matches the buckets transaction-days returns for the same
-// tz_offset.
+// zone.
 //
 // Used by:
 //   - GraphPage (below) — the ticking `today` state
@@ -279,22 +279,19 @@ export default function GraphPage() {
   const currencySymbol = networkInfo?.native_currency?.symbol ?? 'ETH';
 
   // The root address's used days (+ per-day counts), bucketed
-  // with the browser's CURRENT UTC offset. Known gap: the
-  // backend applies this one offset to every row, while
-  // rangeOfDay below uses each date's true offset — a day in
-  // the other DST regime is bucketed an hour off, so a day the
-  // slider offers can come back with an empty graph (pinned in
-  // the backend suite; the fix is bucketing by zone name, at
-  // which point this sends Intl's timeZone instead). The offset
-  // is part of the query key so a list built under one offset
-  // is never served to a render under another.
-  const tzOffset = -new Date().getTimezoneOffset() * 60;
+  // in the browser's IANA zone — the backend files each row
+  // under its OWN date's offset, so the list matches rangeOfDay
+  // below in every season (one fixed offset would put an hour
+  // of every winter day on the wrong day when viewed in summer).
+  // The zone is part of the query key so a list built under one
+  // zone is never served to a render under another.
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   const { data: daysData } = useQuery({
-    queryKey: ['evm-tx-days', network, address, tzOffset],
+    queryKey: ['evm-tx-days', network, address, timeZone],
     enabled: Boolean(address),
     queryFn: async () =>
       (await axios.get(
-        `/api/evm/${network}/transaction-days?address=${address}&tz_offset=${tzOffset}`
+        `/api/evm/${network}/transaction-days?address=${address}&tz=${encodeURIComponent(timeZone)}`
       )).data,
     staleTime: 60 * 1000,
   });

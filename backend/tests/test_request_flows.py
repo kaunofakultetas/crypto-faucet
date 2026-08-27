@@ -31,6 +31,8 @@ from embit import hashes as embit_hashes
 from embit import script as embit_script
 from embit.transaction import Transaction
 
+from web3.exceptions import ContractLogicError
+
 from tests import helpers
 
 
@@ -210,6 +212,22 @@ class UtxoRequestFlowTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(Transaction.from_string(captured['raw']).vout[0].value, 29_000_000)
 
+    def test_a_failed_balance_read_is_not_retried_on_the_next_poll(self):
+        # While Electrum is down every 5 s poll from every tab would
+        # otherwise repeat the round-trip (timeout, reconnect, retry,
+        # all under the client lock) — the failure is remembered
+        reads = []
+
+        def down(scripthash):
+            reads.append(1)
+            raise OSError('electrum down')
+
+        self.client.get_balance = down
+
+        self.assertEqual(self.faucet.get_faucet_balance('btc4')[1], 500)
+        self.assertEqual(self.faucet.get_faucet_balance('btc4')[1], 500)
+        self.assertEqual(len(reads), 1)
+
     def test_get_networks_exports_the_configured_block_explorer(self):
         # The page links the payout's txid there
         configs = copy.deepcopy(helpers.UTXO_TEST_CONFIGS)
@@ -272,6 +290,37 @@ class EvmRequestFlowTests(unittest.TestCase):
 
         self.assertEqual(status, 400)
         self.assertEqual(eth.probes, 0)
+
+    def test_unreachable_chain_id_probe_is_not_repeated_per_claim(self):
+        # An outage costs one probe (and its timeout), not one per
+        # claim — the failure is remembered for the cache TTL
+        eth = helpers.unreachable_web3(self.faucet, 'testchain')
+
+        self.assertEqual(self.claim()[1], 503)
+        self.assertEqual(self.claim()[1], 503)
+        self.assertEqual(eth.probes, 1)
+
+    def test_failed_balance_read_is_not_retried_on_the_next_poll(self):
+        # Same rule for the balance the page polls every 3 s
+        eth = self.fake(balance_error='rpc down')
+        reads = []
+        real_get_balance = eth.get_balance
+        eth.get_balance = lambda *args, **kwargs: (reads.append(1), real_get_balance(*args, **kwargs))[1]
+
+        self.assertEqual(self.faucet.get_faucet_balance('testchain')[1], 500)
+        self.assertEqual(self.faucet.get_faucet_balance('testchain')[1], 500)
+        self.assertEqual(len(reads), 1)
+
+    def test_gas_price_is_quoted_outside_the_send_lock(self):
+        # The lock is for nonce + broadcast; a slow price quote must
+        # not hold the whole chain's payouts
+        eth = helpers.lock_watching_web3(
+            self.faucet, 'testchain', {self.address: 0, self.faucet.FAUCET_ADDRESS: 10 ** 20})
+
+        data, status = self.claim()
+
+        self.assertEqual(status, 200)
+        self.assertIs(eth.quoted_under_lock, False)
 
     def test_happy_path_broadcasts_the_chunk(self):
         eth = self.fake()
@@ -404,6 +453,7 @@ class Erc20RequestFlowTests(unittest.TestCase):
         self.evm = helpers.make_evm_faucet()
         self.faucet = helpers.make_erc20_faucet(evm_faucet=self.evm)
         self.address, self.signature, self.nonce = helpers.sign_claim()
+        self.TOKENS = {self.evm.FAUCET_ADDRESS: 100 * 10 ** 18}
 
     def fake(self, native_balance=None, **kwargs):
         return helpers.fake_web3(
@@ -425,6 +475,28 @@ class Erc20RequestFlowTests(unittest.TestCase):
 
         self.assertEqual(status, 400)
         self.assertEqual(eth.probes, 0)
+
+    def test_a_transfer_the_node_says_reverts_is_not_broadcast(self):
+        # estimate_gas EXECUTES the transfer: a ContractLogicError is
+        # the node's verdict that it fails — refuse and release the
+        # slot instead of broadcasting a transfer that burns gas
+        self.fake()
+        with helpers.fake_token_contract(self.TOKENS, estimate_error=ContractLogicError('execution reverted')) as contract:
+            data, status = self.claim()
+
+        self.assertEqual(status, 503)
+        self.assertIn('Čiaupas nebeturi', data['error'])
+        self.assertEqual(contract.transfers, [])
+        self.assertFalse(self.claimed())
+
+    def test_gas_price_is_quoted_outside_the_send_lock(self):
+        eth = helpers.lock_watching_web3(self.evm, 'testchain', {self.address: self.ENOUGH_GAS})
+
+        with helpers.fake_token_contract(self.TOKENS):
+            data, status = self.claim()
+
+        self.assertEqual(status, 200)
+        self.assertIs(eth.quoted_under_lock, False)
 
     def test_happy_path_transfers_the_chunk(self):
         self.fake()

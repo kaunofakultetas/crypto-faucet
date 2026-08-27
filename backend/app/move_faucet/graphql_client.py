@@ -105,7 +105,9 @@ class SuiGraphqlClient:
     # keep-alive the server dropped while idle fails exactly
     # one send, and the pool dials fresh for the retry; safe
     # even for a broadcast, because re-executing the same
-    # signed transaction bytes is idempotent (same digest).
+    # signed transaction bytes is idempotent (same digest). A
+    # CONNECT TIMEOUT is not that: the host never answered, and
+    # a second dial would only burn the timeout twice.
     # Every other transport failure propagates as the requests
     # exception it already is, so the caller can decide. The
     # timing print only fires with APP_DEBUG on.
@@ -125,6 +127,8 @@ class SuiGraphqlClient:
                 json={'query': query, 'variables': variables or {}},
                 timeout=SUI_TIMEOUT_S,
             )
+        except requests.ConnectTimeout:
+            raise
         except requests.ConnectionError:
             response = self.session.post(
                 self.endpoint,

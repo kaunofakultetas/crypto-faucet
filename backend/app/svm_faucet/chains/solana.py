@@ -29,3 +29,12 @@ FEE_LAMPORTS = 5000
 MIN_PAYOUT_LAMPORTS = 890880
 
 NETWORKS = ('mainnet', 'devnet', 'testnet')
+
+# Each cluster's genesis hash — the one fact that tells them
+# apart over RPC. The faucet refuses to pay on an RPC whose
+# genesis is not the configured cluster's.
+GENESIS_HASHES = {
+    'mainnet': '5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d',
+    'devnet': 'EtWTRABZaYq6iMfeYKouRu166VU2xqa1wcaWoxPkrZBG',
+    'testnet': '4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY',
+}

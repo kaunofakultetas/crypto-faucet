@@ -19,6 +19,7 @@ import logging
 import unittest
 
 from app.svm_faucet.chains import chain_params
+from app.svm_faucet.chains import solana as solana_chain
 from tests import helpers
 
 
@@ -212,6 +213,55 @@ class SvmRequestFlowTests(unittest.TestCase):
 
     def claimed(self):
         return ('testsvm', self.address) in self.faucet.cooldowns._last_claim
+
+    def answering(self, genesis_hash):
+        # The fake client's request() is what the cluster probe
+        # reaches — every other RPC call is already canned
+        client = self.fake()
+        client.request = lambda method, params=None: genesis_hash
+        return client
+
+    def test_an_rpc_on_another_cluster_is_refused(self):
+        # The config says devnet (what the page tells Phantom); an
+        # RPC answering testnet's genesis would pay where the
+        # student is not looking
+        client = self.answering(solana_chain.GENESIS_HASHES['testnet'])
+
+        data, status = self.claim()
+
+        self.assertEqual(status, 500)
+        self.assertIn('konfigūracijos', data['error'])
+        self.assertEqual(client.sent, [])
+        self.assertFalse(self.claimed())
+
+    def test_an_rpc_on_the_configured_cluster_pays(self):
+        client = self.answering(solana_chain.GENESIS_HASHES['devnet'])
+
+        data, status = self.claim()
+
+        self.assertEqual(status, 200)
+        self.assertEqual(len(client.sent), 1)
+
+    def test_the_cluster_probe_is_asked_once(self):
+        probes = []
+        client = self.fake()
+        client.request = lambda method, params=None: (probes.append(method), solana_chain.GENESIS_HASHES['devnet'])[1]
+
+        self.claim()
+        self.faucet.cooldowns.release(('testsvm', self.address))
+        self.claim()
+
+        self.assertEqual(probes, ['getGenesisHash'])
+
+    def test_an_unreachable_cluster_probe_is_503_without_claiming(self):
+        client = self.fake()
+        client.request = lambda method, params=None: (_ for _ in ()).throw(RuntimeError('rpc down'))
+
+        data, status = self.claim()
+
+        self.assertEqual(status, 503)
+        self.assertEqual(client.sent, [])
+        self.assertFalse(self.claimed())
 
     def test_happy_path_broadcasts_and_keeps_the_cooldown(self):
         client = self.fake()

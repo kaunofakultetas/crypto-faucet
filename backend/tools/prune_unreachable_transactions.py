@@ -12,12 +12,17 @@
 #  Reachability: breadth-first from the class' NAMED wallets
 #  (the operator's labels — the faucet address itself is a
 #  root only if it is named too; the graph page, by contrast,
-#  always roots at the faucet), never expanding through
-#  is_contract/is_hub addresses (they stay as leaves). What
-#  the walk reaches is kept; everything else is stranger
+#  always roots at the faucet), PER NETWORK — the graph is
+#  strictly per network, so a wallet's traffic on one chain
+#  never keeps its traffic on another — and never expanding
+#  through is_contract/is_hub addresses (they stay as leaves).
+#  What the walk reaches is kept; everything else is stranger
 #  traffic. With NO named wallet the walk reaches nothing and
-#  --apply would drop every row — refusing in that case is
-#  pinned in test_explorer_defects.py; name the faucet first.
+#  --apply would drop every row, so the tool refuses to run:
+#  name the faucet first. Rows are deleted by rowid (the
+#  cached schema's id column is not a rowid alias) and the
+#  orphan cleanup keeps every flagged contract/hub row — the
+#  explorer's classification depends on them.
 #
 #  Dry run by default — prints what WOULD be deleted. Pass
 #  --apply to actually delete (make a copy of the database
@@ -35,11 +40,18 @@
 
 import os
 import sys
-import sqlite3
 from collections import defaultdict, deque
 
+# Run as `python tools/prune_unreachable_transactions.py` from
+# /app — the app package sits one level up
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
 
-DB_PATH = os.getenv('DB_PATH', 'transactions.db')
+from app.database.db import get_db_connection
+
+
+# The same default as app/database/db.py — the live database,
+# not a fresh empty file next to the tool
+DB_PATH = os.getenv('DB_PATH', '/data/database.db')
 
 
 
@@ -52,9 +64,9 @@ DB_PATH = os.getenv('DB_PATH', 'transactions.db')
 # main
 ############################################################
 #
-# The CLI entry: opens the database, runs prune() in dry-run
-# or --apply mode, and closes the connection whichever way
-# prune() ends.
+# The CLI entry: opens the database through the app's own
+# helper, runs prune() in dry-run or --apply mode, and closes
+# the connection whichever way prune() ends.
 #
 # Used by:
 #   - the __main__ guard at the bottom
@@ -62,8 +74,7 @@ DB_PATH = os.getenv('DB_PATH', 'transactions.db')
 ############################################################
 
 def main():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    conn = get_db_connection(DB_PATH)
     try:
         prune(conn, apply_changes='--apply' in sys.argv)
     finally:
@@ -81,10 +92,11 @@ def main():
 ############################################################
 #
 # The walk and the deletes, on an open connection: load the
-# graph, flood from the named roots, report the stranger rows
-# and — with apply_changes — delete them plus the orphaned
-# unnamed addresses. Commits and VACUUMs on its own; the
-# caller closes.
+# graph, flood from the named roots per network, report the
+# stranger rows and — with apply_changes — delete them plus
+# the orphaned unnamed, unflagged addresses. Commits and
+# VACUUMs on its own; the caller closes. Exits (SystemExit)
+# rather than run against an empty root set.
 #
 # Used by:
 #   - main (above)
@@ -93,51 +105,57 @@ def main():
 def prune(conn, apply_changes):
 
     # STEP 1: load the graph — every cached transaction as an
-    # undirected edge, plus the two address sets that steer the
-    # walk: the named wallets (the class' anchors) as roots and
-    # the flagged contracts/hubs as walls the walk never passes
-    # through.
+    # undirected edge on ITS network, plus the two address sets
+    # that steer the walk: the named wallets (the class' anchors)
+    # as roots and the flagged contracts/hubs as walls the walk
+    # never passes through.
     # ============================================================
     blocked = {row[0] for row in conn.execute(
         "SELECT address FROM Graph_Addresses WHERE COALESCE(is_contract, 0) = 1 OR COALESCE(is_hub, 0) = 1")}
     roots = {row[0] for row in conn.execute(
         "SELECT address FROM Graph_Addresses WHERE name IS NOT NULL AND name != ''")}
 
+    if not roots:
+        sys.exit("Refusing to run: no named wallet to walk from — every row would be dropped. "
+                 "Name the faucet address in the graph first.")
+
     rows = conn.execute(
-        "SELECT id, network, from_address, to_address FROM Graph_Transactions").fetchall()
+        "SELECT rowid AS rid, network, from_address, to_address FROM Graph_Transactions").fetchall()
+    networks = {row['network'] for row in rows}
     adjacency = defaultdict(set)
     for row in rows:
-        adjacency[row['from_address']].add(row['to_address'])
-        adjacency[row['to_address']].add(row['from_address'])
+        adjacency[(row['network'], row['from_address'])].add(row['to_address'])
+        adjacency[(row['network'], row['to_address'])].add(row['from_address'])
 
 
-    # STEP 2: breadth-first walk from the named wallets. A
-    # contract or hub can be REACHED (it stays a leaf on the
-    # graph) but is never expanded — its far side stays dark,
-    # exactly like the frontend's sweep.
+    # STEP 2: breadth-first walk from the named wallets, on every
+    # network separately. A contract or hub can be REACHED (it
+    # stays a leaf on the graph) but is never expanded — its far
+    # side stays dark, exactly like the frontend's sweep.
     # ============================================================
     visited = set()
-    queue = deque(roots)
+    queue = deque((network, root) for network in networks for root in roots)
     while queue:
         node = queue.popleft()
         if node in visited:
             continue
         visited.add(node)
-        if node in blocked:
+        if node[1] in blocked:
             continue
         for neighbor in adjacency[node]:
-            if neighbor not in visited:
-                queue.append(neighbor)
+            if (node[0], neighbor) not in visited:
+                queue.append((node[0], neighbor))
 
-    good = visited - blocked
+    good = {node for node in visited if node[1] not in blocked}
 
 
     # STEP 3: partition the rows. A row survives when at least
-    # one endpoint is a reachable class wallet — a stranger's
-    # donation to a public hub has neither.
+    # one endpoint is a reachable class wallet ON THAT NETWORK —
+    # a stranger's donation to a public hub has neither.
     # ============================================================
     drop = [row for row in rows
-            if row['from_address'] not in good and row['to_address'] not in good]
+            if (row['network'], row['from_address']) not in good
+            and (row['network'], row['to_address']) not in good]
 
     per_network = defaultdict(lambda: [0, 0])
     for row in rows:
@@ -157,18 +175,25 @@ def prune(conn, apply_changes):
         return
 
 
-    # STEP 4: delete the stranger rows, then the unnamed
-    # addresses that no remaining transaction mentions (named
-    # ones are kept unconditionally — a label is the operator's
-    # deliberate act). VACUUM reclaims the space.
+    # STEP 4: delete the stranger rows (by rowid — the cached
+    # schema's id column is not a rowid alias and can be NULL),
+    # then the unnamed, unflagged addresses that no remaining
+    # transaction mentions. Named ones are kept unconditionally
+    # (a label is the operator's deliberate act) and so are the
+    # flagged contracts/hubs (the explorer's classification —
+    # losing them would let the next sweep scrape a hub again).
+    # VACUUM reclaims the space.
     # ============================================================
-    conn.executemany("DELETE FROM Graph_Transactions WHERE id = ?",
-                     [(row['id'],) for row in drop])
+    conn.executemany("DELETE FROM Graph_Transactions WHERE rowid = ?",
+                     [(row['rid'],) for row in drop])
 
     remaining = {row[0] for row in conn.execute("SELECT from_address FROM Graph_Transactions")} | \
                 {row[0] for row in conn.execute("SELECT to_address FROM Graph_Transactions")}
-    orphans = [row[0] for row in conn.execute(
-                   "SELECT address FROM Graph_Addresses WHERE name IS NULL OR name = ''")
+    orphans = [row[0] for row in conn.execute("""
+                   SELECT address FROM Graph_Addresses
+                   WHERE (name IS NULL OR name = '')
+                     AND COALESCE(is_contract, 0) = 0 AND COALESCE(is_hub, 0) = 0
+               """)
                if row[0] not in remaining]
     conn.executemany("DELETE FROM Graph_Addresses WHERE address = ?",
                      [(address,) for address in orphans])

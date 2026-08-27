@@ -46,6 +46,11 @@ ELECTRUM_PROTOCOL_VERSION = '1.4'
 # wedging a Flask worker (and this client's lock).
 ELECTRUM_TIMEOUT_S = 15
 
+# A reply that has grown this large without a line end is not a
+# JSON-RPC line any more — abandon it instead of buffering a
+# peer's stream without bound
+ELECTRUM_MAX_REPLY_BYTES = 16 * 1024 * 1024
+
 
 
 
@@ -158,9 +163,21 @@ class ElectrumClient:
         context = ssl.create_default_context()
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
-        self.ssock = context.wrap_socket(sock, server_hostname=self.host)
+        ssock = context.wrap_socket(sock, server_hostname=self.host)
 
-        self._roundtrip("server.version", [ELECTRUM_CLIENT_NAME, ELECTRUM_PROTOCOL_VERSION])
+        # The socket becomes THE session only once the handshake has
+        # answered: a failed handshake leaves nothing behind, so its
+        # late reply can never be read as the answer to the next
+        # request
+        try:
+            self._roundtrip("server.version", [ELECTRUM_CLIENT_NAME, ELECTRUM_PROTOCOL_VERSION], sock=ssock)
+        except BaseException:
+            try:
+                ssock.close()
+            except OSError:
+                pass
+            raise
+        self.ssock = ssock
 
 
 
@@ -196,19 +213,24 @@ class ElectrumClient:
     # _roundtrip
     ############################################################
     #
-    # One JSON-RPC round-trip over the open socket; the caller
-    # holds self.lock. Newline-delimited protocol: send one
-    # line, read until the first '\n' comes back. Electrum-side
-    # errors raise RuntimeError — those mean the server
-    # ANSWERED, so request() never retries them. The timing
-    # print only fires with APP_DEBUG on.
+    # One JSON-RPC round-trip over the open socket (or the one
+    # passed in, during the handshake); the caller holds
+    # self.lock. Newline-delimited protocol: send one line, read
+    # until the first '\n' comes back. The reply must carry THIS
+    # request's id and arrive within ELECTRUM_MAX_REPLY_BYTES —
+    # anything else is a broken stream (ValueError), which
+    # request() heals by reconnecting. Electrum-side errors
+    # raise RuntimeError — those mean the server ANSWERED, so
+    # request() never retries them. The timing print only fires
+    # with APP_DEBUG on.
     #
     # Used by:
     #   - _connect (above) — the handshake
     #   - request (below)
     ############################################################
 
-    def _roundtrip(self, method: str, params: list):
+    def _roundtrip(self, method: str, params: list, sock=None):
+        sock = sock or self.ssock
         request = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -218,23 +240,31 @@ class ElectrumClient:
 
         start_time = time.time()
 
-        self.ssock.sendall((json.dumps(request) + "\n").encode("utf-8"))
+        sock.sendall((json.dumps(request) + "\n").encode("utf-8"))
 
         response_data = b""
         while True:
-            chunk = self.ssock.recv(1024)
+            chunk = sock.recv(1024)
             if not chunk:
                 raise ConnectionError("Connection closed by server")
             response_data += chunk
             if b'\n' in response_data:
                 response_line = response_data.split(b'\n', 1)[0]
                 break
+            if len(response_data) >= ELECTRUM_MAX_REPLY_BYTES:
+                raise ValueError("Electrum reply exceeds the size bound without a line end")
 
         elapsed_time = time.time() - start_time
         if self.debug:
             print(f"[DEBUG] Electrum request '{method}' took {elapsed_time:.3f}s (network: {self.label})")
 
         response = json.loads(response_line.decode('utf-8'))
+
+        # Strictly one request in flight per socket, so a reply with
+        # any other id (a server notification, a leftover of a
+        # desynced session) is not the answer — never return it
+        if response.get("id") != request["id"]:
+            raise ValueError("Electrum reply for another request")
 
         if "error" in response and response["error"]:
             raise RuntimeError(f"Electrum error: {response['error']}")

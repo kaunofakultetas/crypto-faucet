@@ -173,6 +173,15 @@ class SVMFaucet:
         # polled faucet balance. Pre-filled by the warmup below.
         self._balance_cache = {}
 
+        # Networks whose RPC answered the configured cluster's
+        # genesis hash — see _verify_cluster. Filled by the warmup;
+        # a network whose RPC was down at startup earns its entry
+        # on its first payout instead. Unreachable probes are
+        # remembered briefly so an outage costs one probe, not one
+        # per claim.
+        self._verified_networks = set()
+        self._probe_failures = {}
+
         self._warm_up_networks()
 
 
@@ -236,6 +245,7 @@ class SVMFaucet:
         def warm(network_key, client):
             try:
                 version = client.get_version()
+                self._verify_cluster(network_key)
 
                 if self.FAUCET_ADDRESS:
                     decimals = self._chain_params[network_key]['decimals']
@@ -301,6 +311,56 @@ class SVMFaucet:
 
 
     ############################################################
+    # _verify_cluster
+    ############################################################
+    #
+    # Does the RPC pay on the cluster the config names? The
+    # config's 'network' is what the page tells Phantom to
+    # switch to, the RPC URL is where the coins actually go —
+    # a mismatch means the student watches an empty wallet on
+    # one cluster while the payout lands on another. Compared
+    # once against the cluster's genesis hash and remembered;
+    # the EVM faucet's chain-id check is the same gate. Raises
+    # when the RPC cannot be reached (remembered for
+    # BALANCE_CACHE_TTL, so an outage is one probe, not one
+    # per claim).
+    #
+    # Used by:
+    #   - _warm_up_networks (above) — the boot report
+    #   - request_sol (below) — before the payout
+    ############################################################
+
+    def _verify_cluster(self, network):
+        if network in self._verified_networks:
+            return True
+
+        failed = self._probe_failures.get(network)
+        if failed and int(time.time()) - failed[0] < BALANCE_CACHE_TTL:
+            raise failed[1]
+
+        try:
+            actual = self._clients[network].get_genesis_hash()
+        except Exception as error:
+            self._probe_failures[network] = (int(time.time()), error)
+            raise
+
+        expected = self._chain_params[network]['genesis_hash']
+        if actual != expected:
+            logging.error(
+                f"[SVM] {network} CLUSTER MISMATCH — config says {self.NETWORK_CONFIGS[network]['faucet']['network']} "
+                f"(genesis {expected}), the RPC answers genesis {actual}; check faucet.rpc_url"
+            )
+            return False
+
+        self._verified_networks.add(network)
+        return True
+
+
+
+
+
+
+    ############################################################
     # _faucet_balance
     ############################################################
     #
@@ -318,10 +378,20 @@ class SVMFaucet:
     def _faucet_balance(self, network: str) -> float:
         cached = self._balance_cache.get(network)
         if cached and int(time.time()) - cached[0] < BALANCE_CACHE_TTL:
+            if isinstance(cached[1], Exception):
+                raise cached[1]
             return cached[1]
 
         decimals = self._chain_params[network]['decimals']
-        balance = self._clients[network].get_balance(self.FAUCET_ADDRESS) / (10 ** decimals)
+        try:
+            balance = self._clients[network].get_balance(self.FAUCET_ADDRESS) / (10 ** decimals)
+        except Exception as error:
+            # A FAILED read is remembered for the same TTL: during an
+            # outage every poll from every tab would otherwise repeat
+            # the full round-trip (and its timeout) instead of
+            # answering from the remembered failure
+            self._balance_cache[network] = (int(time.time()), error)
+            raise
         self._balance_cache[network] = (int(time.time()), balance)
         return balance
 
@@ -489,6 +559,16 @@ class SVMFaucet:
 
         if to_address == self.FAUCET_ADDRESS:
             return {"error": "Negalima siųsti į čiaupo adresą"}, 400
+
+        # A network whose RPC was down at startup skipped the
+        # warmup's cluster check — settle it now (one cached
+        # round-trip) rather than pay out on a cluster the page
+        # never told the student about.
+        try:
+            if not self._verify_cluster(network):
+                return {"error": "Tinklo konfigūracijos klaida. Praneškite dėstytojui."}, 500
+        except Exception:
+            return {"error": "Tinklas nepasiekiamas. Bandykite vėliau."}, 503
 
 
         # STEP 2: signature check. This is the exact message the

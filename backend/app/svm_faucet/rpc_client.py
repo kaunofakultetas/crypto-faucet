@@ -110,7 +110,9 @@ class SolanaRpcClient:
     # keep-alive the server dropped while idle fails exactly
     # one send, and the pool dials fresh for the retry; safe
     # even for a broadcast, because re-sending the same signed
-    # transaction is idempotent (same signature). Every other
+    # transaction is idempotent (same signature). A CONNECT
+    # TIMEOUT is not that: the host never answered, and a second
+    # dial would only burn the timeout twice. Every other
     # transport failure propagates as the requests exception
     # it already is, so the caller can decide. The timing
     # print only fires with APP_DEBUG on.
@@ -130,6 +132,8 @@ class SolanaRpcClient:
         start_time = time.time()
         try:
             response = self.session.post(self.endpoint, json=payload, timeout=SOLANA_TIMEOUT_S)
+        except requests.ConnectTimeout:
+            raise
         except requests.ConnectionError:
             response = self.session.post(self.endpoint, json=payload, timeout=SOLANA_TIMEOUT_S)
         response.raise_for_status()
@@ -234,3 +238,24 @@ class SolanaRpcClient:
 
     def get_version(self) -> str:
         return self.request('getVersion').get('solana-core', 'unknown')
+
+
+
+
+
+
+
+    ############################################################
+    # get_genesis_hash
+    ############################################################
+    #
+    # The cluster's genesis hash — the one fact that tells
+    # mainnet, devnet and testnet apart over RPC (getVersion
+    # answers the same everywhere).
+    #
+    # Used by:
+    #   - svm_faucet.py — _verify_cluster
+    ############################################################
+
+    def get_genesis_hash(self) -> str:
+        return self.request('getGenesisHash')

@@ -11,7 +11,7 @@
 #    GET /api/evm/<network>/get-stored-transactions — flows for the tx graph
 #                                                     (?address, ?from, ?to)
 #    GET /api/evm/<network>/transaction-days        — days the root address
-#                                                     transacted (?address, ?tz_offset)
+#                                                     transacted (?address, ?tz)
 #    GET /api/evm/set-address-name                  — label an address
 #                                                     (?address, ?name)
 #
@@ -178,9 +178,9 @@ def get_stored_transactions(network):
 # The days ?address= itself transacted on, with per-day
 # counts — what the graph page's date slider offers (days
 # with no root activity would render a lone faucet node, so
-# they're not listed). ?tz_offset (browser's UTC offset in
-# seconds) aligns the day buckets to the student's local
-# days.
+# they're not listed). ?tz — the browser's IANA zone name —
+# buckets each row in the student's local day, DST included;
+# the old numeric ?tz_offset is still accepted.
 #
 # Used by:
 #   - Graph/Page.jsx — the date slider's day list
@@ -188,9 +188,9 @@ def get_stored_transactions(network):
 
 @bp_evm_faucet.route('/api/evm/<network>/transaction-days', methods=['GET'])
 def get_transaction_days(network):
-    tz_offset = request.args.get('tz_offset', default=0, type=int)
+    tz = request.args.get('tz') or request.args.get('tz_offset', default=0, type=int)
     address = request.args.get('address')
-    data, status = evm_explorer.get_transaction_days(network, tz_offset, address)
+    data, status = evm_explorer.get_transaction_days(network, tz, address)
     return jsonify(data), status
 
 

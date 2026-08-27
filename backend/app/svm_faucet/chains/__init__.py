@@ -63,4 +63,5 @@ def chain_params(chain: str, network: str) -> dict:
         'decimals': module.DECIMALS,
         'fee_lamports': module.FEE_LAMPORTS,
         'min_payout_lamports': module.MIN_PAYOUT_LAMPORTS,
+        'genesis_hash': module.GENESIS_HASHES[network],
     }
