@@ -1,23 +1,26 @@
-FROM python:3.12.4
+FROM python:3.14.7
 
 WORKDIR /app
 
 
 # Dependencies
-RUN  apt-get update && \
-     apt-get -y install nano procps && \
+RUN  apt-get update &&                                           \
+     apt-get -y upgrade &&                                       \
+     apt-get -y install --no-install-recommends procps &&        \
      rm -rf /var/lib/apt/lists/*
 
 
 # Setup Backend
 RUN pip install --no-cache-dir     \
-     "requests==2.32.3"            \
-     "web3==6.20.1"                \
-     "flask==3.0.3"                \
+     "requests==2.34.2"            \
+     "web3==7.16.0"                \
+     "eth-account==0.14.0"         \
+     "flask==3.1.3"                \
+     "werkzeug==3.1.8"             \
+     "pydantic==2.13.4"            \
      "embit==0.8.0"                \
-     "aiohttp==3.12.15"            \
-     "scrypt==0.9.4"               \
-     "solders==0.23.0"
+     "aiohttp==3.14.3"             \
+     "solders==0.29.0"
 
 
 # Copy the source code
