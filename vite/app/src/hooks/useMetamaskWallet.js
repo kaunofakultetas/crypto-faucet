@@ -3,15 +3,23 @@
 //
 //  The EVM-family pages' wallet hook — MetaMask's OWN
 //  provider (resolved via EIP-6963, never bare
-//  window.ethereum) plus one Web3 instance, with account and
-//  chain kept fresh through MetaMask's events. The returned
-//  `step` is the single source of truth:
+//  window.ethereum), with account and chain kept fresh
+//  through MetaMask's events. The returned `step` is the
+//  single source of truth:
 //  0 install → 1 connect → 2 switch network → 3 ready.
+//
+//  Every read goes straight through provider.request — the
+//  four RPC calls this hook needs (eth_accounts, eth_chainId,
+//  eth_getBalance, personal_sign) are answered by MetaMask
+//  itself, so no wallet library is bundled for them. Hex
+//  answers are decoded here: chain ids to numbers, the
+//  balance to a BigInt of wei.
 //
 //  Split into (root last) — the MetaMask conversations are
 //  plain functions, the hook wires their results into state:
 //
 //    WALLET_REFRESH_MS   — balance repoll cadence
+//    utf8ToHex           — personal_sign's message encoding
 //    getMetamaskProvider — MetaMask's provider, nobody else's
 //    onMetamaskProvider  — called back when it announces late
 //    connectMetamask     — the connect conversation
@@ -27,12 +35,18 @@
 
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import Web3 from 'web3';
 
 
 // How often the user's balance repolls — fast, so students
 // see it tick up right after a claim
 const WALLET_REFRESH_MS = 1000;
+
+// The claim message as personal_sign wants it: the UTF-8
+// bytes, hex-encoded. Sent as a plain string MetaMask would
+// guess the encoding; hex is unambiguous, and the backend
+// recovers the signer from the very same bytes.
+const utf8ToHex = (text) =>
+  '0x' + Array.from(new TextEncoder().encode(text), (b) => b.toString(16).padStart(2, '0')).join('');
 
 
 
@@ -220,14 +234,17 @@ async function requestChainHop(networkInfo) {
 //   - useMetamaskWallet (below) — signMessage()
 // -----------------------------------------------------------
 
-async function signClaimMessage(web3, account) {
-  if (!web3 || !account) {
+async function signClaimMessage(provider, account) {
+  if (!provider || !account) {
     throw new Error('Metamask piniginė neprijungta.');
   }
 
   const nonce = Date.now().toString();
   const message = `Pasirašykite žinutę kad patvirtintumėte jog naudojate šią piniginę. Nonce: ${nonce}`;
-  const signature = await web3.eth.personal.sign(message, account, '');
+  const signature = await provider.request({
+    method: 'personal_sign',
+    params: [utf8ToHex(message), account],
+  });
 
   return { nonce, signature };
 }
@@ -242,13 +259,14 @@ async function signClaimMessage(web3, account) {
 // useMetamaskWallet (default export)
 // -----------------------------------------------------------
 //
-//   const { web3, installed, account, chainId, balance,
+//   const { installed, account, chainId, balance,
 //           balanceFailed, step, connect, switchNetwork,
 //           signMessage } = useMetamaskWallet(expectedChainId)
 //
 // expectedChainId is the faucet network's chain id; the
-// balance is only fetched while the wallet is actually on it,
-// so a wrong-chain wallet shows "not connected" instead of a
+// balance (a BigInt of wei, null while unknown) is only
+// fetched while the wallet is actually on it, so a
+// wrong-chain wallet shows "not connected" instead of a
 // number from somewhere else. Pass nothing on pages that are
 // chain-agnostic (the ERC-20 faucet spans many chains at
 // once) — then a connected wallet is already step 3 and no
@@ -261,7 +279,7 @@ async function signClaimMessage(web3, account) {
 
 export default function useMetamaskWallet(expectedChainId) {
 
-  const [web3, setWeb3] = useState(null);
+  const [provider, setProvider] = useState(null);
   const [installed, setInstalled] = useState(false);
   const [account, setAccount] = useState(null);
   const [chainId, setChainId] = useState(null);
@@ -283,8 +301,7 @@ export default function useMetamaskWallet(expectedChainId) {
 
     const wire = (provider) => {
       setInstalled(true);
-      const w3 = new Web3(provider);
-      setWeb3(w3);
+      setProvider(provider);
 
       const handleAccountsChanged = (acc) => setAccount(acc[0] ?? null);
       const handleChainChanged = (id) => setChainId(parseInt(id, 16));
@@ -292,11 +309,11 @@ export default function useMetamaskWallet(expectedChainId) {
       provider.on('accountsChanged', handleAccountsChanged);
       provider.on('chainChanged', handleChainChanged);
 
-      w3.eth.getAccounts()
+      provider.request({ method: 'eth_accounts' })
         .then((acc) => { if (alive) handleAccountsChanged(acc); })
         .catch((e) => console.warn('[metamask] eth_accounts failed', e));
-      w3.eth.getChainId()
-        .then((id) => { if (alive) setChainId(Number(id)); })
+      provider.request({ method: 'eth_chainId' })
+        .then((id) => { if (alive) handleChainChanged(id); })
         .catch((e) => console.warn('[metamask] eth_chainId failed', e));
 
       detach = () => {
@@ -335,14 +352,15 @@ export default function useMetamaskWallet(expectedChainId) {
   // shows a dash instead of "Loading…" forever.
   const { data: balance = null, isError: balanceFailed } = useQuery({
     queryKey: ['wallet-balance', account, expectedChainId],
-    enabled: Boolean(web3 && account && expectedChainId),
+    enabled: Boolean(provider && account && expectedChainId),
     refetchInterval: WALLET_REFRESH_MS,
     retry: false,
     queryFn: async () => {
-      const currentId = Number(await web3.eth.getChainId());
+      const currentId = parseInt(await provider.request({ method: 'eth_chainId' }), 16);
       setChainId(currentId);
       if (currentId !== Number(expectedChainId)) return null;
-      return await web3.eth.getBalance(account);
+      const wei = await provider.request({ method: 'eth_getBalance', params: [account, 'latest'] });
+      return BigInt(wei);
     },
   });
 
@@ -364,7 +382,7 @@ export default function useMetamaskWallet(expectedChainId) {
     setChainId(Number(networkInfo.chain_id));
   };
 
-  const signMessage = () => signClaimMessage(web3, account);
+  const signMessage = () => signClaimMessage(provider, account);
 
 
   // 0 install → 1 connect → 2 switch network → 3 ready. With
@@ -376,5 +394,5 @@ export default function useMetamaskWallet(expectedChainId) {
     : 3;
 
 
-  return { web3, installed, account, chainId, balance, balanceFailed, step, connect, switchNetwork, signMessage };
+  return { installed, account, chainId, balance, balanceFailed, step, connect, switchNetwork, signMessage };
 }

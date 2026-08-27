@@ -1,6 +1,10 @@
 @import "tailwindcss";
 
-/* CSS variables for Tailwind to consume */
+/* Brand tokens as plain CSS custom properties — read by the
+   .card-surface rule below and by var(--color-primary) in
+   Tailwind arbitrary values / MUI sx. Not a Tailwind theme:
+   there is no @theme block, so no bg-primary-style utilities
+   exist (theme.js carries the same colours for MUI). */
 :root {
   --color-primary: #78003F;
   --color-primary-hover: #E64164;

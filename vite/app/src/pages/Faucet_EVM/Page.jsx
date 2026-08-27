@@ -241,11 +241,14 @@ export default function FaucetEVM() {
   const faucetAddress = faucetInfo.address.toLowerCase();
 
   // Three states that must not blur: no wallet or a dead RPC
-  // is a dash, a poll still in flight is "Loading…"
-  const formatBalance = (bal) => {
-    if (!wallet.web3 || wallet.balanceFailed) return '-';
-    if (bal == null) return 'Loading…';
-    return `${parseFloat(wallet.web3.utils.fromWei(bal, 'ether')).toFixed(3)} ${networkInfo.short_name}`;
+  // is a dash, a poll still in flight is "Loading…". The
+  // balance is a BigInt of wei — divided down to micro-ether
+  // as an integer first, so the float never sees 18 digits.
+  const formatBalance = (wei) => {
+    if (!wallet.installed || wallet.balanceFailed) return '-';
+    if (wei == null) return 'Loading…';
+    const microEther = Number(wei / 1_000_000_000_000n);
+    return `${(microEther / 1e6).toFixed(3)} ${networkInfo.short_name}`;
   };
 
 

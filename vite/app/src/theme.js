@@ -1,3 +1,17 @@
+// -----------------------------------------------------------
+//  [*] MUI theme
+//
+//  The brand colours as an MUI theme: burgundy primary with
+//  the pink hover, white surfaces, gray-700 body text, 8 px
+//  corners, and every Button contained + primary by default.
+//  The same colours live as CSS custom properties in
+//  index.css for the hand-written Tailwind classes — keep
+//  the two in step by hand, nothing links them.
+//
+//  Used by:
+//    - App.jsx — ThemeProvider
+// -----------------------------------------------------------
+
 import { createTheme } from '@mui/material/styles'
 
 // Central theme tokens

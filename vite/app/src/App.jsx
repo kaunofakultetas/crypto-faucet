@@ -18,7 +18,10 @@
 //  URLs (a typo, a stale bookmark, a family path with no
 //  key) land on the not-found page; a render-time throw in
 //  the navbar or a page is caught by an ErrorBoundary instead
-//  of blanking the whole app.
+//  of blanking the whole app. Every page is a static import
+//  — one bundle, no lazy chunks, by decision: a tab left
+//  open across a deploy must keep navigating, never fail on
+//  a chunk the server no longer has.
 //
 //  The shell is a flex column the height of the viewport —
 //  navbar, the routed page (flex: 1), footer — so no page

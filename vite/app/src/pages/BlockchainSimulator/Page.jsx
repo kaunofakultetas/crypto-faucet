@@ -3,8 +3,10 @@
 //
 //  An interactive proof-of-work teaching toy: a chain of
 //  SHA-256 blocks that students edit, break and re-mine.
-//  Everything runs client-side with crypto-js — the only
-//  backend call is loading the pre-mined example chain
+//  Everything runs client-side with crypto-js's SHA-256 (the
+//  one module, not the whole barrel — the mining loop needs
+//  a synchronous hash, which rules out crypto.subtle); the
+//  only backend call is loading the pre-mined example chain
 //  (GET /api/get-example-blockchain).
 //
 //  The hash preimage is load-bearing: calculateHash hashes
@@ -46,12 +48,12 @@
 //                                  (default export)
 // -----------------------------------------------------------
 
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Typography, TextField, Button, Box, MenuItem, Select, InputLabel, FormControl } from '@mui/material';
 import { styled } from '@mui/material/styles';
 import { useMutation } from '@tanstack/react-query';
 import axios from 'axios';
-import crypto from 'crypto-js';
+import sha256 from 'crypto-js/sha256';
 
 import { GiMining } from "react-icons/gi";
 import AddCircleOutlinedIcon from '@mui/icons-material/AddCircleOutlined';
@@ -90,7 +92,7 @@ const generateRandomTransaction = () => {
 // nonce arrives as a number when mined but as a raw string
 // when typed — both interpolate identically
 const calculateHash = (previousHash, nonce, data) => {
-  return crypto.SHA256(`${previousHash}\n${nonce}\n${data}`).toString();
+  return sha256(`${previousHash}\n${nonce}\n${data}`).toString();
 };
 
 
