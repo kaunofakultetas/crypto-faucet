@@ -580,9 +580,12 @@ class MoveFaucet:
         # frontend asks the wallet to sign — any mismatch (different
         # nonce, different wording) fails verification.
         # ======================================================
+        # The exact bytes the wallet signed — the wording (its missing
+        # commas included) is the contract with the frontend hook that
+        # builds the same string; never reword it on one side alone.
         message = f"Pasirašykite žinutę kad patvirtintumėte jog naudojate šią piniginę. Nonce: {nonce}"
         if not self.verify_signature(to_address, message, signature):
-            return {"error": "Kriptografinis parašas kažkodėl neatitinka"}, 403
+            return {"error": "Parašas neatitinka nurodyto adreso. Prijunkite tą pačią piniginę ir bandykite dar kartą."}, 403
 
 
         # STEP 3: eligibility — no top-up if the wallet already

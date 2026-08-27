@@ -331,6 +331,7 @@ export default function GraphPage() {
     // as a flex column — the bar takes its natural height, the
     // graph canvas absorbs the rest, and the page never scrolls
     <div className="flex min-h-0 flex-1 flex-col p-4">
+      <h1 className="sr-only">Transakcijų srautas — {networkInfo?.full_name ?? network}</h1>
       <DateSliderBar days={days} selectedDay={selectedDay} today={today} onCommit={setSelectedDay} />
 
       <CryptoFlowGraph

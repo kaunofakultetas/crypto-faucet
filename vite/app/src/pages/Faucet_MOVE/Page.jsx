@@ -157,7 +157,7 @@ function useFaucetInfo(network, ready) {
 //
 // A GraphQL error arrives with HTTP 200, so it is rethrown
 // here to reach `failed` — the page shows a dash rather than
-// a zero or a permanent "Loading…".
+// a zero or a permanent "Kraunama…".
 //
 // Used by:
 //   - FaucetMOVE (below)
@@ -201,7 +201,8 @@ function useWalletBalance(rpcUrl, coinType, address) {
 
 function LoadingSkeleton() {
   return (
-    <Box className="p-4">
+    <Box className="p-4" aria-busy="true">
+      <p role="status" className="sr-only">Kraunami tinklo duomenys…</p>
       <div className="mx-auto w-full min-w-[320px] max-w-[640px] px-4 pt-4">
         <Skeleton variant="text" height={48} width="70%" />
         <Skeleton variant="text" height={20} width="90%" />
@@ -447,7 +448,7 @@ export default function FaucetMOVE() {
   const walletBalanceText = () => {
     if (wallet.step !== 3) return 'Piniginė neprijungta';
     if (walletBalance.failed) return '-';
-    if (walletBalance.mist == null) return 'Loading…';
+    if (walletBalance.mist == null) return 'Kraunama…';
     return `${mistToCoins(walletBalance.mist, networkInfo.decimals).toFixed(3)} ${networkInfo.short_name}`;
   };
 
@@ -523,13 +524,13 @@ export default function FaucetMOVE() {
               variant="contained"
               color="primary"
               fullWidth
-              disabled={claiming}
-              onClick={claim}
-              sx={{ minHeight: 40 }}
+              aria-busy={claiming}
+              aria-disabled={claiming}
+              onClick={claiming ? undefined : claim}
+              sx={{ minHeight: 40, '&[aria-disabled="true"]': { opacity: 0.6, pointerEvents: 'none' } }}
             >
-              {claiming
-                ? <CircularProgress size={22} color="inherit" />
-                : `Gauti ${networkInfo.full_name} valiutos`}
+              {claiming && <CircularProgress size={22} color="inherit" aria-hidden="true" sx={{ mr: 1 }} />}
+              {claiming ? 'Siunčiama…' : `Gauti ${networkInfo.full_name} valiutos`}
             </Button>
           )}
 
@@ -539,7 +540,7 @@ export default function FaucetMOVE() {
         </div>
 
         {alerts.map((a) => (
-          <FadingAlert key={a.id} severity={a.severity}>
+          <FadingAlert key={a.id} severity={a.severity} onDone={a.dismiss}>
             {a.message}
           </FadingAlert>
         ))}

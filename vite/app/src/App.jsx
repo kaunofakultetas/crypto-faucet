@@ -32,11 +32,13 @@
 //
 //    DynamicDefaultRedirect — "/" → the right faucet
 //    CatalogUnavailable     — "/" when the catalog failed
+//    useRouteTitle          — document.title per route
 //    PageArea               — the routes, inside a boundary
 //    App                    — providers + shell + routes
 //                             (default export)
 // -----------------------------------------------------------
 
+import { useEffect } from 'react';
 import { BrowserRouter as Router, Route, Routes, Navigate, Link, useLocation } from 'react-router-dom';
 
 import { ThemeProvider, CssBaseline, Box, Button } from '@mui/material';
@@ -150,6 +152,48 @@ function CatalogUnavailable({ onRetry }) {
 
 
 // -----------------------------------------------------------
+// useRouteTitle
+// -----------------------------------------------------------
+//
+// One document.title per route — a client-routed SPA never
+// changes it on its own, so every tab, bookmark and history
+// entry would read the same "VU KNF Faucet'as". Matched by
+// path prefix; an unknown path keeps the bare site name.
+//
+// Used by:
+//   - PageArea (below)
+// -----------------------------------------------------------
+
+const SITE_TITLE = "VU KNF Faucet'as";
+
+const ROUTE_TITLES = [
+  ['/faucet/evm', 'EVM čiaupas'],
+  ['/faucet/erc20', 'ERC-20 čiaupas'],
+  ['/faucet/svm', 'SVM čiaupas'],
+  ['/faucet/move', 'Move čiaupas'],
+  ['/faucet/utxo', 'UTXO čiaupas'],
+  ['/graph', 'Transakcijų srautas'],
+  ['/sha256', 'Blokų grandinės simuliatorius'],
+  ['/videos', 'Vaizdo įrašai'],
+  ['/dapps-server', 'DAPPS serveris'],
+];
+
+function useRouteTitle() {
+  const { pathname } = useLocation();
+
+  useEffect(() => {
+    const name = ROUTE_TITLES.find(([prefix]) => pathname.startsWith(prefix))?.[1];
+    document.title = name ? `${name} — ${SITE_TITLE}` : SITE_TITLE;
+  }, [pathname]);
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // PageArea
 // -----------------------------------------------------------
 //
@@ -166,6 +210,7 @@ function CatalogUnavailable({ onRetry }) {
 function PageArea() {
 
   const location = useLocation();
+  useRouteTitle();
 
   return (
     <ErrorBoundary resetKey={location.pathname}>
@@ -235,7 +280,10 @@ function PageArea() {
 // the shell: a viewport-high flex column — Navbar on top,
 // the routed page in the grey middle taking the rest, Footer
 // at the bottom. No magic chrome height anywhere: the navbar
-// may wrap on a narrow window and the page still fits.
+// may wrap on a narrow window and the page still fits. The
+// middle is the <main> landmark, and a skip link (visible
+// only when focused) jumps a keyboard user past the navbar's
+// ten-odd tab stops straight into it.
 //
 // Used by:
 //   - main.jsx — mounted into #root
@@ -249,11 +297,18 @@ export default function App() {
         <Router>
           <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100dvh' }}>
 
+            <a
+              href="#main"
+              className="sr-only focus:not-sr-only focus:absolute focus:left-2 focus:top-2 focus:z-50 focus:rounded focus:bg-white focus:px-3 focus:py-2 focus:text-[#78003F]"
+            >
+              Pereiti prie turinio
+            </a>
+
             <ErrorBoundary>
               <Navbar />
             </ErrorBoundary>
 
-            <Box className="bg-gray-100" sx={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
+            <Box component="main" id="main" tabIndex={-1} className="bg-gray-100" sx={{ flex: 1, display: 'flex', flexDirection: 'column', outline: 'none' }}>
               <PageArea />
             </Box>
 

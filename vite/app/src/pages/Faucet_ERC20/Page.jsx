@@ -313,10 +313,10 @@ function GateCard({ activeStep, token, switchTarget, wallet, alerts, onError }) 
       <WalletStepper
         activeStep={activeStep}
         steps={[
-          'Susidiegti Metamask',
-          'Prijungti Metamask',
-          switchTarget ? `Įsijungti ${switchTarget.full_name} Tinklą` : 'Įsijungti Tinklą',
-          'Gauti native valiutos',
+          'Susidiegti MetaMask',
+          'Prijungti MetaMask',
+          switchTarget ? `Įsijungti ${switchTarget.full_name} tinklą` : 'Įsijungti tinklą',
+          'Gauti tinklo valiutos',
           `Atsisiųsti ${token.name} žetoną`,
         ]}
         icons={{ 3: <LocalGasStationIcon /> }}
@@ -341,7 +341,7 @@ function GateCard({ activeStep, token, switchTarget, wallet, alerts, onError }) 
       )}
 
       {alerts.map((a) => (
-        <FadingAlert key={a.id} severity={a.severity}>
+        <FadingAlert key={a.id} severity={a.severity} onDone={a.dismiss}>
           {a.message}
         </FadingAlert>
       ))}
@@ -380,10 +380,10 @@ function GasNoticeCard({ gasless }) {
         <LocalGasStationIcon sx={{ color: '#b45309' }} />
 
         <div className="min-w-0 flex-1">
-          <p className="font-semibold text-amber-800">Trūksta native kriptovaliutos</p>
+          <p className="font-semibold text-amber-800">Trūksta tinklo kriptovaliutos</p>
           <p className="mt-1 text-sm text-gray-700">
             Žetonų gavimas nieko nekainuoja, bet norint juos panaudoti
-            reikės native kriptovaliutos tinklo mokesčiams. Pirmiausia
+            reikės tinklo kriptovaliutos mokesčiams. Pirmiausia
             jos pasiimkite:
           </p>
 
@@ -467,7 +467,7 @@ function ChainCard({ deployment, token, isCurrentChain, walletReady, needsGas, b
       </div>
 
       <div className="mt-3 flex gap-2">
-        <Tooltip title="Persijungti į šį tinklą ir parodyti žetoną MetaMask sąraše">
+        <Tooltip describeChild title="Persijungti į šį tinklą ir parodyti žetoną MetaMask sąraše">
           <Button
             variant="outlined"
             startIcon={<VisibilityIcon />}
@@ -481,18 +481,19 @@ function ChainCard({ deployment, token, isCurrentChain, walletReady, needsGas, b
         <Button
           variant="contained"
           fullWidth
-          disabled={!walletReady || needsGas || busy !== null}
-          onClick={() => onClaim(deployment)}
-          sx={{ minHeight: 40 }}
+          disabled={!walletReady || needsGas}
+          aria-busy={busy === deployment.network}
+          aria-disabled={busy !== null || undefined}
+          onClick={busy !== null ? undefined : () => onClaim(deployment)}
+          sx={{ minHeight: 40, '&[aria-disabled="true"]': { opacity: 0.6, pointerEvents: 'none' } }}
         >
-          {busy === deployment.network
-            ? <CircularProgress size={22} color="inherit" />
-            : `Gauti ${token.symbol}`}
+          {busy === deployment.network && <CircularProgress size={22} color="inherit" aria-hidden="true" sx={{ mr: 1 }} />}
+          {busy === deployment.network ? 'Siunčiama…' : `Gauti ${token.symbol}`}
         </Button>
       </div>
 
       {alerts.map((a) => (
-        <FadingAlert key={a.id} severity={a.severity}>
+        <FadingAlert key={a.id} severity={a.severity} onDone={a.dismiss}>
           {a.message}
         </FadingAlert>
       ))}
@@ -554,7 +555,8 @@ function ReturnAddressCard({ address, symbol }) {
 
 function LoadingSkeleton() {
   return (
-    <Box className="p-4">
+    <Box className="p-4" aria-busy="true">
+      <p role="status" className="sr-only">Kraunami tinklo duomenys…</p>
       <div className="mx-auto w-full min-w-[320px] max-w-[640px] px-4 pt-4">
         <Skeleton variant="text" height={48} width="70%" />
         <Skeleton variant="text" height={20} width="90%" />

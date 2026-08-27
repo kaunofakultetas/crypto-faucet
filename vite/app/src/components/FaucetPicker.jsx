@@ -145,11 +145,12 @@ function ItemRow({ item, isFavorite, isSelected, onToggleFavorite, onSelect }) {
       <Tooltip title={isFavorite ? 'Pašalinti iš mėgstamų' : 'Pridėti į mėgstamus'}>
         <IconButton
           size="small"
+          aria-pressed={isFavorite}
           onClick={(e) => {
             e.stopPropagation();
             onToggleFavorite(item.key);
           }}
-          sx={{ color: isFavorite ? 'warning.main' : 'action.disabled' }}
+          sx={{ color: isFavorite ? 'warning.main' : 'text.secondary' }}
         >
           {isFavorite ? <StarIcon fontSize="small" /> : <StarBorderIcon fontSize="small" />}
         </IconButton>
@@ -236,7 +237,11 @@ export default function FaucetPicker({ items = [], loading = false, faucetType, 
     <>
       {/* The trigger — current pick's dot + name */}
       <Button
+        id="faucet-picker-button"
         variant="outlined"
+        aria-haspopup="menu"
+        aria-expanded={open ? 'true' : undefined}
+        aria-controls={open ? 'faucet-picker-menu' : undefined}
         onClick={(e) => setAnchorEl(e.currentTarget)}
         endIcon={<ArrowDropDownIcon />}
         sx={{
@@ -258,10 +263,12 @@ export default function FaucetPicker({ items = [], loading = false, faucetType, 
       </Button>
 
       <Menu
+        id="faucet-picker-menu"
         anchorEl={anchorEl}
         open={open}
         onClose={closeMenu}
         autoFocus={false}
+        MenuListProps={{ 'aria-labelledby': 'faucet-picker-button' }}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
         transformOrigin={{ vertical: 'top', horizontal: 'left' }}
         slotProps={{ paper: { sx: { width: 320, maxHeight: 420, mt: 0.5 } } }}

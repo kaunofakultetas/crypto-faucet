@@ -50,7 +50,7 @@
 //                          (default export)
 // -----------------------------------------------------------
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import axios from 'axios';
 import { Network } from 'vis-network';
 import { DataSet } from 'vis-data';
@@ -722,6 +722,25 @@ export default function useTransactionGraph({ faucetAddress, network, dateRange,
   const networkRef = useRef(null);
   const storeRef = useRef(null);
 
+  // The drawn transfers as plain rows — the text alternative
+  // the shell renders as a hidden table. Refreshed after every
+  // sync, which is the one moment the DataSets change.
+  const [rows, setRows] = useState([]);
+  const publishRows = useCallback(() => {
+    const store = storeRef.current;
+    if (!store) {
+      setRows([]);
+      return;
+    }
+    const nameOf = (address) => store.get(address)?.name || formatAddress(address);
+    setRows(store.edges.get().map((edge) => ({
+      id: edge.id,
+      from: nameOf(edge.from),
+      to: nameOf(edge.to),
+      label: edge.label.replace('\n', ' '),
+    })));
+  }, []);
+
   // Positions are scoped per (network, day) — each day is a
   // different graph with its own hand-arranged layout
   const { positionsRef: nodePositions, save: savePositions, setLevelNextX, noteX } = useNodePositions(`${network}:${day}`);
@@ -752,7 +771,8 @@ export default function useTransactionGraph({ faucetAddress, network, dateRange,
   // catalog answers, instead of rebuilding the whole graph
   useEffect(() => {
     storeRef.current?.sync(currencySymbol);
-  }, [currencySymbol]);
+    publishRows();
+  }, [currencySymbol, publishRows]);
 
 
   // Boot + steady state. Boot seeds the faucet root, builds
@@ -818,6 +838,7 @@ export default function useTransactionGraph({ faucetAddress, network, dateRange,
     const mirror = () => {
       if (cancelled || !networkRef.current) return;
       store.sync(currencySymbolRef.current);
+      publishRows();
     };
 
     // Double-click: pull that address's own transactions in
@@ -844,6 +865,7 @@ export default function useTransactionGraph({ faucetAddress, network, dateRange,
       store.seedRoot(faucetAddress);
       transactions.forEach((tx) => store.mergeTransaction(tx, 0));
       store.sync(currencySymbolRef.current);
+      publishRows();
 
       networkRef.current = new Network(
         containerRef.current,
@@ -895,8 +917,9 @@ export default function useTransactionGraph({ faucetAddress, network, dateRange,
       networkRef.current = null;
       store.clear();
       storeRef.current = null;
+      publishRows();
     };
-  }, [faucetAddress, network, dateRange.from, dateRange.to, live, nodePositions]);
+  }, [faucetAddress, network, dateRange.from, dateRange.to, live, nodePositions, publishRows]);
 
 
   // Single entry for zoom changes — slider, buttons and the
@@ -939,10 +962,11 @@ export default function useTransactionGraph({ faucetAddress, network, dateRange,
     // next sweep brings it back
     if (storeRef.current?.setName(address, trimmed)) {
       storeRef.current.sync(currencySymbolRef.current);
+      publishRows();
     }
     return true;
   };
 
 
-  return { containerRef, scale, setZoom, zoomIn, zoomOut, renameNode, failed };
+  return { containerRef, scale, setZoom, zoomIn, zoomOut, renameNode, failed, rows };
 }

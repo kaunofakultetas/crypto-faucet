@@ -11,7 +11,7 @@
 //
 //  The hash preimage is load-bearing: calculateHash hashes
 //  `previousHash\nnonce\ndata` (real newlines) and the
-//  "Kopijuoti Bloko Tekstą" button copies that exact string,
+//  "Kopijuoti bloko tekstą" button copies that exact string,
 //  so students can reproduce any block hash in the external
 //  SHA256 online tool. The backend's example blocks were
 //  mined against the same format.
@@ -447,10 +447,12 @@ function ControlPanel({ difficulty, onDifficultyChange, onLoadExample, exampleLo
     <RoundedBox sx={{ width: 1000, maxWidth: '95vw' }}>
 
       <FormControl fullWidth sx={{ marginBottom: 2 }}>
-        <InputLabel>Sudėtingumas - (Pradiniai Nuliukai)</InputLabel>
+        <InputLabel id="difficulty-label">Sudėtingumas (pradiniai nuliukai)</InputLabel>
         <Select
+          labelId="difficulty-label"
+          id="difficulty"
           value={difficulty}
-          label="Sudėtingumas - (Pradiniai Nuliukai)"
+          label="Sudėtingumas (pradiniai nuliukai)"
           onChange={(e) => onDifficultyChange(e.target.value)}
         >
           {[1, 2, 3, 4, 5].map((num) => (
@@ -477,7 +479,7 @@ function ControlPanel({ difficulty, onDifficultyChange, onLoadExample, exampleLo
           variant="contained"
           color="primary"
         >
-          SHA256 Online Įrankis
+          Internetinis SHA256 įrankis
         </Button>
       </Box>
 
@@ -555,17 +557,21 @@ function BlockCard({ block, index, isValid, mining, miningElsewhere, onNonceChan
 
       <div className={`border rounded-lg p-6 mb-4 ${isValid ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
 
-        {/* Title — first and last 12 characters of the hash */}
+        {/* Title — first and last 12 characters of the hash, and
+            the block's state in WORDS: the green/red wash is the
+            lesson, and colour alone is invisible to a screen
+            reader and to a red-green colour-blind student */}
         <Typography variant="h6" className="mb-4">
           Blokas #{index} &emsp;&emsp; - &emsp;&emsp;({block.hash.substring(0, 12)}....{block.hash.substring(52, 64)})
+          <span className="ml-3 text-sm font-normal">{isValid ? '✓ Galiojantis' : '✗ Sugadintas'}</span>
         </Typography>
 
         <Typography variant="body2" className="mb-2">
-          <strong>Ankstesnio Bloko Maišos Kodas (SHA256):</strong> {block.previousHash}
+          <strong>Ankstesnio bloko maišos kodas (SHA256):</strong> {block.previousHash}
         </Typography>
 
         <Typography variant="body2" className="mb-2">
-          <strong>Šio Bloko Maišos Kodas (SHA256):</strong> {block.hash}
+          <strong>Šio bloko maišos kodas (SHA256):</strong> {block.hash}
         </Typography>
 
         <div className="mt-6">
@@ -597,7 +603,7 @@ function BlockCard({ block, index, isValid, mining, miningElsewhere, onNonceChan
             onClick={copyBlockData}
             className="whitespace-nowrap"
           >
-            Kopijuoti Bloko<br />Tekstą
+            Kopijuoti bloko<br />tekstą
           </Button>
 
           <Button
@@ -605,11 +611,12 @@ function BlockCard({ block, index, isValid, mining, miningElsewhere, onNonceChan
             color="primary"
             disabled={isValid || miningElsewhere}
             onClick={mining !== null ? onStop : onMine}
+            aria-label={mining !== null ? undefined : `Kasti bloką #${index}`}
             sx={{ textTransform: 'none' }}
           >
             {mining !== null
               ? `Stabdyti · ${mining.toLocaleString('lt-LT')} bandymų`
-              : <GiMining size={35} />}
+              : <GiMining size={35} aria-hidden="true" />}
           </Button>
         </div>
 
@@ -642,7 +649,7 @@ function AddBlockButton({ onClick }) {
         className="px-8 py-4 w-[500px] h-[50px]"
         sx={{ fontSize: 20 }}
       >
-        Pridėti Naują Bloką
+        Pridėti naują bloką
         <AddCircleOutlinedIcon className="text-3xl ml-2" />
       </Button>
     </RoundedBox>
@@ -697,19 +704,20 @@ function Minimap({ blocks, isValidHash }) {
       className="hidden xl:flex fixed top-24 right-4 z-30 flex-col items-center bg-gray-100 rounded-lg p-4 shadow-lg max-h-[80vh] overflow-y-auto"
     >
       <Typography variant="h6" className="text-center mb-4">
-        Blokų Grandinės<br />
-        Minimap'as
+        Blokų grandinės<br />
+        žemėlapis
       </Typography>
 
       <div className="flex flex-col items-center space-y-2">
         {blocks.map((block, index) => (
           <div
             key={index}
+            title={`Blokas #${index}: ${isValidHash(block.hash) ? 'galiojantis' : 'sugadintas'}`}
             className={`w-12 h-12 flex items-center justify-center font-bold text-white rounded ${
-              isValidHash(block.hash) ? 'bg-green-600' : 'bg-red-600'
+              isValidHash(block.hash) ? 'bg-green-700' : 'bg-red-600'
             }`}
           >
-            #{index}
+            {isValidHash(block.hash) ? '✓' : '✗'}{index}
           </div>
         ))}
       </div>
@@ -754,10 +762,11 @@ export default function BlockchainSimulator() {
       {/* Title */}
       <div className="mx-auto p-4 min-w-80 max-w-2xl w-full">
         <Typography
+          component="h1"
           className="text-[#78003F] text-center"
           sx={{ fontSize: 45, fontWeight: 600, marginBottom: 3 }}
         >
-          Blokų Grandinės <br /> Simuliatorius
+          Blokų grandinės <br /> simuliatorius
         </Typography>
       </div>
 

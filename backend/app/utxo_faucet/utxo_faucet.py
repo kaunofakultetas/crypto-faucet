@@ -783,7 +783,7 @@ class UTXOFaucet:
             }, 200
 
         except Exception as e:
-            return {"error": "Nepavyko išsiųsti kriptovaliutą", "details": str(e)}, 500
+            return {"error": "Nepavyko išsiųsti transakcijos. Bandykite dar kartą.", "details": str(e)}, 500
 
 
 

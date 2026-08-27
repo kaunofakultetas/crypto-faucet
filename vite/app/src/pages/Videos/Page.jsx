@@ -36,19 +36,19 @@ import { Box, Typography, Card, CardContent } from '@mui/material';
 const VIDEOS = [
   {
     title: 'Dvigubo apmokėjimo ataka naudojant Replace by Fee (RBF)',
-    description: 'Replace by Fee (RBF) yra mechanizmas, kuris leidžia vartotojams pakeisti transakciją. Šis '
-      + 'mechanizmas buvo sukurtas tam jog kriptovaliutos naudojai galėtų atnaujinti užstrigusias transakcijas '
-      + 'ir pakelti transakcijos mokomą mokestį kasėjams taip paspartinant transakcijos patvirtinimą '
+    description: 'Replace by Fee (RBF) yra mechanizmas, kuris leidžia naudotojams pakeisti transakciją. Šis '
+      + 'mechanizmas buvo sukurtas tam, kad kriptovaliutos naudotojai galėtų atnaujinti užstrigusias transakcijas '
+      + 'ir pakelti kasėjams mokamą transakcijos mokestį, taip paspartinant transakcijos patvirtinimą '
       + 'blokų grandinėje.',
     src: '/served/videos/01.ReplaceByFee.mp4',
   },
   {
-    title: 'Blokų Grandinės Skylimas (Natūralus)',
-    description: 'Kriptovaliutos grandinės skylimas (natūralus) yra procesas, kai panašiu laiku yra iškasami '
-      + 'du blokai tinkle šie blokai yra propaguojami visame tinkle. Blokų grandinės dalyviai toliau '
-      + 'tęsia ir bando iškasti naują bloką ant to kurį gavo pirmiau. Kai yra atrandamas '
-      + 'tolimesnis blokas šis blokas taip pat yra paviešinamas visame tinkle ir tie dalyviai kurie '
-      + 'buvo kitoje atšakoje persioriantuoja ir tęsia darbus ilgiausioje grandinėje.',
+    title: 'Blokų grandinės skilimas (natūralus)',
+    description: 'Kriptovaliutos grandinės skilimas (natūralus) yra procesas, kai panašiu metu tinkle iškasami '
+      + 'du blokai ir abu paskleidžiami visame tinkle. Blokų grandinės dalyviai toliau '
+      + 'bando iškasti naują bloką ant to, kurį gavo pirmiau. Kai atrandamas '
+      + 'tolimesnis blokas, jis taip pat paskelbiamas visame tinkle, ir tie dalyviai, kurie '
+      + 'buvo kitoje atšakoje, persiorientuoja ir tęsia darbus ilgiausioje grandinėje.',
     src: '/served/videos/05.MiningForkResolution.mp4',
   },
 ];
@@ -130,7 +130,7 @@ export default function VideosPage() {
           className="text-center pb-8"
           sx={{ color: 'var(--color-primary)', fontWeight: 'bold' }}
         >
-          Vaizdo Įrašai
+          Vaizdo įrašai
         </Typography>
 
         {/* One card per video */}

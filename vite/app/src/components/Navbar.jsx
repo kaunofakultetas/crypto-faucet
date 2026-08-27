@@ -4,8 +4,8 @@
 //  Shown on every page: the VU KnF logo linking to "/", the
 //  faucet controls (on faucet pages a segmented faucet-type
 //  switch plus the network dropdown, elsewhere a quick
-//  "Atidaryti Faucet'ą" button), the Vaizdo Įrašai link and
-//  the "Kiti Įrankiai" dropdown with the teaching tools.
+//  "Atidaryti faucet'ą" button), the Vaizdo įrašai link and
+//  the "Kiti įrankiai" dropdown with the teaching tools.
 //
 //  What the dropdown lists depends on the type, because the
 //  faucets are keyed differently: EVM, UTXO, SVM and MOVE by
@@ -39,7 +39,7 @@
 //    FaucetTypeSwitch   — segmented switch, live types only
 //    CatalogFailedNotice — the catalog could not be fetched
 //    FamilyDisabledNotice — the URL's family is switched off
-//    ToolsMenu          — "Kiti Įrankiai" dropdown
+//    ToolsMenu          — "Kiti įrankiai" dropdown
 //    Navbar             — navigation logic + layout
 //                         (default export)
 // -----------------------------------------------------------
@@ -410,7 +410,7 @@ function FamilyDisabledNotice() {
 // ToolsMenu
 // -----------------------------------------------------------
 //
-// The "Kiti Įrankiai" dropdown: the teaching tools that don't
+// The "Kiti įrankiai" dropdown: the teaching tools that don't
 // warrant their own top-level button. Owns its anchor state.
 //
 // Used by:
@@ -436,7 +436,7 @@ function ToolsMenu() {
         endIcon={<ArrowDropDownIcon />}
         sx={WHITE_OUTLINED_SX}
       >
-        Kiti Įrankiai
+        Kiti įrankiai
       </Button>
 
       <Menu
@@ -454,10 +454,10 @@ function ToolsMenu() {
         }}
       >
         <MenuItem to="/dapps-server" component={Link} onClick={handleClose}>
-          DAPPS Serveris
+          DAPPS serveris
         </MenuItem>
         <MenuItem to="/sha256" component={Link} onClick={handleClose}>
-          Blockchain Simuliatorius
+          Blokų grandinės simuliatorius
         </MenuItem>
       </Menu>
     </>
@@ -533,7 +533,7 @@ export default function Navbar() {
 
 
   return (
-    <div className="bg-[var(--color-primary)] py-2 px-5 text-white font-bold">
+    <nav className="bg-[var(--color-primary)] py-2 px-5 text-white font-bold">
       <div className="flex flex-wrap items-center gap-5">
 
         {/* Logo links back to "/" */}
@@ -569,7 +569,7 @@ export default function Navbar() {
               disabled={!faucetTargetFor(active, faucetType)}
               sx={{ ...WHITE_OUTLINED_SX, textTransform: 'none' }}
             >
-              Atidaryti Faucet&apos;ą
+              Atidaryti faucet&apos;ą
             </Button>
           )}
         </div>
@@ -578,12 +578,12 @@ export default function Navbar() {
         <div className="ml-auto" />
 
         <Button component={Link} to="/videos" variant="outlined" sx={WHITE_OUTLINED_SX}>
-          Vaizdo Įrašai
+          Vaizdo įrašai
         </Button>
 
         <ToolsMenu />
 
       </div>
-    </div>
+    </nav>
   );
 }

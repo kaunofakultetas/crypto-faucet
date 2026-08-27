@@ -438,9 +438,12 @@ class ERC20Faucet:
         # STEP 2: signature check — the exact message the frontend
         # asks MetaMask to sign, identical to the native ETH flow.
         # ========================================================
+        # The exact bytes the wallet signed — the wording (its missing
+        # commas included) is the contract with the frontend hook that
+        # builds the same string; never reword it on one side alone.
         message = f"Pasirašykite žinutę kad patvirtintumėte jog naudojate šią piniginę. Nonce: {nonce}"
         if not self.evm_faucet.verify_signature(network, to_address, message, signature):
-            return {"error": "Kriptografinis parašas kažkodėl neatitinka"}, 403
+            return {"error": "Parašas neatitinka nurodyto adreso. Prijunkite tą pačią piniginę ir bandykite dar kartą."}, 403
 
         contract = get_erc20_contract(w3, contract_address)
         amount_to_send = int(float(config['chunk_size']) * (10 ** config['decimals']))

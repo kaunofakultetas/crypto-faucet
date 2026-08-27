@@ -42,6 +42,7 @@ import { styled } from '@mui/material/styles';
 import HubIcon from '@mui/icons-material/Hub';
 import InstallDesktopIcon from '@mui/icons-material/InstallDesktop';
 import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
+import CheckIcon from '@mui/icons-material/Check';
 
 
 // Alert lifetime: fully visible, then a short fade, then the
@@ -153,7 +154,10 @@ const ColorlibStepIconRoot = styled('div')(({ theme, ownerState }) => ({
 // `override` element (from WalletStepper's icons prop) beats
 // the position logic — the ERC-20 page slots a gas pump into
 // its gas step this way, the SVM page a coin into its last
-// one.
+// one. A COMPLETED step shows a check instead: the gradient
+// alone is the same for done and current, so colour-blind
+// students could not tell them apart. A visually hidden
+// word carries the same state to screen readers.
 //
 // Used by:
 //   - WalletStepper (below)
@@ -164,19 +168,24 @@ function ColorlibStepIcon({ icon, total, override, active, completed, className 
   const index = Number(icon);
 
   let node = <HubIcon />;
-  if (override) {
+  if (completed) {
+    node = <CheckIcon />;
+  } else if (override) {
     node = override;
   } else if (index === 1) {
     node = <InstallDesktopIcon />;
   } else if (index === 2) {
     node = <PowerSettingsNewIcon />;
   } else if (index === total) {
-    node = <svg xmlns="http://www.w3.org/2000/svg" width="2em" height="2em" viewBox="0 0 24 24"><path fill="currentColor" d="m12 1.75l-6.25 10.5L12 16l6.25-3.75zM5.75 13.5L12 22.25l6.25-8.75L12 17.25z"/></svg>;
+    node = <svg xmlns="http://www.w3.org/2000/svg" width="2em" height="2em" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="m12 1.75l-6.25 10.5L12 16l6.25-3.75zM5.75 13.5L12 22.25l6.25-8.75L12 17.25z"/></svg>;
   }
 
   return (
     <ColorlibStepIconRoot ownerState={{ completed, active }} className={className}>
       {node}
+      <span className="sr-only">
+        {completed ? 'atlikta' : active ? 'dabartinis žingsnis' : 'dar neatlikta'}
+      </span>
     </ColorlibStepIconRoot>
   );
 }
@@ -218,6 +227,7 @@ export function WalletStepper({ activeStep, steps, icons }) {
             <StepLabel
               slots={{ stepIcon: ColorlibStepIcon }}
               slotProps={{ stepIcon: { total: steps.length, override: icons?.[i] } }}
+              aria-current={i === activeStep ? 'step' : undefined}
             >
               {label}
             </StepLabel>
@@ -268,7 +278,7 @@ export function WalletGateButton({
         variant="contained"
         fullWidth
       >
-        Sudiegti {walletName}
+        Susidiegti {walletName}
       </Button>
     );
   }
@@ -310,26 +320,46 @@ export function WalletGateButton({
 // -----------------------------------------------------------
 //
 // One outcome row: fully visible for 8 s, then fades out over
-// 0.5 s. useAlerts drops the row once the fade is over — the
-// fade lives here, the lifetime bookkeeping there, each
-// exactly once.
+// 0.5 s, then `onDone` (the alert's own dismiss from useAlerts)
+// drops it. The clock STOPS while the pointer or the keyboard
+// focus is on the row and restarts from zero when it leaves —
+// a slow reader, or a screen-reader user still hearing the
+// cooldown message, is not raced by the timer — and the close
+// button dismisses at once. The whole lifetime lives here;
+// useAlerts only holds the list.
 //
 // Used by:
 //   - every faucet page (see the file header)
 // -----------------------------------------------------------
 
-export function FadingAlert({ severity, children }) {
+export function FadingAlert({ severity, children, onDone }) {
 
   const [opacity, setOpacity] = useState(1);
+  const [paused, setPaused] = useState(false);
 
   useEffect(() => {
-    const id = setTimeout(() => setOpacity(0), ALERT_VISIBLE_MS);
-    return () => clearTimeout(id);
-  }, []);
+    if (paused) return undefined;
+    const fade = setTimeout(() => setOpacity(0), ALERT_VISIBLE_MS);
+    const done = setTimeout(() => onDone?.(), ALERT_VISIBLE_MS + ALERT_FADE_MS);
+    return () => {
+      clearTimeout(fade);
+      clearTimeout(done);
+    };
+  }, [paused, onDone]);
+
+  const pause = () => {
+    setOpacity(1);
+    setPaused(true);
+  };
 
   return (
     <MuiAlert
       severity={severity}
+      onClose={onDone}
+      onMouseEnter={pause}
+      onMouseLeave={() => setPaused(false)}
+      onFocus={pause}
+      onBlur={() => setPaused(false)}
       sx={{ mt: 2, transition: `opacity ${ALERT_FADE_MS}ms` }}
       style={{ opacity }}
     >
@@ -352,8 +382,9 @@ export function FadingAlert({ severity, children }) {
 //   addAlert('success' | 'error', message, tag?)
 //   clearAlerts()
 //
-// The outcome list behind FadingAlert: every entry is dropped
-// again once its visible time plus fade have passed. The
+// The outcome list behind FadingAlert: every entry carries
+// its own `dismiss`, which the row calls when its clock runs
+// out or its close button is pressed (pass it as onDone). The
 // optional tag lets a page with actions spread across many
 // cards route each row to the card that caused it — the
 // ERC-20 page tags by network; untagged rows are the page's
@@ -372,11 +403,8 @@ export function useAlerts() {
 
   const addAlert = (severity, message, tag = null) => {
     const id = Date.now() + Math.random();
-    setAlerts((prev) => [...prev, { id, severity, message, tag }]);
-
-    setTimeout(() => {
-      setAlerts((prev) => prev.filter((a) => a.id !== id));
-    }, ALERT_VISIBLE_MS + ALERT_FADE_MS);
+    const dismiss = () => setAlerts((prev) => prev.filter((a) => a.id !== id));
+    setAlerts((prev) => [...prev, { id, severity, message, tag, dismiss }]);
   };
 
   // Stable identity, so a page can list it as an effect dep

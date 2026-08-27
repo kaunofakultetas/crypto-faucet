@@ -42,7 +42,9 @@ import SettingsApplicationsIcon from '@mui/icons-material/SettingsApplications';
 
 export default function DappsServerPage() {
   return (
-    <Box className="flex flex-1 items-center justify-center">
+    <Box className="flex flex-1 flex-col items-center justify-center gap-10 p-4">
+      <h1 className="text-center text-[45px] font-bold text-[#78003F]">DAPPS serveris</h1>
+
       <Box className="flex flex-wrap gap-12 justify-center">
 
         {/* Run the DAPPS application */}
@@ -57,7 +59,7 @@ export default function DappsServerPage() {
         >
           <PlayCircleFilledWhiteIcon sx={{ fontSize: 60 }} />
           <span className="text-center leading-tight text-white">
-            DAPPS Aplikacijos <br /> Paleidimas
+            DAPPS aplikacijos <br /> paleidimas
           </span>
         </Button>
 
@@ -73,7 +75,7 @@ export default function DappsServerPage() {
         >
           <SettingsApplicationsIcon sx={{ fontSize: 60 }} />
           <span className="text-center leading-tight text-white">
-            DAPPS Aplikacijos <br /> Redagavimas
+            DAPPS aplikacijos <br /> redagavimas
           </span>
         </Button>
 

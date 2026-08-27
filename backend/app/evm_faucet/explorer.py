@@ -370,11 +370,11 @@ class EtherscanExplorer:
 
     def get_stored_transactions(self, network, address, from_ts, to_ts):
         if not address:
-            return {"error": "Address is required"}, 400
+            return {"error": "Trūksta adreso"}, 400
         if not self.is_supported_network(network):
-            return {"error": f"Unsupported network: {network}"}, 400
+            return {"error": f"Nepalaikomas tinklas: {network}"}, 400
         if from_ts is None or to_ts is None or from_ts >= to_ts:
-            return {"error": "A valid from/to unix range is required"}, 400
+            return {"error": "Reikalingas teisingas laiko intervalas (from < to)"}, 400
 
 
         # STEP 1: refresh from Etherscan — but only when it can
@@ -551,9 +551,9 @@ class EtherscanExplorer:
 
     def get_transaction_days(self, network, tz_offset, address):
         if not self.is_supported_network(network):
-            return {"error": f"Unsupported network: {network}"}, 400
+            return {"error": f"Nepalaikomas tinklas: {network}"}, 400
         if not address:
-            return {"error": "Address is required"}, 400
+            return {"error": "Trūksta adreso"}, 400
 
         offset = int(tz_offset or 0)
         if abs(offset) > 14 * 3600:
@@ -593,7 +593,7 @@ class EtherscanExplorer:
 
     def set_address_name(self, address, name):
         if not address:
-            return {"error": "Address is required"}, 400
+            return {"error": "Trūksta adreso"}, 400
 
         with get_db_connection() as conn:
             conn.execute('''

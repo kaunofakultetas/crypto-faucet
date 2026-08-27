@@ -236,7 +236,7 @@ async function requestChainHop(networkInfo) {
 
 async function signClaimMessage(provider, account) {
   if (!provider || !account) {
-    throw new Error('Metamask piniginė neprijungta.');
+    throw new Error('MetaMask piniginė neprijungta.');
   }
 
   const nonce = Date.now().toString();
@@ -349,7 +349,7 @@ export default function useMetamaskWallet(expectedChainId) {
   // reports null so pages never show a number from somewhere
   // else. A poll that FAILS (MetaMask's own RPC rejecting
   // eth_getBalance) is reported as balanceFailed, so a page
-  // shows a dash instead of "Loading…" forever.
+  // shows a dash instead of "Kraunama…" forever.
   const { data: balance = null, isError: balanceFailed } = useQuery({
     queryKey: ['wallet-balance', account, expectedChainId],
     enabled: Boolean(provider && account && expectedChainId),

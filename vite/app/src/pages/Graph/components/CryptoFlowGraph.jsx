@@ -13,9 +13,13 @@
 //  its own arrangement.
 //
 //  This file is only the thin shell: the canvas div, the zoom
-//  panel, the right-click naming dialog and the notice shown
+//  panel, the right-click naming dialog, the notice shown
 //  while the backend cannot be reached (an outage must not
-//  look like a quiet day). All graph state and logic live in
+//  look like a quiet day) and the TEXT ALTERNATIVE — the
+//  canvas is named as an image and a visually hidden table
+//  lists every drawn transfer (from, to, amount, count), so
+//  a screen-reader user gets the same facts the picture
+//  shows. All graph state and logic live in
 //  useTransactionGraph.js (which pulls in useNodePositions.js
 //  for the dragged-X persistence); ZoomControls.jsx and
 //  AddressDialog.jsx render the chrome.
@@ -53,7 +57,7 @@ export default function CryptoFlowGraph({ faucetAddress, network, dateRange, liv
   const [tempName, setTempName] = useState('');
   const [saveError, setSaveError] = useState(null);
 
-  const { containerRef, scale, setZoom, zoomIn, zoomOut, renameNode, failed } = useTransactionGraph({
+  const { containerRef, scale, setZoom, zoomIn, zoomOut, renameNode, failed, rows } = useTransactionGraph({
     faucetAddress,
     network,
     dateRange,
@@ -99,8 +103,24 @@ export default function CryptoFlowGraph({ faucetAddress, network, dateRange, liv
       <Box sx={{ position: 'absolute', inset: 0 }}>
         <div
           ref={containerRef}
+          role="img"
+          aria-label={`Transakcijų srauto grafikas, ${day}: ${rows.length} pervedimai`}
+          aria-describedby="graph-table"
           style={{ height: '100%', width: '100%', border: '1px solid #ddd' }}
         />
+
+        {/* The same transfers as text — what the canvas draws */}
+        <table id="graph-table" className="sr-only">
+          <caption>Pervedimai {day} dieną</caption>
+          <thead>
+            <tr><th>Iš</th><th>Į</th><th>Suma ir transakcijų skaičius</th></tr>
+          </thead>
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.id}><td>{row.from}</td><td>{row.to}</td><td>{row.label}</td></tr>
+            ))}
+          </tbody>
+        </table>
 
         {/* Outage notice — the last fetch failed; the canvas keeps
             showing what was fetched before it */}

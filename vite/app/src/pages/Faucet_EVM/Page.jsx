@@ -118,7 +118,8 @@ function useFaucetInfo(network) {
 
 function LoadingSkeleton() {
   return (
-    <Box className="p-4">
+    <Box className="p-4" aria-busy="true">
+      <p role="status" className="sr-only">Kraunami tinklo duomenys…</p>
       <div className="mx-auto w-full min-w-[320px] max-w-[640px] px-4 pt-4">
         <Skeleton variant="text" height={48} width="70%" />
         <Skeleton variant="text" height={20} width="90%" />
@@ -241,12 +242,12 @@ export default function FaucetEVM() {
   const faucetAddress = faucetInfo.address.toLowerCase();
 
   // Three states that must not blur: no wallet or a dead RPC
-  // is a dash, a poll still in flight is "Loading…". The
+  // is a dash, a poll still in flight is "Kraunama…". The
   // balance is a BigInt of wei — divided down to micro-ether
   // as an integer first, so the float never sees 18 digits.
   const formatBalance = (wei) => {
     if (!wallet.installed || wallet.balanceFailed) return '-';
-    if (wei == null) return 'Loading…';
+    if (wei == null) return 'Kraunama…';
     const microEther = Number(wei / 1_000_000_000_000n);
     return `${(microEther / 1e6).toFixed(3)} ${networkInfo.short_name}`;
   };
@@ -271,9 +272,9 @@ export default function FaucetEVM() {
         <WalletStepper
           activeStep={wallet.step}
           steps={[
-            'Susidiegti Metamask',
-            'Prijungti Metamask',
-            `Įsijungti ${networkInfo.full_name} Tinklą`,
+            'Susidiegti MetaMask',
+            'Prijungti MetaMask',
+            `Įsijungti ${networkInfo.full_name} tinklą`,
             `Atsisiųsti ${networkInfo.full_name}`,
           ]}
         />
@@ -283,7 +284,7 @@ export default function FaucetEVM() {
       <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4">
 
         <div className="my-2 flex">
-          <span className="flex-1">Jūsų Metamask balansas:</span>
+          <span className="flex-1">Jūsų MetaMask balansas:</span>
           <span className="text-right">{wallet.step === 3 ? formatBalance(wallet.balance) : 'Piniginė neprijungta'}</span>
         </div>
         <div className="my-2 flex">
@@ -309,19 +310,19 @@ export default function FaucetEVM() {
               variant="contained"
               color="primary"
               fullWidth
-              disabled={claiming}
-              onClick={claimNative}
-              sx={{ minHeight: 40 }}
+              aria-busy={claiming}
+              aria-disabled={claiming}
+              onClick={claiming ? undefined : claimNative}
+              sx={{ minHeight: 40, '&[aria-disabled="true"]': { opacity: 0.6, pointerEvents: 'none' } }}
             >
-              {claiming
-                ? <CircularProgress size={22} color="inherit" />
-                : `Gauti ${networkInfo.full_name} valiutos`}
+              {claiming && <CircularProgress size={22} color="inherit" aria-hidden="true" sx={{ mr: 1 }} />}
+              {claiming ? 'Siunčiama…' : `Gauti ${networkInfo.full_name} valiutos`}
             </Button>
           )}
         </div>
 
         {alerts.map((a) => (
-          <FadingAlert key={a.id} severity={a.severity}>
+          <FadingAlert key={a.id} severity={a.severity} onDone={a.dismiss}>
             {a.message}
           </FadingAlert>
         ))}
