@@ -75,6 +75,16 @@ from ..icons import icon_url
 # cached entry, so a claim shows up immediately regardless.
 BALANCE_CACHE_TTL = 10
 
+# Inputs per payout: the one(s) the chunk needs plus a few of
+# the wallet's smallest outputs folded in — the payout stays
+# small and fixed in size, and the wallet tidies itself
+MAX_INPUTS_PER_PAYOUT = 5
+
+# How long this process remembers what it just spent (and the
+# change it just created) — the Electrum server keeps listing a
+# spent outpoint until its next mempool refresh
+SPENT_MEMORY_S = 120
+
 # Seconds one address must wait between payouts on one network
 COOLDOWN_SECONDS = 60
 
@@ -100,6 +110,29 @@ DEFAULT_NETWORK = 'btc4'
 
 def _electrum_scripthash(script) -> str:
     return hashlib.sha256(script.data).digest()[::-1].hex()
+
+
+
+
+
+
+
+
+############################################################
+# InsufficientFunds
+############################################################
+#
+# The builder's "the wallet cannot cover chunk + fee" — a
+# ValueError the payout path turns into the friendly "faucet
+# is empty" 503 rather than a generic 500.
+#
+# Used by:
+#   - UTXOFaucet._create_and_broadcast_transaction — raised
+#   - UTXOFaucet.request_crypto — caught
+############################################################
+
+class InsufficientFunds(ValueError):
+    pass
 
 
 
@@ -267,6 +300,12 @@ class UTXOFaucet:
         # faucet balance — see _faucet_balance. Pre-filled by the
         # warmup below.
         self._balance_cache = {}
+
+        # network_key -> {(tx_hash, tx_pos): unix time} of outpoints
+        # THIS process broadcast recently, and network_key -> the
+        # change outputs those payouts created — see _spendable_utxos
+        self._recently_spent = {}
+        self._pending_change = {}
 
         # network_key -> its long-lived ElectrumClient. Built for
         # EVERY configured network right here — nothing is lazy —
@@ -533,29 +572,46 @@ class UTXOFaucet:
     ############################################################
 
     def _create_and_broadcast_transaction(self, ctx: NetworkContext, to_address: str, amount_sat: int) -> str:
-        # STEP 1: what can we spend?
-        # ==========================
-        utxos = ctx.electrum.list_unspent(ctx.scripthash)
+        # STEP 1: what can we spend? The server's list, minus what
+        # this process broadcast in the last SPENT_MEMORY_S seconds,
+        # plus the change those payouts created — see
+        # _spendable_utxos.
+        # ==========================================================
+        utxos = self._spendable_utxos(ctx)
         if not utxos:
-            raise ValueError("No UTXOs available")
+            raise InsufficientFunds("No UTXOs available")
 
 
-        # STEP 2: greedy coin selection — the target includes the fee
-        # for the inputs selected so far, so the change can never go
-        # negative.
+        # STEP 2: coin selection. Largest first until the chunk plus
+        # the fee for the inputs so far is covered — the payout needs
+        # as few inputs as possible — then a few of the SMALLEST
+        # remaining outputs are folded in (dust and real coins alike,
+        # their cost coming out of the change, never below zero), up
+        # to MAX_INPUTS_PER_PAYOUT: every payout tidies the wallet a
+        # little and over successive payouts it converges to one
+        # output. The faucet publishes its address and asks for
+        # leftovers back, so junk outputs are a fact of life here.
         # ===========================================================
+        by_size = sorted(utxos, key=lambda u: -u['value'])
         selected_utxos = []
         total_input = 0
-        for utxo in utxos:
+        for utxo in by_size:
             selected_utxos.append(utxo)
             total_input += utxo['value']
             if total_input >= amount_sat + self._estimate_fee(ctx, len(selected_utxos), 2):
                 break
+        else:
+            raise InsufficientFunds("Insufficient funds")
+
+        for utxo in reversed(by_size[len(selected_utxos):]):
+            if len(selected_utxos) >= MAX_INPUTS_PER_PAYOUT:
+                break
+            if total_input + utxo['value'] - amount_sat - self._estimate_fee(ctx, len(selected_utxos) + 1, 2) < 0:
+                continue
+            selected_utxos.append(utxo)
+            total_input += utxo['value']
 
         fee = self._estimate_fee(ctx, len(selected_utxos), 2)
-        if total_input < amount_sat + fee:
-            raise ValueError("Insufficient funds")
-
         change = total_input - amount_sat - fee
 
 
@@ -566,9 +622,10 @@ class UTXOFaucet:
         to_script = ctx.dialect.recipient_script(to_address)
 
         outputs = [TransactionOutput(amount_sat, to_script)]
-        if change > ctx.dust_limit:
+        if change >= ctx.dust_limit:
             outputs.append(TransactionOutput(change, ctx.script_pubkey))
-        # sub-dust change is simply left to the miners as extra fee
+        # sub-dust change (BELOW the limit — at the limit it is a
+        # standard output) is simply left to the miners as extra fee
 
 
         # STEP 4: build and sign. Electrum reports tx_hash in display
@@ -587,9 +644,62 @@ class UTXOFaucet:
             ctx.dialect.sign_input(tx, i, ctx.key, ctx.script_pubkey, utxo['value'])
 
 
-        # STEP 5: broadcast over the same Electrum connection.
-        # ====================================================
-        return ctx.electrum.request("blockchain.transaction.broadcast", [tx.serialize().hex()])
+        # STEP 5: broadcast over the same Electrum connection, then
+        # remember what was spent and the change that now exists —
+        # the next claim (seconds behind, before the server has
+        # noticed) must neither re-select these outpoints nor go
+        # without the change.
+        # ==========================================================
+        tx_id = ctx.electrum.request("blockchain.transaction.broadcast", [tx.serialize().hex()])
+
+        now = int(time.time())
+        spent = self._recently_spent.setdefault(ctx.network_key, {})
+        for utxo in selected_utxos:
+            spent[(utxo['tx_hash'], utxo['tx_pos'])] = now
+        if len(outputs) == 2:
+            self._pending_change.setdefault(ctx.network_key, []).append(
+                (now, {'tx_hash': tx.txid().hex(), 'tx_pos': 1, 'value': change}))
+
+        return tx_id
+
+
+
+
+
+
+    ############################################################
+    # _spendable_utxos
+    ############################################################
+    #
+    # The server's UTXO list as THIS process knows it: outpoints
+    # it broadcast within SPENT_MEMORY_S are removed (the server
+    # lists them until its next mempool refresh — re-selecting
+    # one builds a conflicting transaction the node rejects, and
+    # the second of two students clicking together fails for no
+    # reason), and the change those payouts created is added
+    # unless the server already lists it. Entries expire after
+    # SPENT_MEMORY_S; by then the server has caught up.
+    #
+    # Used by:
+    #   - _create_and_broadcast_transaction (above)
+    ############################################################
+
+    def _spendable_utxos(self, ctx: NetworkContext) -> list:
+        now = int(time.time())
+        spent = self._recently_spent.get(ctx.network_key, {})
+        spent = {outpoint: stamp for outpoint, stamp in spent.items() if now - stamp < SPENT_MEMORY_S}
+        self._recently_spent[ctx.network_key] = spent
+        pending = [entry for entry in self._pending_change.get(ctx.network_key, []) if now - entry[0] < SPENT_MEMORY_S]
+        self._pending_change[ctx.network_key] = pending
+
+        listed = [u for u in ctx.electrum.list_unspent(ctx.scripthash) if (u['tx_hash'], u['tx_pos']) not in spent]
+        known = {(u['tx_hash'], u['tx_pos']) for u in listed}
+        for _, change in pending:
+            outpoint = (change['tx_hash'], change['tx_pos'])
+            if outpoint not in known and outpoint not in spent:
+                listed.append(dict(change))
+                known.add(outpoint)
+        return listed
 
 
 
@@ -706,6 +816,9 @@ class UTXOFaucet:
     ############################################################
 
     def get_faucet_balance(self, network_key: str) -> tuple:
+        if network_key not in self.network_configs:
+            return {"error": f"Nepalaikomas tinklas: {network_key}"}, 400
+
         try:
             ctx = self._setup_wallet_for_network(network_key)
             balance_info = self._faucet_balance(ctx)
@@ -801,7 +914,12 @@ class UTXOFaucet:
             try:
                 balance_info = self._faucet_balance(ctx)
                 current_balance = balance_info["confirmed"]  # the conservative floor, see above
-                if current_balance < ctx.chunk_size_btc:
+                # The payout needs the chunk PLUS its fee — a balance
+                # inside that band would pass a bare check and fail in
+                # the builder, a 500 instead of the message that sends
+                # the last student to the lecturer
+                fee_btc = self._estimate_fee(ctx, 1, 2) / 1e8
+                if current_balance < ctx.chunk_size_btc + fee_btc:
                     self.cooldowns.release(cooldown_key)
                     return {"error": "Čiaupas nebeturi kriptovaliutos. Praneškite dėstytojui."}, 503
 
@@ -816,6 +934,12 @@ class UTXOFaucet:
                 amount_sat = int(round(float(ctx.chunk_size_btc) * 1e8))
                 with self._send_locks.setdefault(network_key, threading.Lock()):
                     tx_id = self._create_and_broadcast_transaction(ctx, to_address, amount_sat)
+            except InsufficientFunds:
+                # A funded balance with nothing spendable listed (or not
+                # enough to cover chunk + fee once the real outputs are
+                # in hand) is "empty" for the student's purposes
+                self.cooldowns.release(cooldown_key)
+                return {"error": "Čiaupas nebeturi kriptovaliutos. Praneškite dėstytojui."}, 503
             except Exception:
                 self.cooldowns.release(cooldown_key)
                 raise

@@ -27,7 +27,7 @@ from flask import Blueprint, request, jsonify
 
 from .erc20_faucet import ERC20Faucet
 from app.evm_faucet.evm_routes import evm_faucet
-from main import ERC20_TOKEN_CONFIGS
+from ..config_loader import ERC20_TOKEN_CONFIGS
 
 
 bp_erc20_faucet = Blueprint('erc20_faucet', __name__)

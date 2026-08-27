@@ -2,7 +2,7 @@
 #  [*] Crypto asset icons
 #
 #  Serves the operator-droppable icons from the mounted
-#  config directory (CONFIG_DIR/icons — see main.py). The
+#  config directory (CONFIG_DIR/icons — see config_loader.py). The
 #  filename convention IS the whole linkage: an icon for
 #  catalog entry <key> of faucet type <type> lives at
 #
@@ -30,7 +30,7 @@ import os
 
 from flask import Blueprint, abort, send_from_directory
 
-from main import CONFIG_DIR
+from .config_loader import CONFIG_DIR
 
 
 

@@ -28,7 +28,7 @@ from flask import Blueprint, request, jsonify
 
 from .evm_faucet import EVMFaucet
 from .explorer import EtherscanExplorer
-from main import EVM_NETWORK_CONFIGS
+from ..config_loader import EVM_NETWORK_CONFIGS
 
 
 bp_evm_faucet = Blueprint('evm_faucet', __name__)

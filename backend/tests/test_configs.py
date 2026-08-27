@@ -3,9 +3,9 @@
 #
 #  The poor man's schema validation: every rule the sectioned
 #  configs in main.py must obey, so a typo fails a test run
-#  instead of surfacing as a weird runtime fallback. Imports
-#  main for the REAL maps (safe: the blueprints only register
-#  under __main__) — all five families.
+#  instead of surfacing as a weird runtime fallback. Takes the
+#  REAL maps from app/config_loader.py — all five families —
+#  without building the app.
 ############################################################
 
 
@@ -13,7 +13,7 @@ import re
 import unittest
 from urllib.parse import urlparse
 
-from main import (
+from app.config_loader import (
     EVM_NETWORK_CONFIGS, ERC20_TOKEN_CONFIGS, UTXO_NETWORK_CONFIGS,
     SVM_NETWORK_CONFIGS, MOVE_NETWORK_CONFIGS,
 )

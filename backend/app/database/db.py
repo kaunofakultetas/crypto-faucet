@@ -76,15 +76,20 @@ class ClosingConnection(sqlite3.Connection):
 #
 # One fresh connection per call, rows addressable by column
 # name, closed when its `with` block ends (ClosingConnection
-# above). GOTCHA: the default filename is evaluated ONCE at
-# import time — changing DB_PATH needs a process restart,
-# not just a new request.
+# above). Write-ahead logging, so the explorer committing a
+# scraped history never blocks the threads aggregating the
+# graph (nor dbgate reading from its container), and a
+# 15-second busy timeout, so a collision is a wait instead of
+# "database is locked". GOTCHA: the default filename is
+# evaluated ONCE at import time — changing DB_PATH needs a
+# process restart, not just a new request.
 #
 # Used by:
 #   - see the file header — every consumer of the database
 ############################################################
 
 def get_db_connection(filename=os.getenv('DB_PATH', '/data/database.db')):
-    conn = sqlite3.connect(filename, factory=ClosingConnection)
+    conn = sqlite3.connect(filename, factory=ClosingConnection, timeout=15)
     conn.row_factory = sqlite3.Row
+    conn.execute('PRAGMA journal_mode=WAL')
     return conn

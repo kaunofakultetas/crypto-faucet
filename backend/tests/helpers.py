@@ -19,6 +19,7 @@
 
 
 import os
+import importlib
 import requests
 from unittest import mock
 
@@ -760,3 +761,94 @@ def lock_watching_web3(faucet, network, balances=None):
     eth = LockWatchingEth(w3.eth, {k.lower(): v for k, v in (balances or {}).items()}, faucet.send_lock_for(network))
     w3.eth = eth
     return eth
+
+
+
+
+
+
+
+
+############################################################
+# import_main
+############################################################
+#
+#   main = helpers.import_main(db_path)
+#
+# main wires the WHOLE app at import — every faucet is built
+# (warmups patched out here, so nothing touches a network),
+# the schema and demo chain go into db_path, and the real
+# config's <PLACEHOLDERS> resolve against dummy values when
+# the environment has none. Reloads on every call, so each
+# test gets a fresh app object.
+#
+# Used by:
+#   - test_main.py
+############################################################
+
+def import_main(db_path):
+    from app.database.db import get_db_connection
+
+    env = {'INFURA_PROJECT_ID': 'test-infura', 'ETHERSCAN_API_KEY': 'test-etherscan',
+           'FAUCET_PRIVATE_KEY': TEST_PRIVATE_KEY}
+    patches = [
+        mock.patch.dict(os.environ, {k: v for k, v in env.items() if not os.getenv(k)}),
+        mock.patch.object(EVMFaucet, '_warm_up_networks', lambda self: None),
+        mock.patch.object(ERC20Faucet, '_warm_up_tokens', lambda self: None),
+        mock.patch.object(UTXOFaucet, '_warm_up_networks', lambda self: None),
+        mock.patch.object(SVMFaucet, '_warm_up_networks', lambda self: None),
+        mock.patch.object(MoveFaucet, '_warm_up_networks', lambda self: None),
+        mock.patch('app.database.db_init.get_db_connection', side_effect=lambda: get_db_connection(db_path)),
+    ]
+    for active in patches:
+        active.start()
+    try:
+        import main
+        return importlib.reload(main)
+    finally:
+        for active in patches:
+            active.stop()
+
+
+
+
+
+
+
+
+############################################################
+# FollowingElectrum
+############################################################
+#
+#   server = FollowingElectrum(faucet, 'btc4', utxos)
+#
+# A canned Electrum server whose UTXO set FOLLOWS the payouts:
+# a broadcast removes the inputs it spends and adds the change
+# output it creates, like the real server after a refresh — for
+# tests that run several payouts in a row and look at what the
+# wallet has become.
+#
+# Used by:
+#   - test_utxo_engine.py — the consolidation tests
+############################################################
+
+class FollowingElectrum:
+
+    def __init__(self, faucet, network, utxos):
+        from embit.transaction import Transaction
+        self._Transaction = Transaction
+        self.utxos = [dict(u) for u in utxos]
+        self.faucet_script = faucet._setup_wallet_for_network(network).script_pubkey.data
+        client = faucet._electrum_clients[network]
+        client.list_unspent = lambda scripthash: [dict(u) for u in self.utxos]
+        client.get_balance = lambda scripthash: {'confirmed': 1.0, 'unconfirmed': 0.0, 'total': 1.0}
+        client.request = self.broadcast
+
+    def broadcast(self, method, params):
+        tx = self._Transaction.from_string(params[0])
+        spent = {(vin.txid[::-1].hex(), vin.vout) for vin in tx.vin}
+        self.utxos = [u for u in self.utxos if (u['tx_hash'], u['tx_pos']) not in spent]
+        for pos, out in enumerate(tx.vout):
+            if out.script_pubkey.data == self.faucet_script:
+                self.utxos.append({'tx_hash': tx.txid().hex(), 'tx_pos': pos, 'value': out.value})
+        return tx.txid().hex()

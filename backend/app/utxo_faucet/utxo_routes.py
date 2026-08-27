@@ -20,7 +20,7 @@
 from flask import Blueprint, request, jsonify
 
 from .utxo_faucet import UTXOFaucet
-from main import UTXO_NETWORK_CONFIGS
+from ..config_loader import UTXO_NETWORK_CONFIGS
 
 
 bp_utxo_faucet = Blueprint('utxo_faucet', __name__)

@@ -23,7 +23,7 @@
 from flask import Blueprint, request, jsonify
 
 from .move_faucet import MoveFaucet
-from main import MOVE_NETWORK_CONFIGS
+from ..config_loader import MOVE_NETWORK_CONFIGS
 
 
 bp_move_faucet = Blueprint('move_faucet', __name__)

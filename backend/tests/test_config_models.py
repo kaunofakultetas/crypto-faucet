@@ -4,8 +4,8 @@
 #  Proves the pydantic schema actually catches the mistakes
 #  it exists for: misspelled keys, missing sections, bad
 #  addresses, tokens on unknown networks, duplicate ids. The
-#  positive case is implicit — importing main (test_configs)
-#  validates the REAL configs — but it's asserted explicitly
+#  positive case is implicit — importing the config loader
+#  (test_configs) validates the REAL configs — but it's asserted explicitly
 #  here too, plus the helpers' fixtures are kept honest.
 ############################################################
 
@@ -47,12 +47,12 @@ class ConfigModelTests(unittest.TestCase):
         return configs
 
     def test_real_configs_validate(self):
-        # main.py already validated at import; re-validating the
+        # the loader already validated at import; re-validating the
         # normalized output must also pass (idempotent)
-        import main
-        validate_configs(main.EVM_NETWORK_CONFIGS, main.ERC20_TOKEN_CONFIGS,
-                         main.UTXO_NETWORK_CONFIGS, main.SVM_NETWORK_CONFIGS,
-                         main.MOVE_NETWORK_CONFIGS)
+        from app import config_loader
+        validate_configs(config_loader.EVM_NETWORK_CONFIGS, config_loader.ERC20_TOKEN_CONFIGS,
+                         config_loader.UTXO_NETWORK_CONFIGS, config_loader.SVM_NETWORK_CONFIGS,
+                         config_loader.MOVE_NETWORK_CONFIGS)
 
     def test_helper_fixtures_validate(self):
         # keep the test fixtures themselves honest

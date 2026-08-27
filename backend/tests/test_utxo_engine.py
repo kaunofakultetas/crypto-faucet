@@ -288,5 +288,146 @@ class UtxoLegacyDialectTests(unittest.TestCase):
         self.assertFalse(faucet._validate_address(ctx, helpers.ANCHOR_DOGE_RECIPIENT))
 
 
+
+
+
+############################################################
+# UtxoConsolidationTests
+############################################################
+#
+# Coin selection on btc4 (0.01 chunk, SegWit sizes at
+# 10 sat/vB): largest first for the chunk, then a few of the
+# smallest outputs folded in — dust and real coins alike — so
+# a payout stays small and fixed in size while the wallet
+# tidies itself towards one output. The faucet publishes its
+# address and asks for leftovers back, so junk outputs are a
+# fact of life. Change exactly AT the dust limit is a standard
+# output and comes back.
+############################################################
+
+CHUNK_SAT = 1_000_000
+FEE_1_IN_2_OUT = (91 + 2 * 31 + 10) * 10     # 1630 sat, matches _estimate_fee
+MARGINAL_INPUT_FEE = 91 * 10                 # what one more SegWit input adds
+DUST_LIMIT = 546
+MAX_INPUTS_PER_PAYOUT = 5
+BIG_UTXO = {'tx_hash': 'aa' * 32, 'tx_pos': 0, 'value': 2_000_000}
+
+
+def p2wpkh_address(private_key_hex, hrp='tb'):
+    prv = ec.PrivateKey(bytes.fromhex(private_key_hex))
+    return embit_script.p2wpkh(prv.get_public_key()).address({'bech32': hrp})
+
+
+class UtxoConsolidationTests(unittest.TestCase):
+
+    def setUp(self):
+        self.faucet = helpers.make_utxo_faucet()
+        self.recipient = p2wpkh_address(helpers.RECIPIENT_PRIVATE_KEY)
+
+    def claim(self, address=None):
+        return self.faucet.request_crypto('btc4', address or self.recipient)
+
+    def last_tx(self, captured):
+        return Transaction.from_string(captured['raw'])
+
+    def dust(self, count):
+        return [{'tx_hash': f'{i:02x}' * 32, 'tx_pos': 0, 'value': 500} for i in range(1, count + 1)]
+
+    def students(self, count):
+        return [p2wpkh_address(f'{i:02x}' * 32) for i in range(1, count + 1)]
+
+    def dust_count(self, server):
+        return sum(1 for u in server.utxos if u['value'] < MARGINAL_INPUT_FEE)
+
+    def test_a_payout_from_a_cluttered_wallet_carries_only_a_few_inputs(self):
+        # 200 × 500 sat returns listed ahead of one real output: the
+        # payout takes some of them along, never all of them
+        captured = helpers.fake_electrum(self.faucet, 'btc4', self.dust(200) + [BIG_UTXO])
+
+        data, status = self.claim()
+
+        self.assertEqual(status, 200)
+        inputs = len(self.last_tx(captured).vin)
+        self.assertGreaterEqual(inputs, 2)
+        self.assertLessEqual(inputs, MAX_INPUTS_PER_PAYOUT)
+
+    def test_the_chunk_comes_from_the_largest_output(self):
+        captured = helpers.fake_electrum(self.faucet, 'btc4', self.dust(200) + [BIG_UTXO])
+        self.claim()
+        tx = self.last_tx(captured)
+        self.assertEqual(tx.vin[0].txid[::-1].hex(), BIG_UTXO['tx_hash'])
+        self.assertEqual(tx.vout[0].value, CHUNK_SAT)
+
+    def test_a_second_output_is_folded_in_even_when_the_first_one_suffices(self):
+        # The 0.02 output alone covers the chunk — the payout still
+        # brings the 20 000 sat one along, so the wallet tidies itself
+        captured = helpers.fake_electrum(self.faucet, 'btc4', [BIG_UTXO, {'tx_hash': 'bb' * 32, 'tx_pos': 0, 'value': 20_000}])
+
+        data, status = self.claim()
+
+        self.assertEqual(status, 200)
+        self.assertEqual(len(self.last_tx(captured).vin), 2)
+
+    def test_an_extra_that_would_push_the_change_negative_is_left(self):
+        # Exactly the chunk plus its 1-in/2-out fee: no room to pay for
+        # a second input, so the dust stays for a richer payout
+        exact = {'tx_hash': 'aa' * 32, 'tx_pos': 0, 'value': CHUNK_SAT + FEE_1_IN_2_OUT}
+        captured = helpers.fake_electrum(self.faucet, 'btc4', [exact] + self.dust(3))
+
+        data, status = self.claim()
+
+        self.assertEqual(status, 200)
+        self.assertEqual(len(self.last_tx(captured).vin), 1)
+
+    def test_the_wallet_converges_to_one_output_over_successive_payouts(self):
+        # Ten 0.05 outputs, ten students: a few extras per payout
+        # fold the wallet down to a single change output
+        outputs = [{'tx_hash': f'{i:02x}' * 32, 'tx_pos': 0, 'value': 5_000_000} for i in range(1, 11)]
+        server = helpers.FollowingElectrum(self.faucet, 'btc4', outputs)
+
+        for student in self.students(10):
+            data, status = self.claim(address=student)
+            self.assertEqual(status, 200, data)
+
+        self.assertEqual(len(server.utxos), 1)
+
+    def test_dust_is_cleaned_up_over_successive_payouts(self):
+        # 30 dust outputs, 30 students: every payout sweeps a few
+        # along, so the address is clean well before the last claim
+        server = helpers.FollowingElectrum(
+            self.faucet, 'btc4', self.dust(30) + [{'tx_hash': 'aa' * 32, 'tx_pos': 0, 'value': 100_000_000}])
+
+        payouts = 0
+        for student in self.students(30):
+            data, status = self.claim(address=student)
+            self.assertEqual(status, 200, data)
+            payouts += 1
+            if not self.dust_count(server):
+                break
+
+        self.assertEqual(self.dust_count(server), 0)
+        self.assertLessEqual(payouts, 8)
+
+    def test_change_exactly_at_the_dust_limit_is_returned(self):
+        exact = {'tx_hash': 'aa' * 32, 'tx_pos': 0, 'value': CHUNK_SAT + FEE_1_IN_2_OUT + DUST_LIMIT}
+        captured = helpers.fake_electrum(self.faucet, 'btc4', [exact])
+
+        data, status = self.claim()
+
+        self.assertEqual(status, 200)
+        tx = self.last_tx(captured)
+        self.assertEqual(len(tx.vout), 2)
+        self.assertEqual(tx.vout[1].value, DUST_LIMIT)
+
+    def test_change_one_below_the_dust_limit_goes_to_the_miners(self):
+        exact = {'tx_hash': 'aa' * 32, 'tx_pos': 0, 'value': CHUNK_SAT + FEE_1_IN_2_OUT + DUST_LIMIT - 1}
+        captured = helpers.fake_electrum(self.faucet, 'btc4', [exact])
+
+        data, status = self.claim()
+
+        self.assertEqual(status, 200)
+        self.assertEqual(len(self.last_tx(captured).vout), 1)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -23,7 +23,7 @@
 from flask import Blueprint, request, jsonify
 
 from .svm_faucet import SVMFaucet
-from main import SVM_NETWORK_CONFIGS
+from ..config_loader import SVM_NETWORK_CONFIGS
 
 
 bp_svm_faucet = Blueprint('svm_faucet', __name__)

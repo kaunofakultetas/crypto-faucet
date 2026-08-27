@@ -527,9 +527,22 @@ class ERC20Faucet:
         except Exception:
             gas_limit = 100000
 
+        # The faucet wallet pays the transfer's gas in NATIVE coin —
+        # tokens alone cannot be broadcast. The quote is taken here,
+        # outside the lock (see the native flow).
         try:
-            # The price quote needs no lock — see the native flow
             gas_price = w3.eth.gas_price
+            faucet_native = w3.eth.get_balance(self.evm_faucet.FAUCET_ADDRESS)
+        except Exception:
+            self.cooldowns.release(cooldown_key)
+            return {"error": "Nepavyko gauti čiaupo balanso"}, 500
+
+        if faucet_native < gas_limit * gas_price:
+            native_symbol = self.evm_faucet.NETWORK_CONFIGS[network]['faucet']['short_name']
+            self.cooldowns.release(cooldown_key)
+            return {"error": f"Čiaupui trūksta {native_symbol} tinklo mokesčiams. Praneškite dėstytojui."}, 503
+
+        try:
             with self.evm_faucet.send_lock_for(network):
                 tx_hash = transfer_fn.transact({
                     'from': self.evm_faucet.FAUCET_ADDRESS,

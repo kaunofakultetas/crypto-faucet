@@ -65,6 +65,10 @@ except ImportError:
 # cached entry, so a claim shows up immediately regardless.
 BALANCE_CACHE_TTL = 10
 
+# The gas limit every payout carries — generous, unused gas is
+# refunded — and what the node reserves up front with the value
+GAS_LIMIT = 210000
+
 # Seconds one address must wait between payouts on one network
 COOLDOWN_SECONDS = 60
 
@@ -518,11 +522,16 @@ class EVMFaucet:
 
         try:
             faucet_balance = w3.eth.get_balance(self.FAUCET_ADDRESS)
+            gas_price = w3.eth.gas_price
         except Exception:
             self.cooldowns.release(cooldown_key)
             return {"error": "Nepavyko gauti čiaupo balanso"}, 500
 
-        if faucet_balance < amount_to_send_wei:
+        # The node reserves value + gas_limit × gasPrice up front: a
+        # wallet inside that band would pass a bare balance check
+        # and bounce at broadcast as a retryable 500 forever, never
+        # reaching the answer that sends the student to the lecturer
+        if faucet_balance < amount_to_send_wei + GAS_LIMIT * gas_price:
             self.cooldowns.release(cooldown_key)
             return {"error": "Čiaupas nebeturi kriptovaliutos. Praneškite dėstytojui."}, 503
 
@@ -540,16 +549,15 @@ class EVMFaucet:
         # nothing, unused gas is refunded.
         # ===========================================================
         try:
-            # The price quote is a plain read — it needs no lock, and on
-            # a slow provider it would hold the whole chain's payouts
-            # for up to the RPC timeout. Lock only for nonce + broadcast.
-            gas_price = w3.eth.gas_price
+            # The price was quoted in STEP 3, outside the lock — a slow
+            # provider must not hold the whole chain's payouts. Lock
+            # only for nonce + broadcast.
             with self.send_lock_for(network):
                 tx_hash = w3.eth.send_transaction({
                     'from': self.FAUCET_ADDRESS,
                     'to': to_address,
                     'value': int(amount_to_send_wei),
-                    'gas': 210000,
+                    'gas': GAS_LIMIT,
                     'gasPrice': gas_price,
                 })
         except Exception:

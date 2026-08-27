@@ -228,6 +228,47 @@ class UtxoRequestFlowTests(unittest.TestCase):
         self.assertEqual(self.faucet.get_faucet_balance('btc4')[1], 500)
         self.assertEqual(len(reads), 1)
 
+    def test_a_balance_short_of_chunk_plus_fee_is_the_friendly_503(self):
+        # Exactly one chunk confirmed, nothing left for the fee: the
+        # message that sends the last student to the lecturer, not a
+        # 500 from inside the builder
+        helpers.fake_electrum(self.faucet, 'btc4', [{'tx_hash': 'aa' * 32, 'tx_pos': 0, 'value': 1_000_000}])
+        self.client.get_balance = lambda scripthash: {'confirmed': 0.01, 'unconfirmed': 0.0, 'total': 0.01}
+
+        data, status = self.faucet.request_crypto('btc4', self.recipient)
+
+        self.assertEqual(status, 503)
+        self.assertIn('Čiaupas nebeturi', data['error'])
+        self.assertFalse(self.claimed())
+
+    def test_a_funded_balance_with_nothing_spendable_is_the_friendly_503(self):
+        helpers.fake_electrum(self.faucet, 'btc4', [])
+
+        data, status = self.faucet.request_crypto('btc4', self.recipient)
+
+        self.assertEqual(status, 503)
+        self.assertIn('Čiaupas nebeturi', data['error'])
+        self.assertFalse(self.claimed())
+
+    def test_a_just_spent_outpoint_is_not_spent_again_on_the_next_claim(self):
+        # The server keeps listing a just-spent outpoint until its
+        # next mempool refresh — the claim right behind a payout must
+        # spend the CHANGE the first one created, not the same coin.
+        # One 0.05 output: the change after a payout still covers the
+        # next chunk
+        self.captured = helpers.fake_electrum(self.faucet, 'btc4', [{'tx_hash': 'aa' * 32, 'tx_pos': 0, 'value': 5_000_000}])
+        self.faucet.request_crypto('btc4', self.recipient)
+        first = Transaction.from_string(self.captured['raw'])
+        spent = (first.vin[0].txid, 0)
+
+        other = embit_script.p2wpkh(embit_ec.PrivateKey(bytes.fromhex('dd' * 32)).get_public_key()).address({'bech32': 'tb'})
+        data, status = self.faucet.request_crypto('btc4', other)
+
+        self.assertEqual(status, 200, data)
+        second = Transaction.from_string(self.captured['raw'])
+        self.assertNotIn(spent, {(vin.txid, vin.vout) for vin in second.vin})
+        self.assertEqual(second.vin[0].txid[::-1], first.txid())     # the first payout's change (vin holds wire order)
+
     def test_get_networks_exports_the_configured_block_explorer(self):
         # The page links the payout's txid there
         configs = copy.deepcopy(helpers.UTXO_TEST_CONFIGS)
@@ -321,6 +362,23 @@ class EvmRequestFlowTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertIs(eth.quoted_under_lock, False)
+
+    def test_wallet_that_cannot_cover_value_plus_gas_is_503(self):
+        # The node reserves value + gas_limit × gasPrice up front:
+        # one wei short of that is "faucet empty", not a broadcast the
+        # node bounces as a retryable 500 forever
+        gas_price = 20_000_000_000                          # 20 gwei
+        reservation = 210_000 * gas_price
+        eth = self.fake(faucet_balance=self.CHUNK_WEI + reservation - 1, gas_price=gas_price)
+        data, status = self.claim()
+
+        self.assertEqual(status, 503)
+        self.assertIn('Čiaupas nebeturi', data['error'])
+        self.assertEqual(eth.sent, [])
+        self.assertFalse(self.claimed())
+
+        eth = self.fake(faucet_balance=self.CHUNK_WEI + reservation, gas_price=gas_price)
+        self.assertEqual(self.claim()[1], 200)
 
     def test_happy_path_broadcasts_the_chunk(self):
         eth = self.fake()
@@ -455,10 +513,13 @@ class Erc20RequestFlowTests(unittest.TestCase):
         self.address, self.signature, self.nonce = helpers.sign_claim()
         self.TOKENS = {self.evm.FAUCET_ADDRESS: 100 * 10 ** 18}
 
-    def fake(self, native_balance=None, **kwargs):
+    def fake(self, native_balance=None, faucet_native_balance=10 ** 20, **kwargs):
         return helpers.fake_web3(
             self.evm, 'testchain',
-            balances={self.address: self.ENOUGH_GAS if native_balance is None else native_balance},
+            balances={
+                self.address: self.ENOUGH_GAS if native_balance is None else native_balance,
+                self.evm.FAUCET_ADDRESS: faucet_native_balance,
+            },
             **kwargs,
         )
 
@@ -490,13 +551,27 @@ class Erc20RequestFlowTests(unittest.TestCase):
         self.assertFalse(self.claimed())
 
     def test_gas_price_is_quoted_outside_the_send_lock(self):
-        eth = helpers.lock_watching_web3(self.evm, 'testchain', {self.address: self.ENOUGH_GAS})
+        eth = helpers.lock_watching_web3(
+            self.evm, 'testchain', {self.address: self.ENOUGH_GAS, self.evm.FAUCET_ADDRESS: 10 ** 20})
 
         with helpers.fake_token_contract(self.TOKENS):
             data, status = self.claim()
 
         self.assertEqual(status, 200)
         self.assertIs(eth.quoted_under_lock, False)
+
+    def test_token_payout_from_a_gasless_faucet_wallet_is_503(self):
+        # No native coin on the faucet wallet — transfer() can't be
+        # paid for, so the answer is "tell the lecturer", not a 200
+        # for a transfer that never broadcasts
+        self.fake(faucet_native_balance=0)
+        with helpers.fake_token_contract(self.TOKENS) as contract:
+            data, status = self.claim()
+
+        self.assertEqual(status, 503)
+        self.assertIn('mokesčiams', data['error'])
+        self.assertEqual(contract.transfers, [])
+        self.assertFalse(self.claimed())
 
     def test_happy_path_transfers_the_chunk(self):
         self.fake()

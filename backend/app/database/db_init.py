@@ -6,7 +6,12 @@
 #  created IF NOT EXISTS on every boot, plus the
 #  pre-mined demo chain the simulator page starts from.
 #  Nothing here migrates or drops — a fresh volume gets the
-#  full schema, an existing one is left untouched.
+#  full schema, an existing one is left untouched. Policy: a
+#  schema change means deleting _DATA/backend/database.db and
+#  letting this rebuild it (the graph tables are an Etherscan
+#  cache, the demo chain is re-seeded) — never a hand-patch
+#  through /dbgate. [id] is a real rowid alias (INTEGER
+#  PRIMARY KEY), so every row gets one.
 #
 #  Used by:
 #    - main.py — init_db() in the __main__ block, STEP 1
@@ -88,7 +93,7 @@ def init_db_tables():
         ''')
         conn.execute('''
             CREATE TABLE IF NOT EXISTS [Graph_Transactions] (
-                [id] INTEGER AUTO_INCREMENT NULL,
+                [id] INTEGER PRIMARY KEY AUTOINCREMENT,
                 [network] TEXT NULL,
                 [from_address] TEXT NULL,
                 [to_address] TEXT NULL,
@@ -96,7 +101,6 @@ def init_db_tables():
                 [hash] TEXT NULL,
                 [block_number] INTEGER NULL,
                 [timestamp] INTEGER NULL,
-                PRIMARY KEY ([id]),
                 CONSTRAINT [sqlite_autoindex_Graph_Transactions_1] UNIQUE ([network], [hash])
             );
         ''')
