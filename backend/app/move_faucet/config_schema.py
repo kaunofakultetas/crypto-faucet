@@ -77,7 +77,15 @@ class MoveFaucetSection(StrictModel):
     @model_validator(mode='after')
     def chain_and_flavour_exist(self):
         from app.move_faucet.chains import chain_params
-        chain_params(self.chain, self.network)  # raises ValueError naming the options
+        params = chain_params(self.chain, self.network)  # raises ValueError naming the options
+
+        # The chunk must be at least one indivisible unit once
+        # converted — below that the payout would be zero coins
+        if int(round(self.chunk_size * (10 ** params['decimals']))) < 1:
+            raise ValueError(
+                f"chunk_size {self.chunk_size} is below one base unit "
+                f"(10^-{params['decimals']}) of '{self.chain}'"
+            )
         return self
 
 

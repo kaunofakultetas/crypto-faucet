@@ -60,6 +60,7 @@ import logging
 import threading
 
 from embit import ec as embit_ec
+from embit import hashes as embit_hashes
 from embit.transaction import Transaction, TransactionInput, TransactionOutput
 
 from .coins import coin_params
@@ -586,6 +587,33 @@ class UTXOFaucet:
 
 
     ############################################################
+    # _pays_own_key
+    ############################################################
+    #
+    # Would this recipient script pay the faucet's OWN key? The
+    # address string is not enough: on a SegWit coin that also
+    # accepts legacy recipients, the faucet's key has a base58
+    # p2pkh twin the wallet never watches — coins sent there are
+    # lost, not returned. So the check is on the 20-byte key
+    # hash inside the recipient script, whatever the encoding.
+    #
+    # Used by:
+    #   - request_crypto (below)
+    ############################################################
+
+    def _pays_own_key(self, ctx: NetworkContext, address: str) -> bool:
+        own_hash = embit_hashes.hash160(ctx.key.get_public_key().sec())
+        try:
+            return own_hash in ctx.dialect.recipient_script(address).data
+        except Exception:
+            return False
+
+
+
+
+
+
+    ############################################################
     # _validate_address
     ############################################################
     #
@@ -636,6 +664,9 @@ class UTXOFaucet:
                 'chain_id': 0,  # not applicable for UTXO chains
                 'chain': faucet_config.get('network', 'testnet'),
                 'chunk_size': float(faucet_config.get('chunk_size')) if faucet_config.get('chunk_size') is not None else float(self.default_amount_btc),
+                # The operator's block explorer, if any — the page links
+                # the payout's txid there
+                'block_explorer': config.get('explorer', {}).get('block_explorer'),
             }
 
         default_key = DEFAULT_NETWORK if DEFAULT_NETWORK in networks else min(
@@ -701,12 +732,18 @@ class UTXOFaucet:
     ############################################################
 
     def request_crypto(self, network_key: str, to_address: str) -> tuple:
+        # A network that is not configured is the caller's mistake,
+        # like every other family answers it
+        if network_key not in self.network_configs:
+            return {"error": f"Nepalaikomas tinklas: {network_key}"}, 400
+
         try:
             ctx = self._setup_wallet_for_network(network_key)
 
 
-            # STEP 1: input validation — address present, right HRP for
-            # this network, and not the faucet paying itself.
+            # STEP 1: input validation — address present, decodes
+            # for this network, and not the faucet paying itself in
+            # ANY encoding of its own key (see _pays_own_key).
             # =========================================================
             if not to_address:
                 return {"error": "Trūksta reikalingų parametrų"}, 400
@@ -716,7 +753,7 @@ class UTXOFaucet:
             if not self._validate_address(ctx, to_address):
                 return {"error": "Neteisingas adresas"}, 400
 
-            if to_address.lower() == ctx.address.lower():
+            if self._pays_own_key(ctx, to_address):
                 return {"error": "Negalima siųsti į čiaupo adresą"}, 400
 
 
@@ -765,7 +802,8 @@ class UTXOFaucet:
                 # the cached balance is dropped so the page shows the
                 # payout on its next poll.
                 # ======================================================
-                amount_sat = int(float(ctx.chunk_size_btc) * 1e8)
+                # round, not int: 0.29 * 1e8 is 28999999.999999996 in binary
+                amount_sat = int(round(float(ctx.chunk_size_btc) * 1e8))
                 with self._send_locks.setdefault(network_key, threading.Lock()):
                     tx_id = self._create_and_broadcast_transaction(ctx, to_address, amount_sat)
             except Exception:
@@ -783,6 +821,7 @@ class UTXOFaucet:
             }, 200
 
         except Exception as e:
+            logging.exception(f"{network_key} payout to {to_address} failed")
             return {"error": "Nepavyko išsiųsti transakcijos. Bandykite dar kartą.", "details": str(e)}, 500
 
 

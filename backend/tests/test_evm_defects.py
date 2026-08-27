@@ -8,7 +8,7 @@
 #  The moment a fix lands, unittest reports the test as an
 #  "unexpected success" — which FAILS the run — and that is
 #  the cue: drop the decorator and move the test into its
-#  home file (test_request_flows.py, test_explorer.py).
+#  home file (test_request_flows.py, test_evm_faucet.py).
 #
 #  Everything is offline, on the same fakes as the flow tests
 #  (tests/helpers.py): real signatures from throwaway keys, a
@@ -25,24 +25,16 @@
 ############################################################
 
 
-import os
-import copy
 import logging
-import tempfile
 import unittest
-from unittest.mock import patch
 
-import requests
 
 from tests import helpers
-from app.database.db import get_db_connection
-from app.evm_faucet.explorer import EtherscanExplorer
 
 
 # Most of these make the transport fail ON PURPOSE and the
 # faucet logs that with logging.exception. Silenced for this
-# module only; SecretInLogsTests re-enables logging, since the
-# log output IS what it checks.
+# module only.
 def setUpModule():
     logging.disable(logging.CRITICAL)
 
@@ -52,42 +44,6 @@ def tearDownModule():
 
 
 FAUCET = '0x' + 'fa' * 20
-
-
-
-
-############################################################
-# UnreachableEth
-############################################################
-#
-# w3.eth on a network whose RPC can't be reached: the
-# chain-id probe raises like a transport failure and counts
-# how many times it was asked. Installed by unreachable_web3.
-#
-# Used by:
-#   - RpcFailuresAreRememberedTests
-#   - LocalChecksFirstTests
-############################################################
-
-class UnreachableEth(helpers.FakeEth):
-
-    probes = 0
-
-    @property
-    def chain_id(self):
-        self.probes += 1
-        raise requests.ConnectionError('rpc unreachable')
-
-    @chain_id.setter
-    def chain_id(self, value):
-        pass
-
-
-def unreachable_web3(faucet, network, balances=None):
-    w3 = faucet.w3_instances[network]
-    eth = UnreachableEth(w3.eth, {k.lower(): v for k, v in (balances or {}).items()})
-    w3.eth = eth
-    return eth
 
 
 
@@ -205,106 +161,6 @@ class TokenFaucetGasTests(Erc20ClaimCase):
 
 
 ############################################################
-# AddressNameTests
-############################################################
-#
-# set_address_name accepts any non-empty string as
-# the address and any length as the name, and upserts both
-# into the shared Graph_Addresses table every viewer reads.
-# Same throwaway-SQLite fixture as test_explorer.py.
-############################################################
-
-class AddressNameTests(unittest.TestCase):
-
-    def setUp(self):
-        handle, self.db_path = tempfile.mkstemp(suffix='.db')
-        os.close(handle)
-        with get_db_connection(self.db_path) as conn:
-            conn.execute('''
-                CREATE TABLE Graph_Addresses (
-                    address TEXT NULL, name TEXT NULL,
-                    is_contract INTEGER NULL, is_hub INTEGER NULL,
-                    UNIQUE (address)
-                )
-            ''')
-        self.db_patch = patch(
-            'app.evm_faucet.explorer.get_db_connection',
-            side_effect=lambda: get_db_connection(self.db_path),
-        )
-        self.db_patch.start()
-        self.explorer = EtherscanExplorer(
-            {'testchain': {'chain_id': 12345, 'explorer': {'etherscan_api_url': 'http://etherscan.invalid/api'}}},
-            trusted_addresses=[FAUCET],
-        )
-
-    def tearDown(self):
-        self.db_patch.stop()
-        os.unlink(self.db_path)
-
-    def row_count(self):
-        with get_db_connection(self.db_path) as conn:
-            return conn.execute('SELECT COUNT(*) FROM Graph_Addresses').fetchone()[0]
-
-    def stored_name(self, address):
-        with get_db_connection(self.db_path) as conn:
-            row = conn.execute('SELECT name FROM Graph_Addresses WHERE address = ?', [address.lower()]).fetchone()
-        return row[0] if row else None
-
-    @unittest.expectedFailure
-    def test_a_non_address_is_400_and_stores_nothing(self):
-        data, status = self.explorer.set_address_name('not-an-address', 'graffiti')
-
-        self.assertEqual(status, 400)
-        self.assertEqual(self.row_count(), 0)
-
-    @unittest.expectedFailure
-    def test_an_overlong_name_is_not_stored_verbatim(self):
-        # 4 KB of URL is not a label — refuse it or cut it, never keep it
-        name = 'x' * 4096
-        self.explorer.set_address_name(FAUCET, name)
-        self.assertNotEqual(self.stored_name(FAUCET), name)
-
-
-
-
-############################################################
-# SecretInLogsTests
-############################################################
-#
-# the <NAME> placeholders in faucet.rpc_url resolve
-# from the environment so the config never holds the Infura
-# key — but requests puts the FULL resolved URL into its
-# exception text, and logging.exception prints that
-# traceback. The resolved value must never reach the log,
-# whatever it looks like (so a scrub keyed on the resolved
-# placeholder values, not on Infura's /v3/<hex> shape).
-############################################################
-
-class SecretInLogsTests(unittest.TestCase):
-
-    SECRET = 'sekretas-iš-env'                 # what helpers.make_evm_faucet puts in TEST_RPC_SECRET
-
-    @unittest.expectedFailure
-    def test_transport_error_traceback_is_scrubbed(self):
-        faucet = helpers.make_evm_faucet()
-        helpers.fake_web3(
-            faucet, 'testchain',
-            balance_error=f"HTTPConnectionPool(host='127.0.0.1', port=9): Max retries exceeded with url: /{self.SECRET}",
-        )
-
-        logging.disable(logging.NOTSET)
-        try:
-            with self.assertLogs(level='ERROR') as captured:
-                faucet.get_faucet_balance('testchain')
-        finally:
-            logging.disable(logging.CRITICAL)
-
-        self.assertNotIn(self.SECRET, '\n'.join(captured.output))
-
-
-
-
-############################################################
 # RpcFailuresAreRememberedTests
 ############################################################
 #
@@ -334,56 +190,13 @@ class RpcFailuresAreRememberedTests(unittest.TestCase):
 
     @unittest.expectedFailure
     def test_unreachable_chain_id_probe_is_not_repeated_per_claim(self):
-        eth = unreachable_web3(self.faucet, 'testchain')
+        eth = helpers.unreachable_web3(self.faucet, 'testchain')
         address, signature, nonce = helpers.sign_claim()
 
         self.faucet.request_eth('testchain', address, signature, nonce)
         self.faucet.request_eth('testchain', address, signature, nonce)
 
         self.assertEqual(eth.probes, 1)
-
-
-
-
-############################################################
-# LocalChecksFirstTests
-############################################################
-#
-# The chain-id probe runs before the free local
-# checks, so on an unverified network a request with no
-# usable parameters at all still costs an RPC round-trip.
-# Parameter presence and address parsing come first; the
-# probe is only paid for by a request that could pay out.
-############################################################
-
-class LocalChecksFirstTests(unittest.TestCase):
-
-    def setUp(self):
-        self.faucet = helpers.make_evm_faucet()
-        self.eth = unreachable_web3(self.faucet, 'testchain')
-        self.address, self.signature, self.nonce = helpers.sign_claim()
-
-    @unittest.expectedFailure
-    def test_missing_parameters_are_400_without_touching_the_rpc(self):
-        data, status = self.faucet.request_eth('testchain', self.address, '', self.nonce)
-
-        self.assertEqual(status, 400)
-        self.assertEqual(self.eth.probes, 0)
-
-    @unittest.expectedFailure
-    def test_bad_address_is_400_without_touching_the_rpc(self):
-        data, status = self.faucet.request_eth('testchain', 'not-an-address', self.signature, self.nonce)
-
-        self.assertEqual(status, 400)
-        self.assertEqual(self.eth.probes, 0)
-
-    @unittest.expectedFailure
-    def test_token_claim_with_missing_parameters_is_400_without_touching_the_rpc(self):
-        erc20 = helpers.make_erc20_faucet(evm_faucet=self.faucet)
-        data, status = erc20.request_tokens('testchain', 'TST', self.address, '', self.nonce)
-
-        self.assertEqual(status, 400)
-        self.assertEqual(self.eth.probes, 0)
 
 
 
@@ -432,28 +245,6 @@ class GasQuoteUnderLockTests(EvmClaimCase):
         self.assertIs(eth.quoted_under_lock, False)
 
 
-
-
-############################################################
-# PlaceholderTests
-############################################################
-#
-# <NAME> placeholders in rpc_url resolve from the environment
-# with '' as the default, so a variable the operator forgot
-# yields 'https:///…', which boots green and fails every
-# claim. An unresolvable placeholder is an operator error:
-# fail the boot, loudly. Same pin as the MOVE faucet's.
-############################################################
-
-class PlaceholderTests(unittest.TestCase):
-
-    @unittest.expectedFailure
-    def test_an_unset_placeholder_fails_the_boot(self):
-        configs = copy.deepcopy(helpers.EVM_TEST_CONFIGS)
-        configs['testchain']['faucet']['rpc_url'] = 'https://<NOT_SET_ANYWHERE>/rpc'
-
-        with self.assertRaises(ValueError):
-            helpers.make_evm_faucet(configs)
 
 
 if __name__ == '__main__':

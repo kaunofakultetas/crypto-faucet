@@ -10,8 +10,8 @@
 #  not. The moment a fix lands, unittest reports the test as
 #  an "unexpected success" — which FAILS the run — and that
 #  is the cue: drop the decorator and move the test into its
-#  home file (test_cooldown.py, test_config_models.py, a new
-#  test_database.py / test_main.py).
+#  home file (test_cooldown.py, test_config_models.py,
+#  test_main.py, a new test_database.py).
 #
 #  Reviewed and deliberately NOT pinned: the forwarded-IP
 #  headers (correct for the two-hop ingress, and nothing
@@ -25,15 +25,11 @@
 
 
 import os
-import copy
-import json
 import tempfile
 import unittest
 import importlib
 from unittest.mock import patch
 
-from app.cooldown import CooldownTable
-from app.config_models import validate_configs
 from app.database.db import get_db_connection
 from app.database.db_init import init_db_tables
 from app.evm_faucet.evm_faucet import EVMFaucet
@@ -41,7 +37,6 @@ from app.erc_faucet.erc20_faucet import ERC20Faucet
 from app.utxo_faucet.utxo_faucet import UTXOFaucet
 from app.svm_faucet.svm_faucet import SVMFaucet
 from app.move_faucet.move_faucet import MoveFaucet
-from tests import helpers
 
 
 
@@ -54,7 +49,7 @@ from tests import helpers
 # (init_db_tables), with db_init's connection pointed at it.
 #
 # Used by:
-#   - SchemaTests, ConnectionTests, ExampleChainTests
+#   - SchemaTests, ConnectionTests
 ############################################################
 
 class TempDbCase(unittest.TestCase):
@@ -191,108 +186,6 @@ class ConnectionTests(TempDbCase):
             conn.close()
 
 
-
-
-############################################################
-# ClockTests
-############################################################
-#
-# The cooldown measures elapsed time with the wall clock,
-# which the host may step (an NTP correction, a snapshot
-# restore). A backwards step turns "now - last" negative,
-# the refusal branch is taken, and the student is told to
-# wait 60 + the step — minutes instead of one. Elapsed time
-# is what the monotonic clock is for; and the wait must
-# never exceed the window either way.
-############################################################
-
-class ClockTests(unittest.TestCase):
-
-    def at(self, moment):
-        # Both clocks, so the pin holds whichever one the table reads
-        return (patch('app.cooldown.time.time', return_value=moment),
-                patch('app.cooldown.time.monotonic', return_value=moment))
-
-    @unittest.expectedFailure
-    def test_a_backwards_clock_step_never_inflates_the_wait(self):
-        table = CooldownTable(seconds=60)
-        wall, mono = self.at(1000)
-        with wall, mono:
-            table.claim(('net', 'addr'))
-
-        wall, mono = self.at(700)                    # the host clock stepped back five minutes
-        with wall, mono:
-            remaining = table.claim(('net', 'addr'))
-
-        self.assertLessEqual(remaining, 60)
-
-
-
-
-############################################################
-# ExampleChainTests
-############################################################
-#
-# /api/get-example-blockchain packs the simulator's demo
-# chain with no ORDER BY and without its Height — the rows
-# come back in physical order, which is insert order only
-# until a block is deleted and re-seeded, after which every
-# link from that point renders as broken on the page whose
-# purpose is to show valid links. Order by height, and
-# expose it so the page could sort defensively.
-############################################################
-
-class ExampleChainTests(TempDbCase):
-
-    def seed_out_of_order(self):
-        with self.connect() as conn:
-            for height in ('2', '1', '3'):
-                conn.execute('''
-                    INSERT INTO BlockchainSimulator_Blocks (Height, BlockHash, PrevBlock, Nonce, Transactions)
-                    VALUES (?, ?, ?, '0', '[]')
-                ''', [height, f'hash{height}', f'hash{int(height) - 1}'])
-
-    def fetch(self):
-        import main
-        self.seed_out_of_order()
-        with patch('main.get_db_connection', side_effect=self.connect):
-            response = main.app.test_client().get('/api/get-example-blockchain')
-        self.assertEqual(response.status_code, 200)
-        return json.loads(response.data)
-
-    @unittest.expectedFailure
-    def test_blocks_come_back_in_height_order(self):
-        blocks = self.fetch()
-        self.assertEqual([block['hash'] for block in blocks], ['hash1', 'hash2', 'hash3'])
-
-    @unittest.expectedFailure
-    def test_blocks_carry_their_height(self):
-        blocks = self.fetch()
-        self.assertEqual([str(block.get('height')) for block in blocks], ['1', '2', '3'])
-
-
-
-
-############################################################
-# ConfigKeyTests
-############################################################
-#
-# validate_configs runs every config VALUE through a strict
-# model, but the map keys — which become URL segments, page
-# paths and icon filenames — pass through untouched. A key
-# with a slash or a space boots green and produces an
-# unreachable page and a broken icon. The layer exists to
-# turn config mistakes into loud boot failures; keys are
-# part of the config.
-############################################################
-
-class ConfigKeyTests(unittest.TestCase):
-
-    @unittest.expectedFailure
-    def test_a_key_that_is_not_url_safe_fails_the_boot(self):
-        configs = {'my/chain': copy.deepcopy(helpers.EVM_TEST_CONFIGS['testchain'])}
-        with self.assertRaises(ValueError):
-            validate_configs(configs, {}, {}, {}, {})
 
 
 if __name__ == '__main__':

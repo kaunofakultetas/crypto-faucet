@@ -26,7 +26,6 @@
 ############################################################
 
 
-import copy
 import logging
 import unittest
 
@@ -37,8 +36,7 @@ from tests import helpers
 
 
 # Several tests make the RPC fail ON PURPOSE. Silenced for this
-# module only; SecretInLogsTests re-enables logging, since the
-# log output IS what it checks.
+# module only.
 def setUpModule():
     logging.disable(logging.CRITICAL)
 
@@ -48,8 +46,6 @@ def tearDownModule():
 
 
 CHUNK_LAMPORTS = 500_000_000            # the test config's 0.5 SOL
-FEE_LAMPORTS = 5000
-RENT_EXEMPT_LAMPORTS = 890880           # chains/solana.py — a bare system account's floor
 
 # Solana's cluster genesis hashes — the one fact that tells the
 # clusters apart over RPC
@@ -88,38 +84,6 @@ class SvmClaimCase(unittest.TestCase):
 
     def claimed(self):
         return ('testsvm', self.address) in self.faucet.cooldowns._last_claim
-
-
-
-
-############################################################
-# SecretInLogsTests
-############################################################
-#
-# The <NAME> placeholder in faucet.rpc_url resolves from the
-# environment so the config never holds the Infura key —
-# but requests puts the FULL resolved URL into its exception
-# text, and every logging.exception in the faucet prints
-# that traceback. The resolved value must never reach the
-# log, whatever it looks like. Same pin as the EVM faucet's.
-############################################################
-
-class SecretInLogsTests(SvmClaimCase):
-
-    SECRET = 'sekretas-iš-env'          # what helpers.make_svm_faucet puts in TEST_RPC_SECRET
-
-    @unittest.expectedFailure
-    def test_transport_error_traceback_is_scrubbed(self):
-        self.fake(balance_error=f"HTTPConnectionPool(host='127.0.0.1', port=9): Max retries exceeded with url: /{self.SECRET}")
-
-        logging.disable(logging.NOTSET)
-        try:
-            with self.assertLogs(level='ERROR') as captured:
-                self.faucet.get_faucet_balance('testsvm')
-        finally:
-            logging.disable(logging.CRITICAL)
-
-        self.assertNotIn(self.SECRET, '\n'.join(captured.output))
 
 
 
@@ -172,36 +136,6 @@ class ClusterSanityTests(SvmClaimCase):
 
 
 ############################################################
-# RentReserveTests
-############################################################
-#
-# The "faucet is empty" gate reserves the chunk and the
-# signature fee; the runtime also forbids leaving the PAYER
-# rent-paying — a non-zero balance below the rent-exempt
-# minimum. A faucet inside that band passes the gate, fails
-# pre-flight, and answers "try again" forever instead of
-# the message that sends the student to the lecturer. The
-# exact-drain case (balance == chunk + fee) stays legal, as
-# test_svm_faucet.py pins.
-############################################################
-
-class RentReserveTests(SvmClaimCase):
-
-    @unittest.expectedFailure
-    def test_a_balance_that_would_leave_the_faucet_rent_paying_is_the_friendly_503(self):
-        client = self.fake(faucet_lamports=CHUNK_LAMPORTS + FEE_LAMPORTS + RENT_EXEMPT_LAMPORTS - 1)
-
-        data, status = self.claim()
-
-        self.assertEqual(status, 503)
-        self.assertIn('Čiaupas nebeturi', data['error'])
-        self.assertEqual(client.sent, [])
-        self.assertFalse(self.claimed())
-
-
-
-
-############################################################
 # ConnectTimeoutTests
 ############################################################
 #
@@ -233,28 +167,6 @@ class ConnectTimeoutTests(unittest.TestCase):
         self.assertEqual(len(attempts), 1)
 
 
-
-
-############################################################
-# PlaceholderTests
-############################################################
-#
-# <NAME> placeholders in rpc_url resolve from the environment
-# with '' as the default, so a variable the operator forgot
-# yields 'https:///…', which boots green and 500s every
-# claim. An unresolvable placeholder is an operator error:
-# fail the boot, loudly. Same pin as the MOVE faucet's.
-############################################################
-
-class PlaceholderTests(unittest.TestCase):
-
-    @unittest.expectedFailure
-    def test_an_unset_placeholder_fails_the_boot(self):
-        configs = copy.deepcopy(helpers.SVM_TEST_CONFIGS)
-        configs['testsvm']['faucet']['rpc_url'] = 'https://<NOT_SET_ANYWHERE>/rpc'
-
-        with self.assertRaises(ValueError):
-            helpers.make_svm_faucet(configs)
 
 
 if __name__ == '__main__':

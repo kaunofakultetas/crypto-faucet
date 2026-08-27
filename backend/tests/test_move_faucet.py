@@ -15,6 +15,7 @@
 ############################################################
 
 
+import copy
 import base64
 import hashlib
 import json
@@ -214,6 +215,39 @@ class MoveRequestFlowTests(unittest.TestCase):
 
     def claimed(self):
         return ('testmove', self.address) in self.faucet.cooldowns._last_claim
+
+    def test_a_non_ed25519_signature_is_named_not_called_a_mismatch(self):
+        # A Google-login (zkLogin, flag 5) or hardware account signs
+        # happily and can never verify here — the refusal names the
+        # account type, so the student changes account, not signature
+        self.fake()
+        zklogin = base64.b64encode(bytes([5]) + b'\x00' * 200).decode()
+
+        data, status = self.faucet.request_move('testmove', self.address, zklogin, self.nonce)
+
+        self.assertEqual(status, 400)
+        self.assertIn('zkLogin', data['error'])
+        self.assertNotIn('neatitinka', data['error'])
+
+    def test_garbage_that_is_not_base64_is_still_the_signature_403(self):
+        self.fake()
+        data, status = self.faucet.request_move('testmove', self.address, '!!not-base64!!', self.nonce)
+        self.assertEqual(status, 403)
+
+    def test_chunk_size_converts_to_mist_exactly(self):
+        # 1.001 * 1e9 is 1000999999.9999999 in binary — rounded, not cut
+        configs = copy.deepcopy(helpers.MOVE_TEST_CONFIGS)
+        configs['testmove']['faucet']['chunk_size'] = 1.001
+        faucet = helpers.make_move_faucet(configs)
+        self.assertEqual(faucet._chunk_mist('testmove'), 1_001_000_000)
+
+    def test_an_unset_placeholder_fails_the_boot(self):
+        configs = copy.deepcopy(helpers.MOVE_TEST_CONFIGS)
+        configs['testmove']['faucet']['rpc_url'] = 'https://<NOT_SET_ANYWHERE>/graphql'
+
+        with self.assertRaises(ValueError) as caught:
+            helpers.make_move_faucet(configs)
+        self.assertIn('NOT_SET_ANYWHERE', str(caught.exception))
 
     def test_happy_path_executes_and_keeps_the_cooldown(self):
         client = self.fake()

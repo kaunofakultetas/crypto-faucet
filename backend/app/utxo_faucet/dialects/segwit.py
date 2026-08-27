@@ -26,6 +26,12 @@
 
 from embit import script as embit_script
 from embit import bech32 as embit_bech32
+
+
+# The witness versions a recipient may use: 0 (p2wpkh / p2wsh)
+# and 1 (taproot). Bech32 encodes versions up to 16, but coins
+# paid to a version no chain has activated are anyone-can-spend
+ACTIVATED_WITNESS_VERSIONS = (0, 1)
 from embit.transaction import Witness, SIGHASH
 
 from .legacy import LegacyDialect
@@ -115,10 +121,12 @@ class SegwitDialect:
     # validate_address
     ############################################################
     #
-    # bech32: a cheap prefix check ('tb1...', 'knf1...') — the
-    # FULL checksum validation happens in recipient_script,
-    # where the address is bech32-decoded for real. Anything
-    # else falls through to the legacy codec (full base58check
+    # bech32: a FULL decode under this HRP — checksum, program
+    # length and a witness version some chain has actually
+    # activated (v0 p2wpkh/p2wsh, v1 taproot) — so a typo is
+    # refused as "bad address" up front instead of failing
+    # inside the transaction builder. Anything that is not
+    # bech32 falls through to the legacy codec (full base58check
     # verdict) when the coin has one.
     #
     # Used by:
@@ -126,8 +134,9 @@ class SegwitDialect:
     ############################################################
 
     def validate_address(self, address: str) -> bool:
-        if address.lower().startswith(self.hrp + '1'):
-            return True
+        witver, witprog = embit_bech32.decode(self.hrp, address)
+        if witver is not None and witprog is not None:
+            return witver in ACTIVATED_WITNESS_VERSIONS
 
         if self._legacy_recipients is not None:
             return self._legacy_recipients.validate_address(address)
@@ -154,6 +163,8 @@ class SegwitDialect:
     def recipient_script(self, address: str) -> embit_script.Script:
         witver, witprog = embit_bech32.decode(self.hrp, address)
         if witver is not None and witprog is not None:
+            if witver not in ACTIVATED_WITNESS_VERSIONS:
+                raise ValueError(f"Witness version {witver} is not spendable on any chain")
             witprog = bytes(witprog)
             version_opcode = bytes([0x50 + witver if witver else 0])
             return embit_script.Script(version_opcode + bytes([len(witprog)]) + witprog)

@@ -30,6 +30,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import requests
+
 from app.database.db import get_db_connection
 from app.evm_faucet.explorer import (
     EtherscanExplorer,
@@ -474,6 +476,127 @@ class ExplorerServeTests(ExplorerTestCase):
     def test_transaction_days_validates_its_inputs(self):
         self.assertEqual(self.explorer.get_transaction_days('nosuchnet', 0, FAUCET)[1], 400)
         self.assertEqual(self.explorer.get_transaction_days('testchain', 0, '')[1], 400)
+
+
+
+
+
+############################################################
+# ExplorerInputTests
+############################################################
+#
+# What is refused BEFORE any network or database work: a
+# malformed address, a network without an explorer section —
+# plus the two boundaries of the one outbound call: it
+# carries a timeout, and a failure never logs the API key
+# that rides in its query string.
+############################################################
+
+class ExplorerInputTests(ExplorerTestCase):
+
+    def test_a_malformed_address_is_400_without_a_fetch(self):
+        with patch.object(self.explorer, '_refresh_address') as refresh:
+            data, status = self.explorer.get_stored_transactions(
+                'testchain', 'not-an-address', 1750000000, 1750086400)
+
+        self.assertEqual(status, 400)
+        refresh.assert_not_called()
+
+    def test_transaction_days_refuse_a_malformed_address(self):
+        data, status = self.explorer.get_transaction_days('testchain', 0, 'not-an-address')
+        self.assertEqual(status, 400)
+
+    def test_a_network_without_an_explorer_is_unsupported(self):
+        # Configured for the faucet, but nothing to scrape — an
+        # honest 400, not a fetch that fails deep inside
+        explorer = EtherscanExplorer({'bare': {'chain_id': 12346}}, trusted_addresses=[FAUCET])
+
+        self.assertFalse(explorer.is_supported_network('bare'))
+        data, status = explorer.get_stored_transactions('bare', STUDENT, 1750000000, 1750086400)
+        self.assertEqual(status, 400)
+
+    def test_explorer_requests_carry_a_timeout(self):
+        seen = {}
+
+        class Answer:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {'status': '0', 'message': 'No transactions found'}
+
+        def get(url, params=None, **kwargs):
+            seen.update(kwargs)
+            return Answer()
+
+        with patch('app.evm_faucet.explorer.requests.get', get):
+            self.explorer.fetch_all_transactions_from_etherscan(STUDENT, 'testchain')
+
+        self.assertTrue(seen.get('timeout'))
+
+    def test_a_refresh_failure_never_logs_the_api_key(self):
+        key = 'sekretas-etherscan'
+        with patch.dict(os.environ, {'ETHERSCAN_API_KEY': key}):
+            explorer = EtherscanExplorer(TESTCHAIN_CONFIGS, trusted_addresses=[FAUCET])
+        error = requests.HTTPError(
+            f"429 Client Error: Too Many Requests for url: http://etherscan.invalid/api?module=account&apikey={key}")
+
+        class Failing:
+            def raise_for_status(self):
+                raise error
+
+        logging.disable(logging.NOTSET)
+        try:
+            with patch('app.evm_faucet.explorer.requests.get', lambda *a, **k: Failing()):
+                with self.assertLogs(level='ERROR') as captured:
+                    explorer.get_stored_transactions('testchain', STUDENT, int(time.time()) - 60, int(time.time()) + 60)
+        finally:
+            logging.disable(logging.CRITICAL)
+
+        self.assertNotIn(key, '\n'.join(captured.output))
+
+
+
+
+############################################################
+# AddressNameTests
+############################################################
+#
+# The one user-written INSERT in the app: the address must be
+# a real one, and the label is cut to the dialog's limit —
+# never stored verbatim from a URL.
+############################################################
+
+class AddressNameTests(ExplorerTestCase):
+
+    def stored_name(self, address):
+        with get_db_connection(self.db_path) as conn:
+            row = conn.execute('SELECT name FROM Graph_Addresses WHERE address = ?', [address.lower()]).fetchone()
+        return row[0] if row else None
+
+    def row_count(self):
+        with get_db_connection(self.db_path) as conn:
+            return conn.execute('SELECT COUNT(*) FROM Graph_Addresses').fetchone()[0]
+
+    def test_a_non_address_is_400_and_stores_nothing(self):
+        data, status = self.explorer.set_address_name('not-an-address', 'graffiti')
+
+        self.assertEqual(status, 400)
+        self.assertEqual(self.row_count(), 0)
+
+    def test_a_name_is_stored_trimmed(self):
+        self.explorer.set_address_name(FAUCET, '  Čiaupas  ')
+        self.assertEqual(self.stored_name(FAUCET), 'Čiaupas')
+
+    def test_an_overlong_name_is_cut_to_the_dialogs_limit(self):
+        self.explorer.set_address_name(FAUCET, 'x' * 4096)
+        self.assertEqual(len(self.stored_name(FAUCET)), 64)
+
+    def test_naming_again_replaces_the_label(self):
+        self.explorer.set_address_name(FAUCET, 'first')
+        self.explorer.set_address_name(FAUCET, 'second')
+        self.assertEqual(self.stored_name(FAUCET), 'second')
+        self.assertEqual(self.row_count(), 1)
 
 
 if __name__ == '__main__':

@@ -39,7 +39,6 @@
 
 
 import os
-import re
 import time
 import logging
 import threading
@@ -50,6 +49,7 @@ from eth_account.messages import encode_defunct
 
 from ..cooldown import CooldownTable
 from ..icons import icon_url
+from ..env_secrets import resolve_placeholders, install_log_redaction
 
 # web3 v7 renamed this middleware — accept either name so an
 # image upgrade doesn't break payouts
@@ -155,15 +155,18 @@ class EVMFaucet:
         # One Web3 instance per network, created up front from the
         # config's faucet.rpc_url. <NAME> placeholders in the URL are
         # environment variable references, resolved here and only
-        # here — the config file itself never holds the Infura key.
-        # The sign-and-send middleware turns every
+        # here — the config file itself never holds the Infura key,
+        # an unset one fails the boot, and the resolved value is
+        # scrubbed from every log line (env_secrets.py). The
+        # sign-and-send middleware turns every
         # eth_sendTransaction from the faucet address into: fill the
         # PENDING nonce and chain id, sign locally, broadcast raw —
         # no payout path builds or signs transactions by hand.
+        install_log_redaction()
         self.w3_instances = {}
         for network in self.NETWORK_CONFIGS:
             rpc_url_template = self.NETWORK_CONFIGS[network]['faucet']['rpc_url']
-            rpc_url = re.sub(r'<(\w+)>', lambda m: os.getenv(m.group(1), ''), rpc_url_template)
+            rpc_url = resolve_placeholders(rpc_url_template, f"EVM network '{network}' rpc_url")
 
             # 10s timeout so a dead RPC endpoint fails the request
             # instead of hanging the Flask worker.
@@ -424,22 +427,14 @@ class EVMFaucet:
             return {"error": "Čiaupo adresas nesukonfigūruotas"}, 500
 
         w3 = self.w3_instances[network]
-
-        # A network whose RPC was down at startup skipped the
-        # warmup's chain-id check — settle it now (one cached
-        # round-trip) rather than pay out over a misconfigured RPC.
-        try:
-            if not self._verify_chain_id(network):
-                return {"error": "Tinklo konfigūracijos klaida. Praneškite dėstytojui."}, 500
-        except Exception:
-            return {"error": "Tinklas nepasiekiamas. Bandykite vėliau."}, 503
-
         amount_to_send = self.NETWORK_CONFIGS[network]['faucet']['chunk_size']
         amount_to_send_wei = Web3.to_wei(float(amount_to_send), 'ether')
 
 
         # STEP 1: input validation — all parameters present and the
-        # address parses
+        # address parses. Local checks come BEFORE any round-trip:
+        # a typo must not cost an RPC call (or, with the RPC down,
+        # a 10 s wait) to be told it is a typo.
         # =========================================================
         if not all([to_address, signature, nonce]):
             return {"error": "Trūksta reikalingų parametrų"}, 400
@@ -451,6 +446,15 @@ class EVMFaucet:
 
         if not w3.is_address(to_address):
             return {"error": "Neteisingas adresas"}, 400
+
+        # A network whose RPC was down at startup skipped the
+        # warmup's chain-id check — settle it now (one cached
+        # round-trip) rather than pay out over a misconfigured RPC.
+        try:
+            if not self._verify_chain_id(network):
+                return {"error": "Tinklo konfigūracijos klaida. Praneškite dėstytojui."}, 500
+        except Exception:
+            return {"error": "Tinklas nepasiekiamas. Bandykite vėliau."}, 503
 
 
         # STEP 2: signature check. This is the exact message the

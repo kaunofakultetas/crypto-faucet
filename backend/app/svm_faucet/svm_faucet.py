@@ -39,7 +39,6 @@
 
 
 import os
-import re
 import time
 import logging
 import base64
@@ -57,6 +56,7 @@ from .chains import chain_params
 from .rpc_client import SolanaRpcClient
 from ..cooldown import CooldownTable
 from ..icons import icon_url
+from ..env_secrets import resolve_placeholders, install_log_redaction
 
 
 # How long a polled faucet balance is served from cache. The page
@@ -147,15 +147,18 @@ class SVMFaucet:
 
         # network_key -> its RPC client. <NAME> placeholders in the
         # rpc_url are environment variable references, resolved here
-        # and only here — the config file never holds the API key.
+        # and only here — the config file never holds the API key,
+        # an unset one fails the boot, and the resolved value is
+        # scrubbed from every log line (env_secrets.py).
+        install_log_redaction()
         self._clients = {}
         for network_key, config in self.NETWORK_CONFIGS.items():
             faucet_config = config.get('faucet', {})
             self._chain_params[network_key] = chain_params(
                 faucet_config.get('chain', ''), faucet_config.get('network', ''))
 
-            rpc_url = re.sub(r'<(\w+)>', lambda m: os.getenv(m.group(1), ''),
-                             faucet_config.get('rpc_url', ''))
+            rpc_url = resolve_placeholders(
+                faucet_config.get('rpc_url', ''), f"SVM network '{network_key}' rpc_url")
             self._clients[network_key] = SolanaRpcClient(
                 rpc_url, debug=self.APP_DEBUG, label=network_key)
 
@@ -529,7 +532,11 @@ class SVMFaucet:
             logging.exception(f"Failed to read the faucet balance on {network}")
             return {"error": "Nepavyko gauti čiaupo balanso"}, 500
 
-        if faucet_lamports < amount_lamports + params['fee_lamports']:
+        # The faucet must keep its own rent-exempt minimum after
+        # paying, or the node rejects the transfer — a balance inside
+        # that band is "empty" for our purposes, and the friendly
+        # message beats a broadcast rejection
+        if faucet_lamports < amount_lamports + params['fee_lamports'] + params['min_payout_lamports']:
             self.cooldowns.release(cooldown_key)
             return {"error": "Čiaupas nebeturi kriptovaliutos. Praneškite dėstytojui."}, 503
 

@@ -13,6 +13,7 @@
 ############################################################
 
 
+import copy
 import json
 import logging
 import unittest
@@ -273,13 +274,47 @@ class SvmRequestFlowTests(unittest.TestCase):
         self.assertEqual(status, 503)
         self.assertFalse(self.claimed())
 
-    def test_faucet_must_cover_the_fee_too(self):
-        # Exactly the chunk is NOT enough — the signature costs extra
+    def test_faucet_must_cover_the_fee_and_its_own_rent_too(self):
+        # Exactly the chunk is NOT enough — the signature costs 5000
+        # lamports, and the faucet account must keep its rent-exempt
+        # minimum (890 880) after paying or the node rejects the
+        # transfer. One lamport short of that is the friendly 503.
+        reserve = 5000 + 890880
         self.fake(faucet_lamports=self.CHUNK_LAMPORTS)
         self.assertEqual(self.claim()[1], 503)
 
-        self.fake(faucet_lamports=self.CHUNK_LAMPORTS + 5000)
+        client = self.fake(faucet_lamports=self.CHUNK_LAMPORTS + reserve - 1)
+        data, status = self.claim()
+        self.assertEqual(status, 503)
+        self.assertIn('Čiaupas nebeturi', data['error'])
+        self.assertEqual(client.sent, [])
+        self.assertFalse(self.claimed())
+
+        self.fake(faucet_lamports=self.CHUNK_LAMPORTS + reserve)
         self.assertEqual(self.claim()[1], 200)
+
+    def test_an_unset_placeholder_fails_the_boot(self):
+        configs = copy.deepcopy(helpers.SVM_TEST_CONFIGS)
+        configs['testsvm']['faucet']['rpc_url'] = 'https://<NOT_SET_ANYWHERE>/rpc'
+
+        with self.assertRaises(ValueError) as caught:
+            helpers.make_svm_faucet(configs)
+        self.assertIn('NOT_SET_ANYWHERE', str(caught.exception))
+
+    def test_transport_error_traceback_is_scrubbed(self):
+        # The resolved <TEST_RPC_SECRET> must never reach the log,
+        # whatever the transport puts in its exception text
+        secret = 'sekretas-iš-env'
+        self.fake(balance_error=f"HTTPSConnectionPool(host='127.0.0.1', port=9): Max retries exceeded with url: /{secret}")
+
+        logging.disable(logging.NOTSET)
+        try:
+            with self.assertLogs(level='ERROR') as captured:
+                self.faucet.get_faucet_balance('testsvm')
+        finally:
+            logging.disable(logging.CRITICAL)
+
+        self.assertNotIn(secret, '\n'.join(captured.output))
 
     def test_broadcast_failure_releases_the_cooldown(self):
         self.fake(broadcast_error='blockhash not found')

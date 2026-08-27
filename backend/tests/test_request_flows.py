@@ -21,10 +21,13 @@
 ############################################################
 
 
+import copy
 import logging
 import unittest
 
 from embit import ec as embit_ec
+from embit import base58 as embit_base58
+from embit import hashes as embit_hashes
 from embit import script as embit_script
 from embit.transaction import Transaction
 
@@ -150,10 +153,71 @@ class UtxoRequestFlowTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn('čiaupo adresą', data['error'])
 
-    def test_unknown_network_is_500_not_a_crash(self):
+    def test_unknown_network_is_400(self):
+        # The caller's mistake, answered like every other family
         data, status = self.faucet.request_crypto('nosuchnet', self.recipient)
-        self.assertEqual(status, 500)
+        self.assertEqual(status, 400)
         self.assertIn('error', data)
+
+    def test_a_bech32_address_with_a_broken_checksum_is_400(self):
+        # One wrong character: refused up front as a bad address, not
+        # a 500 from inside the transaction builder
+        typo = self.recipient[:-1] + ('q' if self.recipient[-1] != 'q' else 'p')
+
+        data, status = self.faucet.request_crypto('btc4', typo)
+
+        self.assertEqual(status, 400)
+        self.assertIn('Neteisingas adresas', data['error'])
+        self.assertNotIn('raw', self.captured)
+        self.assertFalse(self.claimed(typo))
+
+    def test_the_faucet_key_in_base58_form_is_refused(self):
+        # btc4 also accepts legacy recipients, so the faucet key has a
+        # p2pkh twin the wallet never watches — coins sent there would
+        # be lost, not returned
+        pub = self.faucet.faucet_key.get_public_key()
+        twin = embit_base58.encode_check(b'\x6f' + embit_hashes.hash160(pub.sec()))
+
+        data, status = self.faucet.request_crypto('btc4', twin)
+
+        self.assertEqual(status, 400)
+        self.assertIn('čiaupo adresą', data['error'])
+        self.assertNotIn('raw', self.captured)
+
+    def test_a_failed_payout_is_logged(self):
+        # The operator gets a server-side record of every failed payout
+        self.client.request = lambda method, params: (_ for _ in ()).throw(RuntimeError('electrum down'))
+
+        logging.disable(logging.NOTSET)
+        try:
+            with self.assertLogs(level='ERROR') as captured:
+                self.faucet.request_crypto('btc4', self.recipient)
+        finally:
+            logging.disable(logging.CRITICAL)
+
+        self.assertIn('electrum down', '\n'.join(captured.output))
+
+    def test_chunk_size_converts_to_satoshis_by_rounding(self):
+        # 0.29 * 1e8 is 28999999.999999996 in binary — the wire must
+        # carry the 0.29 the message promises
+        configs = copy.deepcopy(helpers.UTXO_TEST_CONFIGS)
+        configs['btc4']['faucet']['chunk_size'] = 0.29
+        faucet = helpers.make_utxo_faucet(configs)
+        captured = helpers.fake_electrum(faucet, 'btc4', [{'tx_hash': 'aa' * 32, 'tx_pos': 0, 'value': 100_000_000}])
+
+        data, status = faucet.request_crypto('btc4', self.recipient)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(Transaction.from_string(captured['raw']).vout[0].value, 29_000_000)
+
+    def test_get_networks_exports_the_configured_block_explorer(self):
+        # The page links the payout's txid there
+        configs = copy.deepcopy(helpers.UTXO_TEST_CONFIGS)
+        configs['btc4']['explorer'] = {'block_explorer': 'https://mempool.space/testnet4'}
+        networks = helpers.make_utxo_faucet(configs).get_networks()['networks']
+
+        self.assertEqual(networks['btc4']['block_explorer'], 'https://mempool.space/testnet4')
+        self.assertIsNone(networks['knf']['block_explorer'])
 
     def test_cooldown_is_per_network(self):
         # A claim on btc4 must not lock the same address out of knf
@@ -192,6 +256,22 @@ class EvmRequestFlowTests(unittest.TestCase):
 
     def claimed(self):
         return ('testchain', self.address.lower()) in self.faucet.cooldowns._last_claim
+
+    def test_missing_parameters_are_400_without_touching_the_rpc(self):
+        # Local checks first: a typo must not cost a round-trip (or
+        # a 10 s wait while the RPC is down) to be called a typo
+        eth = helpers.unreachable_web3(self.faucet, 'testchain')
+        data, status = self.faucet.request_eth('testchain', self.address, '', self.nonce)
+
+        self.assertEqual(status, 400)
+        self.assertEqual(eth.probes, 0)
+
+    def test_bad_address_is_400_without_touching_the_rpc(self):
+        eth = helpers.unreachable_web3(self.faucet, 'testchain')
+        data, status = self.faucet.request_eth('testchain', 'not-an-address', self.signature, self.nonce)
+
+        self.assertEqual(status, 400)
+        self.assertEqual(eth.probes, 0)
 
     def test_happy_path_broadcasts_the_chunk(self):
         eth = self.fake()
@@ -337,6 +417,14 @@ class Erc20RequestFlowTests(unittest.TestCase):
 
     def claimed(self):
         return ('testchain', 'TST', self.address.lower()) in self.faucet.cooldowns._last_claim
+
+    def test_missing_parameters_are_400_without_touching_the_rpc(self):
+        # Same rule as the native flow: local checks before any RPC
+        eth = helpers.unreachable_web3(self.evm, 'testchain')
+        data, status = self.faucet.request_tokens('testchain', 'TST', self.address, '', self.nonce)
+
+        self.assertEqual(status, 400)
+        self.assertEqual(eth.probes, 0)
 
     def test_happy_path_transfers_the_chunk(self):
         self.fake()

@@ -37,6 +37,7 @@
 
 
 import os
+import re
 import time
 import json
 import logging
@@ -44,6 +45,20 @@ import logging
 import requests
 
 from ..database.db import get_db_connection
+from ..env_secrets import remember_secret, install_log_redaction
+
+
+# One outbound Etherscan call may not hang a worker: a hung
+# explorer fails the refresh, and the cached graph is served
+ETHERSCAN_TIMEOUT_S = 20
+
+# A graph address is a 20-byte hex EVM address — anything else
+# is refused before any network or database work
+ADDRESS_PATTERN = re.compile(r'^0x[0-9a-fA-F]{40}$')
+
+# The longest label a node can carry (the dialog caps at the
+# same length) — a URL's worth of text is not a label
+MAX_NAME_LENGTH = 64
 
 
 # How many blocks an incremental refresh re-fetches BELOW the
@@ -113,6 +128,10 @@ class EtherscanExplorer:
     def __init__(self, network_configs, trusted_addresses=None):
         self.NETWORK_CONFIGS = network_configs
         self.ETHERSCAN_API_KEY = os.getenv('ETHERSCAN_API_KEY', '')
+        # The key rides in the query string, so a failed request's
+        # exception text carries it — scrubbed from the log
+        remember_secret(self.ETHERSCAN_API_KEY)
+        install_log_redaction()
         self.TRUSTED_ADDRESSES = {a.lower() for a in (trusted_addresses or []) if a}
 
         # (network, address) -> unix time of the last Etherscan
@@ -132,13 +151,21 @@ class EtherscanExplorer:
     # is_supported_network
     ############################################################
     #
+    # A network the GRAPH can serve: configured AND carrying an
+    # explorer section with the API to scrape. A configured
+    # network without one (arbitrumSepolia) is a faucet, not a
+    # graph — the page hides the feature (has_explorer=false)
+    # and a direct request is an honest 400 instead of a fetch
+    # that fails deep inside and logs a traceback per sweep.
+    #
     # Used by:
     #   - fetch_all_transactions_from_etherscan (below)
-    #   - get_stored_transactions (below)
+    #   - get_stored_transactions / get_transaction_days (below)
     ############################################################
 
     def is_supported_network(self, network):
-        return network in self.NETWORK_CONFIGS
+        config = self.NETWORK_CONFIGS.get(network)
+        return bool(config and config.get('explorer', {}).get('etherscan_api_url'))
 
 
 
@@ -182,7 +209,7 @@ class EtherscanExplorer:
                 'chainid': self.NETWORK_CONFIGS[network]['chain_id'],
                 'apikey': self.ETHERSCAN_API_KEY
             }
-            response = requests.get(url, params=params)
+            response = requests.get(url, params=params, timeout=ETHERSCAN_TIMEOUT_S)
             response.raise_for_status()
             result = response.json()
 
@@ -371,6 +398,8 @@ class EtherscanExplorer:
     def get_stored_transactions(self, network, address, from_ts, to_ts):
         if not address:
             return {"error": "Trūksta adreso"}, 400
+        if not ADDRESS_PATTERN.match(address):
+            return {"error": "Neteisingas adresas"}, 400
         if not self.is_supported_network(network):
             return {"error": f"Nepalaikomas tinklas: {network}"}, 400
         if from_ts is None or to_ts is None or from_ts >= to_ts:
@@ -554,6 +583,8 @@ class EtherscanExplorer:
             return {"error": f"Nepalaikomas tinklas: {network}"}, 400
         if not address:
             return {"error": "Trūksta adreso"}, 400
+        if not ADDRESS_PATTERN.match(address):
+            return {"error": "Neteisingas adresas"}, 400
 
         offset = int(tz_offset or 0)
         if abs(offset) > 14 * 3600:
@@ -585,7 +616,9 @@ class EtherscanExplorer:
     # graph. An upsert, not an UPDATE: naming an address the
     # cache hasn't seen yet must create the row, not silently
     # do nothing — the label then survives until the address
-    # shows up in a transaction.
+    # shows up in a transaction. The one user-written INSERT in
+    # the app: the address must be a real one, and the label is
+    # cut to MAX_NAME_LENGTH (the dialog already stops there).
     #
     # Used by:
     #   - evm_routes.py — GET /api/evm/set-address-name
@@ -594,13 +627,16 @@ class EtherscanExplorer:
     def set_address_name(self, address, name):
         if not address:
             return {"error": "Trūksta adreso"}, 400
+        if not ADDRESS_PATTERN.match(address):
+            return {"error": "Neteisingas adresas"}, 400
 
+        label = (name or '').strip()[:MAX_NAME_LENGTH]
         with get_db_connection() as conn:
             conn.execute('''
                 INSERT INTO Graph_Addresses (address, name, is_contract)
                 VALUES (?, ?, 0)
                 ON CONFLICT(address) DO UPDATE SET name = excluded.name
-            ''', [address.lower(), name or ''])
+            ''', [address.lower(), label])
 
         return {"status": "OK"}, 200
 

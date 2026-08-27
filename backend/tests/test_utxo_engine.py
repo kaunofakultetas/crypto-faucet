@@ -18,6 +18,7 @@ import unittest
 import hashlib
 
 from embit import ec
+from embit import bech32
 from embit import script as embit_script
 from embit.transaction import Transaction
 
@@ -126,6 +127,17 @@ class UtxoEngineTests(unittest.TestCase):
         tb_address = embit_script.p2wpkh(prv.get_public_key()).address({'bech32': 'tb'})
         with self.assertRaises(ValueError):
             self.build_payout(to_address=tb_address)
+
+    def test_a_witness_version_no_chain_has_activated_is_refused(self):
+        # bech32 encodes versions up to 16, but only v0 and v1
+        # (taproot) are spendable — anything else is anyone-can-spend
+        faucet = helpers.make_utxo_faucet()
+        ctx = faucet._setup_wallet_for_network('btc4')
+        future = bech32.encode('tb', 2, b'\x00' * 32)
+
+        self.assertFalse(faucet._validate_address(ctx, future))
+        with self.assertRaises(ValueError):
+            ctx.dialect.recipient_script(future)
 
     def test_taproot_recipient_script(self):
         # A v1 (bech32m) recipient becomes OP_1 PUSH32 <program>

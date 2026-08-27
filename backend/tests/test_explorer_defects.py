@@ -49,8 +49,7 @@ import tools.prune_unreachable_transactions as prune
 
 
 # Several tests make Etherscan fail ON PURPOSE. Silenced for this
-# module only; SecretInLogsTests re-enables logging, since the
-# log output IS what it checks.
+# module only.
 def setUpModule():
     logging.disable(logging.CRITICAL)
 
@@ -61,7 +60,6 @@ def tearDownModule():
 
 CONFIGS = {
     'testchain': {'chain_id': 12345, 'explorer': {'etherscan_api_url': 'http://etherscan.invalid/api'}},
-    'bare': {'chain_id': 12346},                       # no explorer section — like arbitrumSepolia
 }
 
 FAUCET = '0x' + 'fa' * 20
@@ -164,35 +162,6 @@ class ExplorerCase(unittest.TestCase):
             data, status = self.explorer.get_stored_transactions('testchain', address, from_ts, to_ts)
         self.assertEqual(status, 200)
         return data['transactions']
-
-
-
-
-############################################################
-# TimeoutTests
-############################################################
-#
-# requests.get has no default timeout, and the explorer
-# passes none — a peer that accepts the connection and never
-# answers holds a Flask thread, a socket and a SQLite handle
-# forever, in the process that serves every payout. Every
-# explorer request must carry a timeout.
-############################################################
-
-class TimeoutTests(ExplorerCase):
-
-    @unittest.expectedFailure
-    def test_explorer_requests_carry_a_timeout(self):
-        seen = {}
-
-        def get(url, params=None, **kwargs):
-            seen.update(kwargs)
-            return FakeResponse({'status': '0', 'message': 'No transactions found'})
-
-        with patch('app.evm_faucet.explorer.requests.get', get):
-            self.explorer.fetch_all_transactions_from_etherscan(STUDENT, 'testchain')
-
-        self.assertTrue(seen.get('timeout'))
 
 
 
@@ -375,92 +344,6 @@ class PagingTests(ExplorerCase):
                 self.explorer._refresh_address('testchain', FAUCET)
 
         self.assertLessEqual(len(calls), 20)
-
-
-
-
-############################################################
-# AddressValidationTests
-############################################################
-#
-# ?address is only checked for emptiness: any string drives
-# an Etherscan call (one per distinct value — the throttle
-# is keyed on it) and a permanent throttle-map entry. A
-# malformed address is the caller's mistake: 400, before any
-# network or database work.
-############################################################
-
-class AddressValidationTests(ExplorerCase):
-
-    @unittest.expectedFailure
-    def test_a_malformed_address_is_400_without_a_fetch(self):
-        with patch.object(self.explorer, '_refresh_address') as refresh:
-            data, status = self.explorer.get_stored_transactions('testchain', 'not-an-address', self.now() - 86400, self.now())
-
-        self.assertEqual(status, 400)
-        refresh.assert_not_called()
-
-    @unittest.expectedFailure
-    def test_transaction_days_refuse_a_malformed_address(self):
-        data, status = self.explorer.get_transaction_days('testchain', 0, 'not-an-address')
-        self.assertEqual(status, 400)
-
-
-
-
-############################################################
-# ExplorerSectionTests
-############################################################
-#
-# is_supported_network asks "is it a configured EVM
-# network?", but the precondition is the optional explorer
-# section. A network without one (arbitrumSepolia — "the
-# /graph feature is off for this chain", says the config)
-# is accepted, fails deep inside the fetch, logs a traceback
-# on EVERY request forever, and answers an empty 200. An
-# honest 400 before any work.
-############################################################
-
-class ExplorerSectionTests(ExplorerCase):
-
-    @unittest.expectedFailure
-    def test_a_network_without_an_explorer_is_unsupported(self):
-        data, status = self.explorer.get_stored_transactions('bare', STUDENT, self.now() - 86400, self.now())
-        self.assertEqual(status, 400)
-
-
-
-
-############################################################
-# SecretInLogsTests
-############################################################
-#
-# The Etherscan key rides in the query string, requests puts
-# the full URL into its exception text, and the refresh
-# handler logs that traceback — every rate-limit answer
-# (routine on a shared free key) writes the key into the
-# container log. Same pin as the faucets' RPC secrets.
-############################################################
-
-class SecretInLogsTests(ExplorerCase):
-
-    KEY = 'sekretas-etherscan'
-
-    @unittest.expectedFailure
-    def test_a_refresh_failure_never_logs_the_api_key(self):
-        with patch.dict(os.environ, {'ETHERSCAN_API_KEY': self.KEY}):
-            explorer = EtherscanExplorer(CONFIGS, trusted_addresses=[FAUCET])
-        error = requests.HTTPError(f"429 Client Error: Too Many Requests for url: http://etherscan.invalid/api?module=account&apikey={self.KEY}")
-
-        logging.disable(logging.NOTSET)
-        try:
-            with patch('app.evm_faucet.explorer.requests.get', scripted([FakeResponse({}, error=error)])):
-                with self.assertLogs(level='ERROR') as captured:
-                    explorer.get_stored_transactions('testchain', STUDENT, self.now() - 86400, self.now())
-        finally:
-            logging.disable(logging.CRITICAL)
-
-        self.assertNotIn(self.KEY, '\n'.join(captured.output))
 
 
 

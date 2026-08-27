@@ -9,8 +9,7 @@
 #  The moment a fix lands, unittest reports the test as an
 #  "unexpected success" — which FAILS the run — and that is
 #  the cue: drop the decorator and move the test into its
-#  home file (test_request_flows.py, test_utxo_engine.py,
-#  test_config_models.py).
+#  home file (test_request_flows.py, test_utxo_engine.py).
 #
 #  Offline, on the engine tests' fakes (tests/helpers.py):
 #  the throwaway key, a canned Electrum client, payouts
@@ -32,18 +31,14 @@
 ############################################################
 
 
-import copy
 import logging
 import unittest
 
 from embit import ec
 from embit import bech32
-from embit import base58
-from embit import hashes
 from embit import script as embit_script
 from embit.transaction import Transaction
 
-from app.config_models import validate_configs
 from tests import helpers
 
 
@@ -226,36 +221,6 @@ class ConsolidationTests(UtxoClaimCase):
 
 
 ############################################################
-# SelfSendGuardTests
-############################################################
-#
-# "Not the faucet paying itself" compares address STRINGS,
-# and the faucet's address is the bech32 one — but on btc4
-# and ltc4 the dialect also accepts base58 recipients, so
-# the same key hash in p2pkh form passes the guard. The
-# coins land on a script the faucet never lists (a different
-# Electrum scripthash): gone from its balance and selection,
-# recoverable only with the key in an external wallet. Guard
-# the key hash, not the string.
-############################################################
-
-class SelfSendGuardTests(UtxoClaimCase):
-
-    @unittest.expectedFailure
-    def test_the_faucet_key_in_base58_form_is_refused(self):
-        pub = self.faucet.faucet_key.get_public_key()
-        twin = base58.encode_check(b'\x6f' + hashes.hash160(pub.sec()))     # testnet p2pkh of OUR hash160
-        captured = self.fake([BIG_UTXO])
-
-        data, status = self.claim(address=twin)
-
-        self.assertEqual(status, 400)
-        self.assertNotIn('raw', captured)
-
-
-
-
-############################################################
 # SpentOutpointMemoryTests
 ############################################################
 #
@@ -283,68 +248,6 @@ class SpentOutpointMemoryTests(UtxoClaimCase):
         if status == 200:
             outpoints = {(vin.txid, vin.vout) for vin in self.last_tx(captured).vin}
             self.assertNotIn(spent, outpoints)
-
-
-
-
-############################################################
-# AddressValidationTests
-############################################################
-#
-# The SegWit validator checks the PREFIX only; the checksum
-# is verified deep in the payout, after the cooldown is
-# claimed and an Electrum round-trip is spent, and the
-# ValueError it raises reaches the catch-all as a 500 with
-# the raw text — a one-character typo reads as a server
-# error. An unknown network takes the same road. Both are
-# the caller's mistake: 400, the way the EVM faucet answers.
-############################################################
-
-class AddressValidationTests(UtxoClaimCase):
-
-    @unittest.expectedFailure
-    def test_a_bech32_address_with_a_broken_checksum_is_400(self):
-        typo = self.recipient[:-1] + ('q' if self.recipient[-1] != 'q' else 'p')
-        captured = self.fake([BIG_UTXO])
-
-        data, status = self.claim(address=typo)
-
-        self.assertEqual(status, 400)
-        self.assertIn('Neteisingas adresas', data['error'])
-        self.assertNotIn('raw', captured)
-
-    @unittest.expectedFailure
-    def test_an_unknown_network_is_400(self):
-        data, status = self.claim(network='nosuchnet')
-        self.assertEqual(status, 400)
-
-
-
-
-############################################################
-# PayoutFailureLoggingTests
-############################################################
-#
-# request_crypto's catch-all answers the caller and logs
-# NOTHING — the operator has no server-side record of any
-# failed payout, which is what makes intermittent failures
-# undiagnosable. get_faucet_balance already does this right.
-############################################################
-
-class PayoutFailureLoggingTests(UtxoClaimCase):
-
-    @unittest.expectedFailure
-    def test_a_failed_payout_is_logged(self):
-        self.fake([BIG_UTXO])
-        client = self.faucet._electrum_clients['btc4']
-        client.request = lambda method, params: (_ for _ in ()).throw(RuntimeError('electrum down'))
-
-        logging.disable(logging.NOTSET)
-        try:
-            with self.assertLogs(level='ERROR'):
-                self.claim()
-        finally:
-            logging.disable(logging.CRITICAL)
 
 
 
@@ -423,96 +326,6 @@ class FailedBalanceReadRememberedTests(UtxoClaimCase):
 
 
 ############################################################
-# ConfigGuardTests
-############################################################
-#
-# The boot validator already resolves the coin's parameters
-# — dust limit included — and uses them only to check the
-# coin exists. A chunk_size below the dust limit boots
-# green, warms up green and fails every payout as a
-# non-standard output; the SVM schema refuses the analogous
-# sub-rent-exempt chunk at boot. An Electrum port outside
-# 1-65535 matches the pattern and only fails at warmup.
-############################################################
-
-class ConfigGuardTests(unittest.TestCase):
-
-    def utxo(self, mutate):
-        configs = copy.deepcopy(helpers.UTXO_TEST_CONFIGS)
-        mutate(configs)
-        return configs
-
-    @unittest.expectedFailure
-    def test_a_chunk_below_the_dust_limit_fails_the_boot(self):
-        def mutate(c):
-            c['btc4']['faucet']['chunk_size'] = 0.000001      # 100 sat, dust limit is 546
-        with self.assertRaises(ValueError):
-            validate_configs({}, {}, self.utxo(mutate), {}, {})
-
-    @unittest.expectedFailure
-    def test_an_impossible_electrum_port_fails_the_boot(self):
-        def mutate(c):
-            c['btc4']['faucet']['electrum_server'] = '127.0.0.1:99999'
-        with self.assertRaises(ValueError):
-            validate_configs({}, {}, self.utxo(mutate), {}, {})
-
-
-
-
-############################################################
-# SatoshiRoundingTests
-############################################################
-#
-# chunk_size is a float and int(float * 1e8) TRUNCATES:
-# 0.29 becomes 28 999 999 sat while the success message
-# reports 0.29. Money arithmetic on a teaching tool whose
-# exercise is comparing the message with the chain.
-############################################################
-
-class SatoshiRoundingTests(unittest.TestCase):
-
-    @unittest.expectedFailure
-    def test_chunk_size_converts_to_satoshis_by_rounding(self):
-        configs = copy.deepcopy(helpers.UTXO_TEST_CONFIGS)
-        configs['btc4']['faucet']['chunk_size'] = 0.29
-        faucet = helpers.make_utxo_faucet(configs)
-        captured = helpers.fake_electrum(faucet, 'btc4', [{'tx_hash': 'aa' * 32, 'tx_pos': 0, 'value': 100_000_000}])
-
-        data, status = faucet.request_crypto('btc4', p2wpkh_address(helpers.RECIPIENT_PRIVATE_KEY))
-
-        self.assertEqual(status, 200)
-        self.assertEqual(Transaction.from_string(captured['raw']).vout[0].value, 29_000_000)
-
-
-
-
-############################################################
-# ExplorerLinkTests
-############################################################
-#
-# The explorer section is validated at boot and filled in by
-# the operator, and get_networks never exports it — the page
-# prints a bare txid on an exercise whose whole point is
-# watching the transaction confirm. Every other family
-# exports its explorer.
-############################################################
-
-class ExplorerLinkTests(unittest.TestCase):
-
-    @unittest.expectedFailure
-    def test_get_networks_exports_the_configured_block_explorer(self):
-        configs = copy.deepcopy(helpers.UTXO_TEST_CONFIGS)
-        configs['btc4']['explorer'] = {'block_explorer': 'https://mempool.space/testnet4'}
-        faucet = helpers.make_utxo_faucet(configs)
-
-        networks = faucet.get_networks()['networks']
-
-        self.assertEqual(networks['btc4'].get('block_explorer'), 'https://mempool.space/testnet4')
-
-
-
-
-############################################################
 # DustBoundaryChangeTests
 ############################################################
 #
@@ -535,29 +348,6 @@ class DustBoundaryChangeTests(UtxoClaimCase):
         self.assertEqual(len(self.last_tx(captured).vout), 2)
 
 
-
-
-############################################################
-# WitnessVersionTests
-############################################################
-#
-# recipient_script encodes ANY witness version 0-16 the
-# bech32m decoder accepts. Versions 2-16 are unallocated on
-# every configured chain: an output paying one has no
-# spending rules yet, so it is anyone-can-spend — the
-# student is told "sent" and any miner may keep it. Refuse
-# what no chain has activated.
-############################################################
-
-class WitnessVersionTests(unittest.TestCase):
-
-    @unittest.expectedFailure
-    def test_a_witness_version_no_chain_has_activated_is_refused(self):
-        dialect = helpers.make_utxo_faucet()._setup_wallet_for_network('btc4').dialect
-        future = bech32.encode('tb', 2, b'\x00' * 32)
-
-        with self.assertRaises(ValueError):
-            dialect.recipient_script(future)
 
 
 if __name__ == '__main__':

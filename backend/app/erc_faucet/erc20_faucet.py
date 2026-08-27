@@ -413,18 +413,10 @@ class ERC20Faucet:
         config = self.TOKEN_CONFIGS[token_symbol]
         contract_address = config['deployments'][network]
 
-        # A network whose RPC was down at startup skipped the
-        # warmup's chain-id check — settle it now (one cached
-        # round-trip) rather than pay out over a misconfigured RPC.
-        try:
-            if not self.evm_faucet._verify_chain_id(network):
-                return {"error": "Tinklo konfigūracijos klaida. Praneškite dėstytojui."}, 500
-        except Exception:
-            return {"error": "Tinklas nepasiekiamas. Bandykite vėliau."}, 503
-
 
         # STEP 1: input validation — all parameters present and the
-        # address parses.
+        # address parses. Local checks come BEFORE any round-trip,
+        # exactly as in the native flow.
         # =========================================================
         if not all([to_address, signature, nonce]):
             return {"error": "Trūksta reikalingų parametrų"}, 400
@@ -433,6 +425,15 @@ class ERC20Faucet:
             to_address = w3.to_checksum_address(to_address)
         except Exception:
             return {"error": "Neteisingas adresas"}, 400
+
+        # A network whose RPC was down at startup skipped the
+        # warmup's chain-id check — settle it now (one cached
+        # round-trip) rather than pay out over a misconfigured RPC.
+        try:
+            if not self.evm_faucet._verify_chain_id(network):
+                return {"error": "Tinklo konfigūracijos klaida. Praneškite dėstytojui."}, 500
+        except Exception:
+            return {"error": "Tinklas nepasiekiamas. Bandykite vėliau."}, 503
 
 
         # STEP 2: signature check — the exact message the frontend

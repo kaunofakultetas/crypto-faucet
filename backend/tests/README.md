@@ -5,7 +5,7 @@ Four layers, from cheapest to heaviest:
 | Layer | Files | Needs network? | When to run |
 |---|---|---|---|
 | Config invariants | `test_configs.py`, `test_config_models.py` | no | always |
-| Offline regression | `test_utxo_engine.py`, `test_electrum_client.py`, `test_evm_faucet.py`, `test_erc20_faucet.py`, `test_svm_faucet.py`, `test_move_faucet.py`, `test_sui_graphql_client.py`, `test_solana_rpc_client.py`, `test_request_flows.py`, `test_explorer.py`, `test_cooldown.py` | no | always |
+| Offline regression | `test_main.py`, `test_utxo_engine.py`, `test_electrum_client.py`, `test_evm_faucet.py`, `test_erc20_faucet.py`, `test_svm_faucet.py`, `test_move_faucet.py`, `test_sui_graphql_client.py`, `test_solana_rpc_client.py`, `test_request_flows.py`, `test_explorer.py`, `test_cooldown.py` | no | always |
 | Pinned defects | `test_evm_defects.py`, `test_erc20_defects.py`, `test_utxo_defects.py`, `test_electrum_defects.py`, `test_svm_defects.py`, `test_move_defects.py`, `test_cooldown_defects.py`, `test_explorer_defects.py`, `test_core_defects.py` | no | always — every test is an expected failure |
 | Live smoke | `integration/test_live_smoke.py` | yes (running backend) | opt-in via `RUN_LIVE=1` |
 

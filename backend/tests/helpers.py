@@ -19,6 +19,7 @@
 
 
 import os
+import requests
 from unittest import mock
 
 from app.utxo_faucet.utxo_faucet import UTXOFaucet
@@ -664,3 +665,44 @@ def fake_token_contract(balances=None, **kwargs):
             yield contract
 
     return patched()
+
+
+
+
+
+
+
+
+############################################################
+# UnreachableEth / unreachable_web3
+############################################################
+#
+# w3.eth on a network whose RPC can't be reached: the
+# chain-id probe raises like a transport failure and counts
+# how many times it was asked — the pin for "local checks
+# never cost a round-trip". Installed by unreachable_web3.
+#
+# Used by:
+#   - test_request_flows.py — the local-checks-first tests
+#   - test_evm_defects.py — RpcFailuresAreRememberedTests
+############################################################
+
+class UnreachableEth(FakeEth):
+
+    probes = 0
+
+    @property
+    def chain_id(self):
+        self.probes += 1
+        raise requests.ConnectionError('rpc unreachable')
+
+    @chain_id.setter
+    def chain_id(self, value):
+        pass
+
+
+def unreachable_web3(faucet, network, balances=None):
+    w3 = faucet.w3_instances[network]
+    eth = UnreachableEth(w3.eth, {k.lower(): v for k, v in (balances or {}).items()})
+    w3.eth = eth
+    return eth

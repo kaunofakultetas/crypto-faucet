@@ -22,11 +22,18 @@
 ############################################################
 
 
+import re
+
 from app.evm_faucet.config_schema import EvmNetworkConfig
 from app.erc_faucet.config_schema import Erc20TokenConfig
 from app.utxo_faucet.config_schema import UtxoNetworkConfig
 from app.svm_faucet.config_schema import SvmNetworkConfig
 from app.move_faucet.config_schema import MoveNetworkConfig
+
+
+# A map key becomes a URL segment, a page path and an icon
+# filename — letters, digits, '-' and '_' only
+KEY_PATTERN = re.compile(r'^[A-Za-z0-9_-]+$')
 
 
 
@@ -54,6 +61,15 @@ from app.move_faucet.config_schema import MoveNetworkConfig
 
 def validate_configs(evm_configs, erc20_configs, utxo_configs, svm_configs, move_configs):
     evm, erc20, utxo, svm, move = {}, {}, {}, {}, {}
+
+    # The keys first — the values' models never see them
+    for family, configs in (('EVM', evm_configs), ('ERC-20', erc20_configs), ('UTXO', utxo_configs),
+                            ('SVM', svm_configs), ('MOVE', move_configs)):
+        for key in (configs or {}):
+            if not isinstance(key, str) or not KEY_PATTERN.match(key):
+                raise ValueError(
+                    f"{family} config key '{key}' is not URL-safe — use letters, digits, '-' and '_' only"
+                )
 
     for key, config in (evm_configs or {}).items():
         try:

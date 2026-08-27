@@ -3,12 +3,16 @@
 #
 #  Offline checks of everything EVMFaucet decides without an
 #  RPC: key normalization, the <NAME> template substitution
-#  in rpc_url, the composed public payload (which must never
-#  leak backend-only config), and the per-network send locks.
+#  in rpc_url (an unset placeholder fails the boot, and the
+#  resolved value never reaches the log), the composed public
+#  payload (which must never leak backend-only config), and
+#  the per-network send locks.
 ############################################################
 
 
+import copy
 import json
+import logging
 import unittest
 
 from eth_account import Account
@@ -49,6 +53,34 @@ class EvmFaucetTests(unittest.TestCase):
         endpoint = faucet.w3_instances['testchain'].provider.endpoint_uri
         self.assertIn('sekretas-iš-env', endpoint)
         self.assertNotIn('<', endpoint)
+
+    def test_an_unset_placeholder_fails_the_boot(self):
+        # A variable the operator forgot (or compose does not forward)
+        # must not resolve to '' and 500 every claim — the boot dies
+        # naming the placeholder
+        configs = copy.deepcopy(helpers.EVM_TEST_CONFIGS)
+        configs['testchain']['faucet']['rpc_url'] = 'https://<NOT_SET_ANYWHERE>/rpc'
+
+        with self.assertRaises(ValueError) as caught:
+            helpers.make_evm_faucet(configs)
+        self.assertIn('NOT_SET_ANYWHERE', str(caught.exception))
+
+    def test_transport_error_traceback_is_scrubbed(self):
+        # requests puts the FULL resolved URL into its exception text
+        # and the faucet logs that traceback — the resolved secret
+        # must never reach the log
+        secret = 'sekretas-iš-env'                 # what make_evm_faucet puts in TEST_RPC_SECRET
+        faucet = helpers.make_evm_faucet()
+        helpers.fake_web3(
+            faucet, 'testchain',
+            balance_error=f"HTTPConnectionPool(host='127.0.0.1', port=9): Max retries exceeded with url: /{secret}",
+        )
+
+        with self.assertLogs(level='ERROR') as captured:
+            faucet.get_faucet_balance('testchain')
+
+        self.assertNotIn(secret, '\n'.join(captured.output))
+        self.assertIn('<redacted>', '\n'.join(captured.output))
 
     def test_get_networks_never_leaks_backend_config(self):
         # The public payload: identity + metamask section ONLY

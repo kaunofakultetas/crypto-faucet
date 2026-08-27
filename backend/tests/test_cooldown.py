@@ -5,7 +5,8 @@
 #  three faucets rely on: the first claim wins, a second one
 #  inside the window is refused with the remaining seconds, a
 #  release (the failure path) reopens the slot immediately,
-#  expiry reopens it by itself, and keys don't interfere.
+#  expiry reopens it by itself, keys don't interfere, and a
+#  host clock that steps BACKWARDS can never inflate the wait.
 #  Time is mocked — no sleeping in tests.
 ############################################################
 
@@ -63,6 +64,16 @@ class CooldownTableTests(unittest.TestCase):
     def test_release_of_unclaimed_key_is_harmless(self):
         table = CooldownTable(seconds=60)
         table.release(('net', 'never-claimed'))
+
+    def test_a_backwards_clock_step_never_inflates_the_wait(self):
+        # NTP or a VM resume steps the host clock back five minutes:
+        # a claim recorded "in the future" counts as expired, it
+        # must never become a five-minute wait
+        table = CooldownTable(seconds=60)
+        with patch('app.cooldown.time.time', return_value=1000):
+            table.claim(('net', 'addr'))
+        with patch('app.cooldown.time.time', return_value=700):
+            self.assertEqual(table.claim(('net', 'addr')), 0)
 
 
 if __name__ == '__main__':

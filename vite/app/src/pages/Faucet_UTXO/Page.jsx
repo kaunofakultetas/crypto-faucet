@@ -43,7 +43,7 @@ const BALANCE_REFRESH_MS = 5000;
 // usable with generic BTC labels during the fetch window;
 // once the catalog has answered WITHOUT this network, the
 // page shows the unknown-network card instead
-const DEFAULT_NET_META = { short_name: 'BTC', full_name: 'Bitcoin', icon: null };
+const DEFAULT_NET_META = { short_name: 'BTC', full_name: 'Bitcoin', icon: null, block_explorer: null };
 
 
 
@@ -94,7 +94,12 @@ function useFaucetInfo(network) {
   const networks = networksData?.networks ?? null;
   const info = networks?.[network];
   const netMeta = info
-    ? { short_name: info.short_name || 'BTC', full_name: info.full_name || 'Bitcoin', icon: info.icon ?? null }
+    ? {
+      short_name: info.short_name || 'BTC',
+      full_name: info.full_name || 'Bitcoin',
+      icon: info.icon ?? null,
+      block_explorer: info.block_explorer ?? null,   // the operator's explorer, or null
+    }
     : DEFAULT_NET_META;
   const catalogFailed = catalogError && !networks;
   const unknownNetwork = Boolean(networks) && !info;
@@ -340,9 +345,24 @@ export default function FaucetUTXO() {
             <BalanceRows faucetInfo={faucetInfo} currencyShort={currencyShort} />
           ) : null}
 
+          {/* The txid links to the network's block explorer when the
+              config names one (mempool-style <base>/tx/<txid>) — the
+              exercise is watching the transaction confirm */}
           {success && (
             <Alert severity="success">
-              Išsiųsta {success.amount} {success.short}. Transakcija: {success.txid}
+              Išsiųsta {success.amount} {success.short}. Transakcija:{' '}
+              {netMeta.block_explorer ? (
+                <a
+                  href={`${netMeta.block_explorer.replace(/\/$/, '')}/tx/${success.txid}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="break-all underline"
+                >
+                  {success.txid}
+                </a>
+              ) : (
+                <span className="break-all">{success.txid}</span>
+              )}
             </Alert>
           )}
           {error && (

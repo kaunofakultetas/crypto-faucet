@@ -155,6 +155,38 @@ class ConfigModelTests(unittest.TestCase):
         evm, _, _, _, _ = validate_configs(self.evm(mutate), {}, {}, {}, {})
         self.assertNotIn('explorer', evm['testchain'])
 
+    def test_a_key_that_is_not_url_safe_fails_the_boot(self):
+        # A map key becomes a URL segment, a page path and an icon
+        # filename — a slash or a space boots green and 404s later
+        for bad in ('my/chain', 'my chain', 'chain.v2', ''):
+            with self.subTest(key=bad):
+                with self.assertRaises(ValueError):
+                    validate_configs({bad: self.evm()['testchain']}, {}, {}, {}, {})
+
+    def test_url_safe_keys_pass(self):
+        for good in ('sepolia', 'zkSync-Sepolia', 'btc_4', 'LINK'):
+            with self.subTest(key=good):
+                validate_configs({good: self.evm()['testchain']}, {}, {}, {}, {})
+
+    def test_a_move_chunk_below_one_base_unit_fails_the_boot(self):
+        # 5e-10 SUI is less than one MIST — the payout would be zero
+        with self.assertRaises(ValueError):
+            validate_configs({}, {}, {}, {}, self.move(lambda c: c['testmove']['faucet'].__setitem__('chunk_size', 5e-10)))
+
+    def test_a_utxo_chunk_below_the_dust_limit_fails_the_boot(self):
+        configs = copy.deepcopy(helpers.UTXO_TEST_CONFIGS)
+        configs['btc4']['faucet']['chunk_size'] = 0.000001      # 100 sat, dust limit is 546
+        with self.assertRaises(ValueError) as caught:
+            validate_configs({}, {}, configs, {}, {})
+        self.assertIn('dust', str(caught.exception))
+
+    def test_an_impossible_electrum_port_fails_the_boot(self):
+        configs = copy.deepcopy(helpers.UTXO_TEST_CONFIGS)
+        configs['btc4']['faucet']['electrum_server'] = '127.0.0.1:99999'
+        with self.assertRaises(ValueError):
+            validate_configs({}, {}, configs, {}, {})
+
+
 
 if __name__ == '__main__':
     unittest.main()

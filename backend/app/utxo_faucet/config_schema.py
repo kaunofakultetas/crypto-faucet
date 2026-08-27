@@ -72,7 +72,20 @@ class UtxoFaucetSection(StrictModel):
     @model_validator(mode='after')
     def coin_and_flavour_exist(self):
         from app.utxo_faucet.coins import coin_params
-        coin_params(self.coin, self.network)  # raises ValueError naming the options
+        params = coin_params(self.coin, self.network)  # raises ValueError naming the options
+
+        # A chunk below the coin's dust limit could never be relayed
+        chunk_sat = int(round(self.chunk_size * 1e8))
+        if chunk_sat < params['dust_limit']:
+            raise ValueError(
+                f"chunk_size {self.chunk_size} is {chunk_sat} sat — below the "
+                f"{params['dust_limit']} sat dust limit of '{self.coin}'"
+            )
+
+        # The pattern above only checks the port is digits
+        port = int(self.electrum_server.rsplit(':', 1)[1])
+        if not 1 <= port <= 65535:
+            raise ValueError(f"electrum_server port {port} is not a valid TCP port (1-65535)")
         return self
 
 

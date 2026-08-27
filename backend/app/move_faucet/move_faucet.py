@@ -58,6 +58,20 @@ from .chains import chain_params
 from .graphql_client import SuiGraphqlClient
 from ..cooldown import CooldownTable
 from ..icons import icon_url
+from ..env_secrets import resolve_placeholders, install_log_redaction
+
+
+# Sui signature flag byte → the signing scheme. Only flag 0
+# (plain Ed25519) can be verified here; the others are named
+# in the refusal so the student changes ACCOUNT, not signature.
+SIGNATURE_SCHEMES = {
+    0: 'Ed25519',
+    1: 'Secp256k1',
+    2: 'Secp256r1',
+    3: 'MultiSig',
+    5: 'zkLogin',
+    6: 'Passkey',
+}
 
 
 # How long a polled faucet balance is served from cache. The page
@@ -103,6 +117,32 @@ def _uleb128(value: int) -> bytes:
         out.append(byte | (0x80 if value else 0))
         if not value:
             return bytes(out)
+
+
+
+
+
+
+
+
+############################################################
+# _signature_scheme
+############################################################
+#
+# The flag byte of a base64 Sui signature (flag || sig ||
+# pubkey), or None when the string is not even base64 — that
+# case is left to verify_signature's own refusal.
+#
+# Used by:
+#   - MoveFaucet.request_move — the account-type refusal
+############################################################
+
+def _signature_scheme(signature):
+    try:
+        raw = base64.b64decode(signature or '')
+    except Exception:
+        return None
+    return raw[0] if raw else None
 
 
 
@@ -184,15 +224,18 @@ class MoveFaucet:
 
         # network_key -> its GraphQL client. <NAME> placeholders in
         # the rpc_url are environment variable references, resolved
-        # here and only here.
+        # here and only here — an unset one fails the boot, and the
+        # resolved value is scrubbed from every log line
+        # (env_secrets.py).
+        install_log_redaction()
         self._clients = {}
         for network_key, config in self.NETWORK_CONFIGS.items():
             faucet_config = config.get('faucet', {})
             self._chain_params[network_key] = chain_params(
                 faucet_config.get('chain', ''), faucet_config.get('network', ''))
 
-            rpc_url = re.sub(r'<(\w+)>', lambda m: os.getenv(m.group(1), ''),
-                             faucet_config.get('rpc_url', ''))
+            rpc_url = resolve_placeholders(
+                faucet_config.get('rpc_url', ''), f"MOVE network '{network_key}' rpc_url")
             self._clients[network_key] = SuiGraphqlClient(
                 rpc_url, debug=self.APP_DEBUG, label=network_key)
 
@@ -331,7 +374,8 @@ class MoveFaucet:
     def _chunk_mist(self, network: str) -> int:
         chunk = float(self.NETWORK_CONFIGS[network]['faucet']['chunk_size'])
         decimals = self._chain_params[network]['decimals']
-        return int(chunk * (10 ** decimals))
+        # round, not int: 1.001 * 1e9 is 1000999999.9999999 in binary
+        return int(round(chunk * (10 ** decimals)))
 
 
 
@@ -580,6 +624,15 @@ class MoveFaucet:
         # frontend asks the wallet to sign — any mismatch (different
         # nonce, different wording) fails verification.
         # ======================================================
+        # A wallet account that signs with anything but plain
+        # Ed25519 (a Google-login zkLogin account, a hardware or
+        # multisig one) is told WHICH account type it is — retrying
+        # the same signature would never help
+        scheme = _signature_scheme(signature)
+        if scheme not in (None, 0):
+            name = SIGNATURE_SCHEMES.get(scheme, f'schema {scheme}')
+            return {"error": f"Ši piniginės paskyra pasirašo {name} raktu, o čiaupas priima tik įprastas Ed25519 paskyras. Pasirinkite piniginėje kitą paskyrą."}, 400
+
         # The exact bytes the wallet signed — the wording (its missing
         # commas included) is the contract with the frontend hook that
         # builds the same string; never reword it on one side alone.

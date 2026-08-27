@@ -93,7 +93,10 @@ class CooldownTable:
     # Atomically claim the key's slot. Returns 0 when the claim
     # succeeded (the caller may proceed with the payout) or the
     # number of seconds still remaining when the key is cooling
-    # down. No RPC or I/O ever happens under the lock.
+    # down. No RPC or I/O ever happens under the lock. A claim
+    # recorded in the FUTURE (the host clock stepped back — NTP,
+    # a VM resume) counts as expired: it must never inflate the
+    # wait beyond the window.
     #
     # Used by:
     #   - the faucets' payout paths, right before the slow work
@@ -103,7 +106,7 @@ class CooldownTable:
         now = int(time.time())
         with self._lock:
             last = self._last_claim.get(key)
-            if last is not None and now - last < self.seconds:
+            if last is not None and 0 <= now - last < self.seconds:
                 return self.seconds - (now - last)
             self._last_claim[key] = now
             return 0

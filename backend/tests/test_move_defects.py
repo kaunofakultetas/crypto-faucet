@@ -8,8 +8,7 @@
 #  The moment a fix lands, unittest reports the test as an
 #  "unexpected success" — which FAILS the run — and that is
 #  the cue: drop the decorator and move the test into its
-#  home file (test_move_faucet.py, test_config_models.py,
-#  test_sui_graphql_client.py).
+#  home file (test_sui_graphql_client.py).
 #
 #  Offline, on the flow tests' fakes (tests/helpers.py): a
 #  real Ed25519 personal-message signature from a throwaway
@@ -30,14 +29,11 @@
 ############################################################
 
 
-import copy
-import base64
 import logging
 import unittest
 
 import requests
 
-from app.config_models import validate_configs
 from app.move_faucet.graphql_client import SuiGraphqlClient
 from tests import helpers
 
@@ -49,62 +45,6 @@ def setUpModule():
 
 def tearDownModule():
     logging.disable(logging.NOTSET)
-
-
-
-
-############################################################
-# MoveClaimCase
-############################################################
-#
-# The claim fixture of test_move_faucet.py, repeated here so
-# this file stays standalone.
-#
-# Used by:
-#   - WalletSchemeTests
-############################################################
-
-class MoveClaimCase(unittest.TestCase):
-
-    def setUp(self):
-        self.faucet = helpers.make_move_faucet()
-        self.address, self.signature, self.nonce = helpers.sign_move_claim()
-
-    def fake(self, **kwargs):
-        balances = {self.address: 0, self.faucet.FAUCET_ADDRESS: 10_000_000_000}
-        return helpers.fake_sui_graphql(self.faucet, 'testmove', balances=balances, **kwargs)
-
-
-
-
-############################################################
-# WalletSchemeTests
-############################################################
-#
-# verify_signature accepts flag-0 Ed25519 signatures only.
-# A Slush account created with Google sign-in is zkLogin
-# (flag 5), a hardware or multisig account is flag 1-3 or 6
-# — all of them sign happily in the wallet and are then told
-# "the signature somehow doesn't match", which points the
-# student at the signature, not at the account type, and no
-# retry will ever succeed. At minimum the refusal must NAME
-# the unsupported wallet type as a 400; better, delegate
-# non-Ed25519 flags to the node's own verifySignature (then
-# the fake client needs that method and this pin becomes
-# "accepted").
-############################################################
-
-class WalletSchemeTests(MoveClaimCase):
-
-    @unittest.expectedFailure
-    def test_a_non_ed25519_signature_is_named_not_called_a_mismatch(self):
-        self.fake()
-        zklogin = base64.b64encode(bytes([5]) + b'\x00' * 200).decode()      # flag 5: zkLogin
-
-        data, status = self.faucet.request_move('testmove', self.address, zklogin, self.nonce)
-
-        self.assertEqual(status, 400)
-        self.assertNotIn('neatitinka', data['error'])
 
 
 
@@ -141,62 +81,6 @@ class ConnectTimeoutTests(unittest.TestCase):
         self.assertEqual(len(attempts), 1)
 
 
-
-
-############################################################
-# ChunkConversionTests
-############################################################
-#
-# chunk_size is a float and int(float * 10**9) TRUNCATES:
-# 1.001 becomes 1 000 999 999 MIST while the page advertises
-# 1.001. And nothing bounds the result — a chunk below one
-# MIST floors to 0, and "wallet holds >= 0" is always true,
-# so every student is told their wallet already has enough.
-# Convert exactly; refuse an unpayable chunk at boot, as the
-# SVM schema does.
-############################################################
-
-class ChunkConversionTests(unittest.TestCase):
-
-    def move(self, chunk_size):
-        configs = copy.deepcopy(helpers.MOVE_TEST_CONFIGS)
-        configs['testmove']['faucet']['chunk_size'] = chunk_size
-        return configs
-
-    @unittest.expectedFailure
-    def test_chunk_size_converts_to_mist_exactly(self):
-        faucet = helpers.make_move_faucet(self.move(1.001))
-        self.assertEqual(faucet._chunk_mist('testmove'), 1_001_000_000)
-
-    @unittest.expectedFailure
-    def test_a_chunk_below_one_mist_fails_the_boot(self):
-        with self.assertRaises(ValueError):
-            validate_configs({}, {}, {}, {}, self.move(5e-10))
-
-
-
-
-############################################################
-# PlaceholderTests
-############################################################
-#
-# <NAME> placeholders in rpc_url resolve from the environment
-# with '' as the default, so a variable the operator forgot
-# (or docker-compose does not forward) yields 'https:///…',
-# which boots green, warms up with one buried traceback,
-# lists the network and 500s every claim. An unresolvable
-# placeholder is an operator error: fail the boot, loudly.
-############################################################
-
-class PlaceholderTests(unittest.TestCase):
-
-    @unittest.expectedFailure
-    def test_an_unset_placeholder_fails_the_boot(self):
-        configs = copy.deepcopy(helpers.MOVE_TEST_CONFIGS)
-        configs['testmove']['faucet']['rpc_url'] = 'https://<NOT_SET_ANYWHERE>/graphql'
-
-        with self.assertRaises(ValueError):
-            helpers.make_move_faucet(configs)
 
 
 if __name__ == '__main__':

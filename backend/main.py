@@ -128,8 +128,11 @@ EVM_NETWORK_CONFIGS, ERC20_TOKEN_CONFIGS, UTXO_NETWORK_CONFIGS, SVM_NETWORK_CONF
 #
 # The pre-mined demo chain for the blockchain simulator: the
 # stored blocks packed into one JSON array straight out of
-# SQLite. Lives here rather than in a blueprint because it is
-# the app's single standalone route.
+# SQLite, in height order (physical order is insert order only
+# until a block is deleted and re-seeded) and carrying each
+# block's height so the page can sort defensively. Lives here
+# rather than in a blueprint because it is the app's single
+# standalone route.
 #
 # Used by:
 #   - pages/BlockchainSimulator/Page.jsx — loads the demo
@@ -143,13 +146,17 @@ def get_example_blockchain():
             SELECT
                 json_group_array(
                     json_object(
-                        'data', Transactions, 
-                        'previousHash', PrevBlock, 
-                        'nonce', Nonce, 
+                        'height', Height,
+                        'data', Transactions,
+                        'previousHash', PrevBlock,
+                        'nonce', Nonce,
                         'hash', BlockHash
                     )
                 ) AS json_block
-            FROM BlockchainSimulator_Blocks
+            FROM (
+                SELECT * FROM BlockchainSimulator_Blocks
+                ORDER BY CAST(Height AS INTEGER)
+            )
         ''')
         returnJson = sqlFetchData.fetchone()[0]
     return Response(returnJson, mimetype='application/json')
