@@ -202,7 +202,7 @@ EVM_NETWORK_CONFIGS = {
                 'decimals': 18
             },
             'rpc_urls': ['https://sepolia.era.zksync.dev'],
-            'block_explorer_urls': ['https://block-explorer-api.sepolia.zksync.dev'],
+            'block_explorer_urls': ['https://sepolia.explorer.zksync.io'],
         },
         'explorer': {
             'etherscan_api_url': 'https://block-explorer-api.sepolia.zksync.dev/api',
@@ -225,7 +225,7 @@ EVM_NETWORK_CONFIGS = {
                 'decimals': 18
             },
             'rpc_urls': ['https://linea-sepolia-rpc.publicnode.com'],
-            'block_explorer_urls': ['https://explorer.linea.build'],
+            'block_explorer_urls': ['https://sepolia.lineascan.build'],
         },
         'explorer': {
             'etherscan_api_url': 'https://api-explorer.sepolia.linea.build/api',
@@ -271,9 +271,13 @@ EVM_NETWORK_CONFIGS = {
                 'decimals': 18
             },
             'rpc_urls': ['https://sepolia.arbitrum.io/rpc'],
+            'block_explorer_urls': ['https://sepolia.arbiscan.io'],
         },
-        # no 'explorer' — Arbitrum Sepolia has no API configured,
-        # so the /graph feature is off for this chain
+        # no 'explorer' — no Etherscan-style API is configured, so
+        # get_networks reports has_explorer=false: the faucet page
+        # hides the graph button and /graph shows a notice. (The
+        # backend still accepts a direct graph request for such a
+        # network and logs a traceback — pinned in the tests.)
     },
     "polygonAmoy": {
         'id': 8,

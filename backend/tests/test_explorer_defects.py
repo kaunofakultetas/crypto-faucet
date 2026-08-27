@@ -22,7 +22,7 @@
 #  uncapped flows result (projections — the cache holds a
 #  thousand rows, revisit when it holds a hundred thousand);
 #  wei stored through a float (the graph is a teaching aid,
-#  not a ledger — accepted, see get_transaction_days);
+#  not a ledger — accepted);
 #  set_address_name validation (already pinned in
 #  test_evm_defects.py).
 ############################################################
@@ -32,6 +32,7 @@ import io
 import os
 import sys
 import time
+from datetime import datetime, timezone
 import logging
 import tempfile
 import threading
@@ -460,6 +461,78 @@ class SecretInLogsTests(ExplorerCase):
             logging.disable(logging.CRITICAL)
 
         self.assertNotIn(self.KEY, '\n'.join(captured.output))
+
+
+
+
+############################################################
+# DayBucketTests
+############################################################
+#
+# get_transaction_days files every row under a day using ONE
+# offset — the browser's offset at the moment of the request
+# — while the page's rangeOfDay() turns the picked day back
+# into a window with that date's TRUE offset. For every day
+# in the other DST regime the two disagree by an hour: a
+# winter evening viewed in summer is listed under the next
+# day, whose window then excludes it (an empty graph on a day
+# the slider offered), and its real day may never be listed.
+# Wanted: the endpoint takes the browser's IANA zone name
+# (Intl.DateTimeFormat().resolvedOptions().timeZone) and
+# buckets each row in that zone, so the list matches
+# rangeOfDay whatever the season.
+############################################################
+
+class DayBucketTests(ExplorerCase):
+
+    def one_transaction_at(self, *utc_time):
+        moment = int(datetime(*utc_time, tzinfo=timezone.utc).timestamp())
+        self.explorer.store_transactions([make_tx(FAUCET, STUDENT, 100, timestamp=str(moment))], 'testchain')
+
+    @unittest.expectedFailure
+    def test_a_winter_evening_is_filed_under_its_own_local_day(self):
+        self.one_transaction_at(2026, 1, 15, 21, 30)          # 23:30 EET on the 15th
+
+        days, status = self.explorer.get_transaction_days('testchain', 'Europe/Vilnius', FAUCET)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(days['days'], [{'day': '2026-01-15', 'count': 1}])
+
+    @unittest.expectedFailure
+    def test_a_summer_night_is_filed_under_the_day_it_became(self):
+        self.one_transaction_at(2026, 7, 15, 21, 30)          # 00:30 EEST on the 16th
+
+        days, status = self.explorer.get_transaction_days('testchain', 'Europe/Vilnius', FAUCET)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(days['days'], [{'day': '2026-07-16', 'count': 1}])
+
+
+
+
+############################################################
+# NodeFreshnessTests
+############################################################
+#
+# The flows query windows the EDGES to [from, to) but takes
+# each node's "last seen" timestamp from a CTE over the whole
+# network history — so a graph of a past day labels the
+# faucet "Atnaujinta: prieš 4 min." because it paid someone
+# today. The node ages must describe the day on screen.
+############################################################
+
+class NodeFreshnessTests(ExplorerCase):
+
+    @unittest.expectedFailure
+    def test_node_timestamps_are_scoped_to_the_viewed_window(self):
+        self.explorer.store_transactions([make_tx(FAUCET, STUDENT, 100, timestamp=str(DAY))], 'testchain')
+        self.explorer.store_transactions([make_tx(FAUCET, STUDENT, 200, timestamp=str(DAY + 30 * 86400))], 'testchain')
+
+        flows = self.flows(FAUCET, DAY - 10, DAY + 86400)
+
+        self.assertEqual(len(flows), 1)
+        self.assertEqual(flows[0]['from_timestamp'], DAY)
+        self.assertEqual(flows[0]['to_timestamp'], DAY)
 
 
 

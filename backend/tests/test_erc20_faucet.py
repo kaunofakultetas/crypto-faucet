@@ -8,6 +8,7 @@
 ############################################################
 
 
+import json
 import unittest
 
 from tests import helpers
@@ -53,6 +54,15 @@ class Erc20FaucetTests(unittest.TestCase):
         data, status = faucet.get_token('NOPE')
         self.assertEqual(status, 400)
         self.assertIn('error', data)
+
+    def test_token_payload_never_leaks_the_backend_rpc(self):
+        # The per-deployment network metadata is composed from the
+        # same configs as the EVM payload — the resolved RPC secret
+        # must not ride along
+        faucet = helpers.make_erc20_faucet()
+        payload = json.dumps(faucet.get_token('TST')[0])
+        self.assertNotIn('sekretas-iš-env', payload)
+        self.assertNotIn('rpc_url"', payload)
 
     def test_shares_the_evm_send_locks(self):
         # Same wallet, same chain -> the SAME lock object as the native faucet

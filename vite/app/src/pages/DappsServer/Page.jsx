@@ -36,7 +36,7 @@ import SettingsApplicationsIcon from '@mui/icons-material/SettingsApplications';
 // -----------------------------------------------------------
 //
 // Used by:
-//   - main.jsx — route /dapps-server (imported as
+//   - App.jsx — route /dapps-server (imported as
 //     DappsServerPage)
 // -----------------------------------------------------------
 

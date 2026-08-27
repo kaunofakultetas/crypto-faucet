@@ -131,9 +131,9 @@ class EVMFaucet:
 
         self.NETWORK_CONFIGS = network_configs
 
-        # Same private key as the UTXO faucet, so one funded identity
-        # covers every chain the site offers. Normalized the same way
-        # in ALL THREE faucets, both directions: zfill pads a short
+        # Same private key as every other family, so one funded
+        # identity covers every chain the site offers. Normalized the
+        # same way in EVERY family, both directions: zfill pads a short
         # key on the LEFT (stripped leading zeros), [:64] truncates
         # an over-long one. The stack prefers RUNNING off an
         # imperfect key over refusing to serve — identical

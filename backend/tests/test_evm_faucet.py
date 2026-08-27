@@ -56,6 +56,7 @@ class EvmFaucetTests(unittest.TestCase):
         payload = json.dumps(faucet.get_networks())
         self.assertNotIn('rpc_url"', payload)          # backend RPC (template)
         self.assertNotIn('TEST_RPC_SECRET', payload)
+        self.assertNotIn('sekretas-iš-env', payload)   # the RESOLVED secret, not just its name
         self.assertNotIn('etherscan', payload)
         self.assertNotIn('chunk_size', payload)
 

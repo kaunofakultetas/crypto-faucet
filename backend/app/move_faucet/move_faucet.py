@@ -258,6 +258,14 @@ class MoveFaucet:
     # primes the balance cache). A failed network deliberately
     # does NOT raise — the rest of the backend keeps serving.
     #
+    # The chain identifier is PRINTED, not compared to the
+    # config's 'network' label — accepted: Sui's identifier
+    # form differs between RPC generations (a short hex on
+    # JSON-RPC, a checkpoint digest on GraphQL), so there is
+    # no stable per-network constant to pin it to. The boot
+    # line is the operator's check; the page separately warns
+    # when the wallet's chain is not sui:<network>.
+    #
     # Used by:
     #   - __init__ (above)
     ############################################################

@@ -279,10 +279,18 @@ export default function GraphPage() {
   const currencySymbol = networkInfo?.native_currency?.symbol ?? 'ETH';
 
   // The root address's used days (+ per-day counts), bucketed
-  // with the browser's UTC offset so backend days == local days
+  // with the browser's CURRENT UTC offset. Known gap: the
+  // backend applies this one offset to every row, while
+  // rangeOfDay below uses each date's true offset — a day in
+  // the other DST regime is bucketed an hour off, so a day the
+  // slider offers can come back with an empty graph (pinned in
+  // the backend suite; the fix is bucketing by zone name, at
+  // which point this sends Intl's timeZone instead). The offset
+  // is part of the query key so a list built under one offset
+  // is never served to a render under another.
   const tzOffset = -new Date().getTimezoneOffset() * 60;
   const { data: daysData } = useQuery({
-    queryKey: ['evm-tx-days', network, address],
+    queryKey: ['evm-tx-days', network, address, tzOffset],
     enabled: Boolean(address),
     queryFn: async () =>
       (await axios.get(

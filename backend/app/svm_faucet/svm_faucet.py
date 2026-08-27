@@ -186,7 +186,7 @@ class SVMFaucet:
     # in BOTH directions: zfill pads a short key on the LEFT
     # (stripped leading zeros), [:64] truncates an over-long
     # one. The stack prefers RUNNING off an imperfect key over
-    # refusing to serve — and all three faucets truncate
+    # refusing to serve — and every family truncates
     # identically, so even a malformed key still derives ONE
     # consistent identity everywhere. Anything that still
     # fails (non-hex junk) is logged and degrades to None:

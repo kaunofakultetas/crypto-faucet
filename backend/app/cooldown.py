@@ -21,15 +21,19 @@
 #
 #  Deliberately in-memory: the table resets on restart and a
 #  freshly generated wallet walks around it — both accepted
-#  for a lab faucet paying out testnet coins. (This also makes
-#  the whole backend single-process by design: run gunicorn
-#  with one worker.)
+#  for a lab faucet paying out testnet coins. The table is
+#  therefore PROCESS-LOCAL: correct only because the container
+#  runs one process — Flask's threaded dev server today (the
+#  move to a real WSGI target is pinned in test_core_defects.py
+#  and must keep ONE worker). A multi-worker server would need
+#  this table in SQLite first.
 #
 #  Used by:
 #    - evm_faucet/evm_faucet.py — per (network, address)
 #    - erc_faucet/erc20_faucet.py — per (network, token, address)
 #    - utxo_faucet/utxo_faucet.py — per (network, address)
 #    - svm_faucet/svm_faucet.py — per (network, address)
+#    - move_faucet/move_faucet.py — per (network, address)
 ############################################################
 
 
@@ -51,7 +55,7 @@ import threading
 # key shape — the keys are opaque tuples to this class.
 #
 # Used by:
-#   - the four faucet __init__s — one instance each
+#   - every faucet's __init__ — one instance each
 ############################################################
 
 class CooldownTable:
@@ -69,7 +73,7 @@ class CooldownTable:
     # claim map so check-and-claim stays one atomic step.
     #
     # Used by:
-    #   - the four faucet __init__s
+    #   - every faucet's __init__
     ############################################################
 
     def __init__(self, seconds):

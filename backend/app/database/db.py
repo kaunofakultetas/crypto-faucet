@@ -6,10 +6,13 @@
 #  the ./_DATA/backend mount in docker-compose).
 #
 #  Used by:
-#    - main.py, the evm/erc20 explorer, the blockchain
-#      simulator route, db_init.py
-#      and tools/ — every SQL statement in the app goes
-#      through this helper
+#    - main.py — the blockchain simulator route
+#    - app/evm_faucet/explorer.py — the transaction graph cache
+#    - app/database/db_init.py — the schema
+#    — every SQL statement in the APP goes through this helper.
+#    tools/prune_unreachable_transactions.py does not: it opens
+#    SQLite itself with its own default path (pinned in
+#    test_explorer_defects.py — the two defaults disagree).
 ############################################################
 
 

@@ -40,20 +40,21 @@ Visit `/graph/{network}` in your browser, where `{network}` is the blockchain ne
 - **Scroll with mouse wheel** to zoom in and out
 
 ### Understanding the Graph
-- **Green nodes**: The faucet address (starting point)
-- **Blue nodes**: Regular user addresses
-- **Yellow nodes**: Smart contracts
-- **Arrows**: Show the direction tokens flowed
-- **Thicker arrows**: Larger amounts or more transactions
+- **Large faucet icon**: the faucet address — the starting point
+- **Wallet icon**: a regular user address
+- **Contract icon**: a smart contract (never expanded — its global history is not the class')
+- **Arrows**: the direction the coins flowed; the label on each arrow carries the summed amount and the number of transactions
+- **"Atnaujinta"** under a node: when that address was last seen in a transaction
 
 <br/>
 
 ## Features
 
-- ✅ **Real-time updates** - Graph refreshes automatically every 15 seconds
-- ✅ **Persistent layout** - Your node arrangements are saved per network
+- ✅ **Real-time updates** - While viewing today, the graph refreshes automatically every 15 seconds; a past day is frozen history
+- ✅ **Day slider** - Only the days the faucet itself transacted on are offered, in your local time
+- ✅ **Persistent layout** - Your node arrangements are saved per network *and per day* — each day is its own graph
 - ✅ **Custom naming** - Give meaningful names to addresses you recognize
-- ✅ **Multi-network support** - Works with all supported blockchain networks
+- ✅ **EVM networks** - Works with every EVM network that has an `explorer` section in `_CONFIG/coins.py`
 
 <br/>
 
@@ -68,10 +69,10 @@ Visit `/graph/{network}` in your browser, where `{network}` is the blockchain ne
 
 ## Technical Documentation
 
-For developers and advanced users, detailed technical documentation is available in the [Graph module README](../../vite/app/src/pages/Graph/README.md).
+For developers: the code documents itself in its file headers — start at `vite/app/src/pages/Graph/Page.jsx` (the page and the day slider) and `vite/app/src/pages/Graph/hooks/useTransactionGraph.js` (fetching, sweeping and drawing); the backend side is `backend/app/evm_faucet/explorer.py` (the Etherscan cache in SQLite).
 
 <br/>
 
 ## Supported Networks
 
-The visualizer works with any EVM-compatible blockchain network configured in the system.
+The visualizer works with any EVM network in `_CONFIG/coins.py` that carries an `explorer.etherscan_api_url` (the Etherscan-style API it scrapes). A network without one — Arbitrum Sepolia today — has no graph: its faucet page shows no graph button. The UTXO, SVM and Sui faucets have no graph.

@@ -26,6 +26,7 @@ import unittest
 
 from embit import ec as embit_ec
 from embit import script as embit_script
+from embit.transaction import Transaction
 
 from tests import helpers
 
@@ -78,6 +79,16 @@ class UtxoRequestFlowTests(unittest.TestCase):
         self.assertEqual(data['network'], 'btc4')
         self.assertTrue(self.captured['raw'])
         self.assertTrue(self.claimed())
+
+    def test_happy_path_pays_exactly_one_chunk(self):
+        # The config's 0.01 BTC must land on the wire as 1_000_000
+        # satoshi, in the first output, to the student — the
+        # echoed 'amount' proves nothing about the transaction
+        self.faucet.request_crypto('btc4', self.recipient)
+
+        tx = Transaction.from_string(self.captured['raw'])
+        self.assertEqual(tx.vout[0].value, 1_000_000)
+        self.assertEqual(tx.vout[0].script_pubkey.address({'bech32': 'tb'}), self.recipient)
 
     def test_payout_drops_the_cached_balance(self):
         # The page polls the cache — a stale hit would hide the payout

@@ -2,8 +2,8 @@
 //  [*] Pages — EVM Faucet (route /faucet/evm/:network)
 //
 //  The student-facing faucet for NATIVE EVM coins (Sepolia
-//  ETH and friends). ERC-20 tokens live on their own page:
-//  /faucet/erc20/:network.
+//  ETH and friends). ERC-20 tokens live on their own page,
+//  keyed by TOKEN rather than by network: /faucet/erc20/:token.
 //
 //  The four-step MetaMask flow (install → connect → switch
 //  network → claim) is driven by the shared useMetamaskWallet

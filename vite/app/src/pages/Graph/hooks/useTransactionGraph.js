@@ -160,38 +160,32 @@ const formatTransactionLabel = (value, count, symbol = 'ETH') => {
 // -----------------------------------------------------------
 //
 // "prieš X sek./min./val./d./mėn./m." from a Date — the
-// largest unit that fits wins, and the abbreviations sidestep
-// Lithuanian declension entirely. `now` lets a caller labeling
-// a whole graph read the clock once instead of per node.
+// largest unit that fits (a full unit, so 365 days IS a
+// year, not "12 mėn.") wins, and the abbreviations sidestep
+// Lithuanian declension entirely. Clamped at zero: a block
+// timestamp a few seconds ahead of a lagging lab clock must
+// not print "prieš -7 sek.". `now` lets a caller labeling a
+// whole graph read the clock once instead of per node.
 //
 // Used by:
 //   - nodeLabel (below) — the "Atnaujinta: …" line
 // -----------------------------------------------------------
 
-const timeSince = (date, now = Date.now()) => {
-  const seconds = Math.floor((now - date) / 1000);
-  let interval = seconds / 31536000; // seconds in a year
+const TIME_UNITS = [
+  [31536000, 'm.'],     // 365 days
+  [2592000, 'mėn.'],    // 30 days
+  [86400, 'd.'],
+  [3600, 'val.'],
+  [60, 'min.'],
+];
 
-  if (interval > 1) {
-    return "prieš " + Math.floor(interval) + " m.";
+const timeSince = (date, now = Date.now()) => {
+  const seconds = Math.max(0, Math.floor((now - date) / 1000));
+
+  for (const [size, unit] of TIME_UNITS) {
+    if (seconds >= size) return `prieš ${Math.floor(seconds / size)} ${unit}`;
   }
-  interval = seconds / 2592000; // seconds in a month
-  if (interval > 1) {
-    return "prieš " + Math.floor(interval) + " mėn.";
-  }
-  interval = seconds / 86400; // seconds in a day
-  if (interval > 1) {
-    return "prieš " + Math.floor(interval) + " d.";
-  }
-  interval = seconds / 3600; // seconds in an hour
-  if (interval > 1) {
-    return "prieš " + Math.floor(interval) + " val.";
-  }
-  interval = seconds / 60; // seconds in a minute
-  if (interval > 1) {
-    return "prieš " + Math.floor(interval) + " min.";
-  }
-  return "prieš " + Math.floor(seconds) + " sek.";
+  return `prieš ${seconds} sek.`;
 };
 
 

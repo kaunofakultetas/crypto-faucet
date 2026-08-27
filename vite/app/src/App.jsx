@@ -6,6 +6,7 @@
 //    - faucets  — /faucet/evm/:network (native coins),
 //                 /faucet/erc20/:token (tokens, one page per
 //                 token across every chain it lives on),
+//                 /faucet/svm/:network, /faucet/move/:network,
 //                 /faucet/utxo/:network
 //    - graph    — /graph/:network (transaction flow)
 //    - teaching — /sha256 (simulator), /videos

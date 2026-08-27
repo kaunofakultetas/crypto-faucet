@@ -115,7 +115,7 @@ function VideoCard({ title, description, src }) {
 // -----------------------------------------------------------
 //
 // Used by:
-//   - main.jsx — route /videos (imported as VideosPage)
+//   - App.jsx — route /videos (imported as VideosPage)
 // -----------------------------------------------------------
 
 export default function VideosPage() {

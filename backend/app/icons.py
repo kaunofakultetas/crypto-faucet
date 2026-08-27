@@ -69,7 +69,7 @@ ICON_EXTENSIONS = ('svg', 'png', 'webp')
 # Used by:
 #   - evm_faucet.get_networks / erc20_faucet.get_token_catalog
 #     + get_token / utxo_faucet.get_networks /
-#     svm_faucet.get_networks
+#     svm_faucet.get_networks / move_faucet.get_networks
 ############################################################
 
 def icon_url(icon_type, key):
@@ -97,8 +97,9 @@ def icon_url(icon_type, key):
 # probe loop safe too.
 #
 # Used by:
-#   - the <img> the frontend's ItemDot renders whenever a
-#     catalog entry carries an icon URL
+#   - the <img> the frontend's AssetIcon renders whenever a
+#     catalog entry carries an icon URL (it falls back to a
+#     colour-hashed dot when the fetch fails)
 ############################################################
 
 @bp_icons.route('/api/icons/<icon_type>/<key>', methods=['GET'])

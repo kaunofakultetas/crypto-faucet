@@ -224,7 +224,7 @@ function ReturnAddressCard({ initialLoad, loadingInfo, faucetInfo, currencyShort
 // Faucet data and polling live in useFaucetInfo.
 //
 // Used by:
-//   - main.jsx — route /faucet/utxo/:network (imported as
+//   - App.jsx — route /faucet/utxo/:network (imported as
 //     FaucetUTXO)
 // -----------------------------------------------------------
 

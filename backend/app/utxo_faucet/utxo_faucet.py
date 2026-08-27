@@ -393,8 +393,9 @@ class UTXOFaucet:
     # Builds the per-request NetworkContext: resolves the
     # network and points the context at the SHARED pieces —
     # the pre-derived faucet identity and the network's
-    # long-lived ElectrumClient (created on first use; it
-    # connects itself lazily inside request()).
+    # long-lived ElectrumClient (built for every network in
+    # __init__ and connected by the warmup; it also self-heals
+    # inside request() if that connection is later lost).
     #
     # Used by:
     #   - get_faucet_balance / request_crypto (below)

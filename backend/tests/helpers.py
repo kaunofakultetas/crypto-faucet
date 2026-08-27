@@ -52,6 +52,12 @@ ANCHOR_UTXOS = [
 ]
 ANCHOR_AMOUNT_SAT = 250000
 
+# p2wpkh addresses of TEST_PRIVATE_KEY / RECIPIENT_PRIVATE_KEY
+# under Litecoin testnet's 'tltc' HRP — the live ltc4 network's
+# dialect, distinct from Bitcoin's in HRP and base58 prefixes
+ANCHOR_LTC_ADDRESS = 'tltc1qyvsy6ypssxmqmdzthzua3qwupkey90p3p9mzk0'
+ANCHOR_LTC_RECIPIENT = 'tltc1qjvdp4aw57jzch2lfw0geews8cpqnzt2dk0uxcx'
+
 # Legacy (p2pkh, base58) anchors for the doge3 test network:
 # TEST_PRIVATE_KEY / RECIPIENT_PRIVATE_KEY under Dogecoin's
 # testnet P2PKH version byte 0x71.
@@ -78,6 +84,13 @@ UTXO_TEST_CONFIGS = {
     'btc4': {
         'id': 4, 'short_name': 'tBTC4', 'full_name': 'Bitcoin Testnet4',
         'faucet': {'coin': 'bitcoin', 'network': 'testnet', 'chunk_size': 0.01,
+                   'electrum_server': '127.0.0.1:9999'},
+    },
+    # The live Litecoin network — SegWit like btc4, but its own
+    # HRP ('tltc') and base58 prefixes
+    'ltc4': {
+        'id': 2, 'short_name': 'tLTC4', 'full_name': 'Litecoin Testnet4',
+        'faucet': {'coin': 'litecoin', 'network': 'testnet', 'chunk_size': 1000,
                    'electrum_server': '127.0.0.1:9999'},
     },
     # Legacy (pre-SegWit) dialect — the coin registry supplies the

@@ -23,6 +23,9 @@ A comprehensive multi-blockchain faucet system developed for Vilnius University.
 - **SVM Networks** (Solana runtime — Phantom wallet, Ed25519 addresses):
   - Solana Devnet
 
+- **Move Networks** (Sui — any Wallet-Standard Sui wallet such as Slush or Suiet):
+  - Sui Testnet
+
 - **ERC-20 Test Tokens** (token-first — one page per token, across every chain it is deployed on):
   - Chainlink (LINK) on Sepolia
 
@@ -79,7 +82,7 @@ Then set the GUI login password in `docker-compose.yml` (service `faucet-endpoin
 | Variable | Description | Default | Required |
 |----------|-------------|---------|----------|
 | `INFURA_PROJECT_ID` | Infura API project ID | - | ✅ |
-| `FAUCET_PRIVATE_KEY` | Private key of the faucet wallet (shared by EVM, ERC-20, UTXO and SVM — see below) | - | ✅ |
+| `FAUCET_PRIVATE_KEY` | Private key of the faucet wallet — one secret, shared by EVM, ERC-20, UTXO, SVM and Move; it derives a DIFFERENT address per family (the Sui one is the key hashed as an Ed25519 seed), each funded separately | - | ✅ |
 | `DBGATE_PASSWORD` | Password of the `/dbgate` database browser | - | ✅ |
 | `APP_PASSWORD_1` | System GUI access password (set in compose, not `.env`) | - | ✅ |
 | `ETHERSCAN_API_KEY` | Etherscan API key (transaction graph) | - | ❌ |
@@ -89,10 +92,10 @@ Then set the GUI login password in `docker-compose.yml` (service `faucet-endpoin
 
 All networks and tokens are defined in **`_CONFIG/coins.py`**, which is mounted read-only into the backend container (`./_CONFIG:/config`) — so the coin catalog lives *outside* the images and can be changed without rebuilding anything:
 
-- **`_CONFIG/coins.py`** holds four maps: `EVM_NETWORK_CONFIGS`, `ERC20_TOKEN_CONFIGS`, `UTXO_NETWORK_CONFIGS`, `SVM_NETWORK_CONFIGS`. Each entry is sectioned by who consumes the settings (`faucet` / `metamask` / `wallet` / `explorer`). The file is validated on boot — a typo kills the start with a precise error in `docker logs faucet-backend` instead of a silent fallback. The Infura key never sits in this file: `<INFURA_PROJECT_ID>` inside `rpc_url` is substituted from the environment at startup.
-- **`_CONFIG/icons/<type>/<key>.svg`** (or `.png` / `.webp`) holds the asset icons, where `<type>` is `evm` / `erc20` / `utxo` / `svm` and `<key>` is the entry's key in the maps (e.g. `evm/sepolia.svg`, `erc20/LINK.svg`, `utxo/btc4.svg`, `svm/solanaDevnet.svg`). Assets without an icon file automatically fall back to a colored dot in the UI.
+- **`_CONFIG/coins.py`** holds five maps: `EVM_NETWORK_CONFIGS`, `ERC20_TOKEN_CONFIGS`, `UTXO_NETWORK_CONFIGS`, `SVM_NETWORK_CONFIGS`, `MOVE_NETWORK_CONFIGS`. Emptying a map disables that whole family (the navbar hides it). Each entry is sectioned by who consumes the settings (`faucet` / `metamask` / `wallet` / `explorer`). The file is validated on boot — a typo kills the start with a precise error in `docker logs faucet-backend` instead of a silent fallback. The Infura key never sits in this file: `<INFURA_PROJECT_ID>` inside `rpc_url` is substituted from the environment at startup.
+- **`_CONFIG/icons/<type>/<key>.svg`** (or `.png` / `.webp`) holds the asset icons, where `<type>` is `evm` / `erc20` / `utxo` / `svm` / `move` and `<key>` is the entry's key in the maps (e.g. `evm/sepolia.svg`, `erc20/LINK.svg`, `utxo/btc4.svg`, `svm/solanaDevnet.svg`, `move/suiTestnet.svg`). Assets without an icon file automatically fall back to a colored dot in the UI.
 
-The UTXO and SVM entries name a *coin* / *chain* plus a network flavour (`bitcoin` + `testnet`, `solana` + `devnet`); everything protocol-precise — address version bytes, fee rates, dust limits, lamport decimals, rent-exempt minimums — lives in the backend's in-code registries (`app/utxo_faucet/coins/`, `app/svm_faucet/chains/`) and is never an operator setting. An unknown coin/chain, an unknown flavour, or an SVM `chunk_size` below the chain's rent-exempt minimum all fail the boot.
+The UTXO, SVM and Move entries name a *coin* / *chain* plus a network flavour (`bitcoin` + `testnet`, `solana` + `devnet`, `sui` + `testnet`); everything protocol-precise — address version bytes, fee rates, dust limits, lamport/MIST decimals, rent-exempt minimums, gas margins — lives in the backend's in-code registries (`app/utxo_faucet/coins/`, `app/svm_faucet/chains/`, `app/move_faucet/chains/`) and is never an operator setting. An unknown coin/chain, an unknown flavour, or an SVM `chunk_size` below the chain's rent-exempt minimum all fail the boot.
 
 **To add or change a coin**: edit `_CONFIG/coins.py`, then `docker restart faucet-backend` (~3 s).
 **To add or change an icon**: drop the file into `_CONFIG/icons/` — it appears on the next page load, no restart at all.
@@ -120,6 +123,13 @@ The UTXO and SVM entries name a *coin* / *chain* plus a network flavour (`bitcoi
 4. Sign the verification message — no transaction, the Ed25519 signature only proves you own the address
 5. Receive testnet SOL in your wallet
 
+#### Move Networks (Sui)
+1. Navigate to `/faucet/move/{network}` (e.g., `/faucet/move/suiTestnet`)
+2. Connect your Sui wallet (Slush, Suiet or any other Wallet-Standard wallet — the page shows whichever it finds) — there is no network step, a Sui address is the same on every network
+3. Put the wallet on **Testnet** in its own network selector (it ships on Mainnet) — the page names the network to select and turns amber while the wallet reports another one
+4. Sign the verification message — no transaction, the signature only proves you own the address
+5. Receive testnet SUI in your wallet
+
 #### ERC-20 Tokens
 1. Navigate to `/faucet/erc20/{token}` (e.g., `/faucet/erc20/LINK`) — one page shows the token on **every** chain it is deployed on
 2. Connect MetaMask and switch to one of the token's networks
@@ -134,9 +144,10 @@ The UTXO and SVM entries name a *coin* / *chain* plus a network flavour (`bitcoi
 - Mine blocks and explore hash functions
 
 #### Transaction Graph (See [more](_DOCS/txgraph/README.md))
-- Access at `/graph/{network}`
-- Visualize cryptocurrency transaction flows
+- Access at `/graph/{network}` — reached from the graph button on an EVM faucet page
+- Visualize cryptocurrency transaction flows, one day at a time (the slider offers the days the faucet transacted on)
 - Explore addresses and transaction relationships
+- Only for EVM networks with an `explorer` section in `_CONFIG/coins.py` (an Etherscan-style API)
 
 ### DApp Hosting
 - Upload static files via `/dapps` file browser
@@ -148,8 +159,8 @@ The UTXO and SVM entries name a *coin* / *chain* plus a network flavour (`bitcoi
 ### Project Structure
 ```
 ├── _CONFIG/                # Operator-editable config (mounted into the backend)
-│   ├── coins.py            # EVM / ERC-20 / UTXO / SVM network & token definitions
-│   └── icons/              # Crypto asset icons (evm/, erc20/, utxo/, svm/)
+│   ├── coins.py            # EVM / ERC-20 / UTXO / SVM / Move network & token definitions
+│   └── icons/              # Crypto asset icons (evm/, erc20/, utxo/, svm/, move/)
 ├── _DATA/                  # Runtime data (SQLite, dapps, notes) — created on first run
 ├── backend/                # Python Flask API
 │   ├── app/
@@ -157,9 +168,13 @@ The UTXO and SVM entries name a *coin* / *chain* plus a network flavour (`bitcoi
 │   │   ├── erc_faucet/     # ERC-20 token faucet
 │   │   ├── utxo_faucet/    # UTXO faucet (Electrum-based)
 │   │   ├── svm_faucet/     # SVM faucet (Solana JSON-RPC)
+│   │   ├── move_faucet/    # Move faucet (Sui GraphQL)
+│   │   ├── faucet_catalog/ # /api/faucet/catalog — every family in one payload (the navbar)
+│   │   ├── cooldown.py     # The per-address claim cooldown every family shares
 │   │   ├── icons.py        # /api/icons — serves _CONFIG/icons
 │   │   └── database/       # SQLite helpers
-│   ├── tests/              # Unit tests
+│   ├── tests/              # Regression tests (see backend/tests/README.md)
+│   ├── tools/              # Operator tools (graph cache pruning)
 │   └── main.py             # Entry point — loads & validates _CONFIG/coins.py
 ├── vite/                   # React frontend (Vite + MUI + Tailwind)
 ├── endpoint/               # Caddy ingress (login gate + routing)
@@ -186,11 +201,27 @@ All endpoints are `GET`; the request endpoints take their inputs as query parame
 - `GET /api/svm/{network}/request?address=&signature=&nonce=` - Request testnet SOL (Ed25519 signature proves address ownership)
 - `GET /api/svm/{network}/faucet-balance` - Check faucet balance
 
+#### Move Faucet
+- `GET /api/move/networks` - List supported Move networks
+- `GET /api/move/{network}/request?address=&signature=&nonce=` - Request testnet SUI (Ed25519 signature proves address ownership)
+- `GET /api/move/{network}/faucet-balance` - Check faucet balance
+
 #### ERC-20 Faucet
 - `GET /api/erc20/tokens` - List supported tokens and their networks
 - `GET /api/erc20/token/{symbol}?address=` - One token across all its chains (balances, gas thresholds)
 - `GET /api/erc20/{network}/{token}/request?address=&signature=&nonce=` - Request tokens on one chain
 
+#### Catalog
+- `GET /api/faucet/catalog` - Every family's network/token list in one payload (what the navbar loads)
+
+#### Transaction Graph (EVM)
+- `GET /api/evm/{network}/get-stored-transactions?address=&from=&to=` - Aggregated flows touching an address inside a `[from, to)` unix window
+- `GET /api/evm/{network}/transaction-days?address=&tz_offset=` - The days an address transacted on, in the browser's timezone
+- `GET /api/evm/set-address-name?address=&name=` - Label an address in the graph
+
+#### Blockchain Simulator
+- `GET /api/get-example-blockchain` - The pre-mined example chain the simulator loads
+
 #### Asset Icons
-- `GET /api/icons/{type}/{key}` - Icon of a network or token (`type`: `evm` / `erc20` / `utxo` / `svm`)
+- `GET /api/icons/{type}/{key}` - Icon of a network or token (`type`: `evm` / `erc20` / `utxo` / `svm` / `move`)
 

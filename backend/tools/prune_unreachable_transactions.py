@@ -9,11 +9,15 @@
 #  it were a class wallet — its global history dragged
 #  thousands of unrelated testnet strangers into the cache.
 #
-#  Reachability mirrors exactly how the graph explores:
-#  breadth-first from the class' named wallets, never
-#  expanding through is_contract/is_hub addresses (they stay
-#  as leaves). Everything the graph could legitimately reach
-#  is kept; everything else is stranger traffic.
+#  Reachability: breadth-first from the class' NAMED wallets
+#  (the operator's labels — the faucet address itself is a
+#  root only if it is named too; the graph page, by contrast,
+#  always roots at the faucet), never expanding through
+#  is_contract/is_hub addresses (they stay as leaves). What
+#  the walk reaches is kept; everything else is stranger
+#  traffic. With NO named wallet the walk reaches nothing and
+#  --apply would drop every row — refusing in that case is
+#  pinned in test_explorer_defects.py; name the faucet first.
 #
 #  Dry run by default — prints what WOULD be deleted. Pass
 #  --apply to actually delete (make a copy of the database

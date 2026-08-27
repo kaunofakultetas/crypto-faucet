@@ -56,6 +56,24 @@ class UtxoEngineTests(unittest.TestCase):
         ctx = faucet._setup_wallet_for_network('knf')
         self.assertEqual(ctx.address, helpers.ANCHOR_KNF_ADDRESS)
 
+    def test_litecoin_faucet_address_anchor(self):
+        # The Litecoin dialect: same key, 'tltc' HRP — and a
+        # Bitcoin-testnet recipient is refused on it
+        faucet = helpers.make_utxo_faucet()
+        ctx = faucet._setup_wallet_for_network('ltc4')
+        self.assertEqual(ctx.dialect.hrp, 'tltc')
+        self.assertEqual(ctx.address, helpers.ANCHOR_LTC_ADDRESS)
+        self.assertTrue(faucet._validate_address(ctx, helpers.ANCHOR_LTC_RECIPIENT))
+        prv = ec.PrivateKey(bytes.fromhex(helpers.RECIPIENT_PRIVATE_KEY))
+        self.assertFalse(faucet._validate_address(ctx, embit_script.p2wpkh(prv.get_public_key()).address({'bech32': 'tb'})))
+
+    def test_litecoin_payout_pays_the_recipient(self):
+        # The whole build on the Litecoin dialect: the payout output
+        # decodes back to the tltc recipient
+        tx, ctx = self.build_payout(network='ltc4', to_address=helpers.ANCHOR_LTC_RECIPIENT)
+        self.assertEqual(tx.vout[0].value, helpers.ANCHOR_AMOUNT_SAT)
+        self.assertEqual(tx.vout[0].script_pubkey.address({'bech32': 'tltc'}), helpers.ANCHOR_LTC_RECIPIENT)
+
     def test_txid_anchor(self):
         # The full non-witness serialization is pinned by the txid
         tx, _ = self.build_payout()

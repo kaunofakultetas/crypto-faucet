@@ -92,11 +92,14 @@ class LiveSmokeTests(unittest.TestCase):
         self.assertEqual(catalog['move'], get('/api/move/networks'))
 
     def test_graph_flows_in_day_window(self):
-        # the date slider's contract: a [from, to) unix window
+        # the date slider's contract: a [from, to) unix window. A
+        # HISTORICAL one (ending over an hour ago) — a live window
+        # would make the explorer scrape Etherscan and write the
+        # production database, and this suite is read-only
         address = get('/api/evm/sepolia/faucet-balance')['address']
         now = int(time.time())
         data = get(f'/api/evm/sepolia/get-stored-transactions'
-                   f'?address={address}&from={now - 86400}&to={now + 3600}')
+                   f'?address={address}&from={now - 172800}&to={now - 86400}')
         self.assertIsInstance(data['transactions'], list)
 
     def test_graph_transaction_days(self):

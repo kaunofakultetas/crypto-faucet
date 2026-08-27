@@ -731,7 +731,7 @@ function Minimap({ blocks, isValidHash }) {
 // come from useBlockchain (above).
 //
 // Used by:
-//   - main.jsx — route /sha256 (imported as
+//   - App.jsx — route /sha256 (imported as
 //     BlockchainSimulatorPage)
 // -----------------------------------------------------------
 

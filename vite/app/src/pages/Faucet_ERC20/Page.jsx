@@ -72,7 +72,8 @@ const TOKEN_REFRESH_MS = 10000;
 //   const { data, error, reload } = useToken(symbol, account)
 //   data → { token, faucet_address, deployments: [...] }
 //
-// The whole page as ONE TanStack query, repolled every 15 s.
+// The whole page as ONE TanStack query, repolled on
+// TOKEN_REFRESH_MS (10 s — the backend's own balance cache TTL).
 // With a connected account the request carries ?address= and
 // every deployment comes back with that wallet's native
 // balance (wallet_native_wei) — the gas gate's input, fetched

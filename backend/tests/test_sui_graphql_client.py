@@ -7,7 +7,9 @@
 #    answers  — GraphQL errors arriving with HTTP 200 raise
 #               RuntimeError (the node ANSWERED, no retry); a
 #               reply without 'data' is a framing failure
-#    healing  — a dropped keep-alive retries ONCE
+#    healing  — a dropped keep-alive retries ONCE, and only
+#               a dropped connection does: a second drop and
+#               a timeout both propagate
 #    queries  — build_transfer sends the requested transfer
 #               and refuses a failed simulation; execute
 #               returns the digest and raises on failure
@@ -96,6 +98,26 @@ class SuiGraphqlClientTests(unittest.TestCase):
 
         self.assertEqual(self.client.get_chain_identifier(), 'abc')
         self.assertEqual(len(sent), 2)
+
+    def test_a_second_dropped_connection_propagates(self):
+        # Exactly one retry — a broadcast must never loop
+        sent = scripted(self.client,
+                        requests.ConnectionError('dropped'),
+                        requests.ConnectionError('dropped again'))
+
+        with self.assertRaises(requests.ConnectionError):
+            self.client.get_chain_identifier()
+        self.assertEqual(len(sent), 2)
+
+    def test_a_timeout_is_not_retried(self):
+        # The request may have REACHED the node — re-sending a
+        # broadcast on a timeout is the caller's decision, not the
+        # transport's
+        sent = scripted(self.client, requests.ReadTimeout('slow node'))
+
+        with self.assertRaises(requests.ReadTimeout):
+            self.client.get_chain_identifier()
+        self.assertEqual(len(sent), 1)
 
     def test_get_balance_reads_null_as_zero(self):
         # An address the chain has never seen answers null

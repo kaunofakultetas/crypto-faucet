@@ -12,7 +12,10 @@
 #  'explorer' section names the endpoint, chain_id rides
 #  along as the API's chainid parameter) and never touches
 #  the chain itself. A network without an 'explorer' section
-#  simply has no graph.
+#  has no graph: get_networks reports has_explorer=false and
+#  the SPA hides it — but is_supported_network here still
+#  accepts a direct request for it and the fetch fails with a
+#  logged traceback (pinned in test_explorer_defects.py).
 #
 #  Refreshes are INCREMENTAL — each one resumes from the last
 #  block already stored for that address instead of re-pulling
@@ -525,11 +528,21 @@ class EtherscanExplorer:
     # where only unrelated addresses moved are deliberately
     # absent: the graph grows breadth-first from the root, so
     # such a day would render one lonely faucet node. tz_offset
-    # is the BROWSER'S offset from UTC in seconds, so the day
-    # buckets match the student's local days; it's clamped to
-    # the real-world ±14 h range. (A day spanning a DST switch
-    # can bucket an hour off — accepted, the graph is a
-    # teaching aid, not an accounting ledger.)
+    # is the BROWSER'S offset from UTC in seconds AT THE MOMENT
+    # OF THE REQUEST, clamped to the real-world ±14 h range, and
+    # applied to EVERY row regardless of that row's own date.
+    #
+    # KNOWN GAP (pinned in test_explorer_defects.py): the page's
+    # rangeOfDay() turns a picked day back into a window using
+    # that date's TRUE offset, so for every day in the other
+    # DST regime (all of winter, viewed in summer, and vice
+    # versa) the bucket here sits an hour off the window the
+    # page will ask for — one hour of transactions is filed
+    # under the neighbouring day, and a day offered here can
+    # come back as an empty graph. The fix is bucketing each
+    # row in its own zone (a zone NAME from the browser +
+    # zoneinfo in Python); rangeOfDay is the correct half and
+    # must not change. Do not touch one side without the other.
     #
     # Used by:
     #   - evm_routes.py —

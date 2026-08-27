@@ -168,8 +168,10 @@ export const DIMENSIONS = {
 // STORAGE_KEYS
 // -----------------------------------------------------------
 //
-// localStorage key prefixes — the network name is appended,
-// so each network keeps its own saved node positions.
+// localStorage key prefixes — `<network>:<day>` is appended,
+// so every (network, day) pair keeps its own saved node
+// positions; useNodePositions.js keeps only the newest few
+// scopes and prunes the rest.
 //
 // Used by:
 //   - useNodePositions.js

@@ -27,6 +27,8 @@
 //    - pages/Faucet_ERC20/Page.jsx — token title, chain
 //      cards, gas notice rows
 //    - pages/Faucet_EVM/Page.jsx — page title
+//    - pages/Faucet_SVM/Page.jsx — page title
+//    - pages/Faucet_MOVE/Page.jsx — page title
 //    - pages/Faucet_UTXO/Page.jsx — page title
 // -----------------------------------------------------------
 

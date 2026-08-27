@@ -7,8 +7,9 @@
 //  the self-fading outcome alerts.
 //
 //  Wallet-agnostic. Everything here is driven by the `step`
-//  the page's wallet hook derives (hooks/useMetamaskWallet.js for
-//  MetaMask, Faucet_SVM/usePhantomWallet.js for Phantom);
+//  the page's wallet hook derives (hooks/useMetamaskWallet.js
+//  for MetaMask, Faucet_SVM/usePhantomWallet.js for Phantom,
+//  Faucet_MOVE/useSuiWallet.js for Sui wallets);
 //  nothing in this file talks to a wallet itself. What differs
 //  between wallets arrives as props: the install link and
 //  name, the last step's icon, and any extra help rendered
@@ -49,7 +50,8 @@ const ALERT_VISIBLE_MS = 8000;
 const ALERT_FADE_MS = 500;
 
 // WalletGateButton's defaults — the EVM-family pages never
-// pass these, the SVM page passes Phantom's
+// pass these, the SVM page passes Phantom's and the MOVE page
+// the discovered Sui wallet's
 const METAMASK_NAME = 'MetaMask';
 const METAMASK_DOWNLOAD_URL = 'https://metamask.io/download/';
 
@@ -189,10 +191,11 @@ function ColorlibStepIcon({ icon, total, override, active, completed, className 
 // WalletStepper
 // -----------------------------------------------------------
 //
-// The flow bar, given the labels: the native faucets run
-// install → connect → switch network → claim, the ERC-20 one
-// adds a gas step — install → connect → token network → have
-// gas → claim. Purely presentational. `icons` is an optional
+// The flow bar, given the labels: the EVM and SVM faucets run
+// install → connect → switch network → claim, the MOVE one
+// skips the network step (Sui wallets need no hop), the
+// ERC-20 one adds a gas step — install → connect → token
+// network → have gas → claim. Purely presentational. `icons` is an optional
 // sparse index→element map that overrides the position-based
 // defaults for steps the defaults can't know about (the
 // ERC-20 gas step, the SVM claim step).
