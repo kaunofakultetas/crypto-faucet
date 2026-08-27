@@ -40,12 +40,53 @@ DB_PATH = os.getenv('DB_PATH', 'transactions.db')
 
 
 
-def main():
-    apply_changes = '--apply' in sys.argv
 
+
+
+
+############################################################
+# main
+############################################################
+#
+# The CLI entry: opens the database, runs prune() in dry-run
+# or --apply mode, and closes the connection whichever way
+# prune() ends.
+#
+# Used by:
+#   - the __main__ guard at the bottom
+#   - tests, with DB_PATH and sys.argv patched
+############################################################
+
+def main():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+    try:
+        prune(conn, apply_changes='--apply' in sys.argv)
+    finally:
+        conn.close()
 
+
+
+
+
+
+
+
+############################################################
+# prune
+############################################################
+#
+# The walk and the deletes, on an open connection: load the
+# graph, flood from the named roots, report the stranger rows
+# and — with apply_changes — delete them plus the orphaned
+# unnamed addresses. Commits and VACUUMs on its own; the
+# caller closes.
+#
+# Used by:
+#   - main (above)
+############################################################
+
+def prune(conn, apply_changes):
 
     # STEP 1: load the graph — every cached transaction as an
     # undirected edge, plus the two address sets that steer the

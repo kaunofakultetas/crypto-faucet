@@ -27,7 +27,6 @@
 import os
 import copy
 import json
-import sqlite3
 import tempfile
 import unittest
 import importlib
@@ -63,7 +62,7 @@ class TempDbCase(unittest.TestCase):
     def setUp(self):
         handle, self.db_path = tempfile.mkstemp(suffix='.db')
         os.close(handle)
-        self.connect = lambda: sqlite3.connect(self.db_path)
+        self.connect = lambda: get_db_connection(self.db_path)
         with patch('app.database.db_init.get_db_connection', side_effect=self.connect):
             init_db_tables()
 
@@ -112,7 +111,7 @@ class WsgiTargetTests(unittest.TestCase):
             patch.object(UTXOFaucet, '_warm_up_networks', lambda self: None),
             patch.object(SVMFaucet, '_warm_up_networks', lambda self: None),
             patch.object(MoveFaucet, '_warm_up_networks', lambda self: None),
-            patch('app.database.db_init.get_db_connection', side_effect=lambda: sqlite3.connect(db_path)),
+            patch('app.database.db_init.get_db_connection', side_effect=lambda: get_db_connection(db_path)),
         ]
         try:
             for active in patches:

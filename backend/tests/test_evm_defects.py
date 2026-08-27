@@ -28,7 +28,6 @@
 import os
 import copy
 import logging
-import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -36,6 +35,7 @@ from unittest.mock import patch
 import requests
 
 from tests import helpers
+from app.database.db import get_db_connection
 from app.evm_faucet.explorer import EtherscanExplorer
 
 
@@ -219,7 +219,7 @@ class AddressNameTests(unittest.TestCase):
     def setUp(self):
         handle, self.db_path = tempfile.mkstemp(suffix='.db')
         os.close(handle)
-        with sqlite3.connect(self.db_path) as conn:
+        with get_db_connection(self.db_path) as conn:
             conn.execute('''
                 CREATE TABLE Graph_Addresses (
                     address TEXT NULL, name TEXT NULL,
@@ -229,7 +229,7 @@ class AddressNameTests(unittest.TestCase):
             ''')
         self.db_patch = patch(
             'app.evm_faucet.explorer.get_db_connection',
-            side_effect=lambda: sqlite3.connect(self.db_path),
+            side_effect=lambda: get_db_connection(self.db_path),
         )
         self.db_patch.start()
         self.explorer = EtherscanExplorer(
@@ -242,11 +242,11 @@ class AddressNameTests(unittest.TestCase):
         os.unlink(self.db_path)
 
     def row_count(self):
-        with sqlite3.connect(self.db_path) as conn:
+        with get_db_connection(self.db_path) as conn:
             return conn.execute('SELECT COUNT(*) FROM Graph_Addresses').fetchone()[0]
 
     def stored_name(self, address):
-        with sqlite3.connect(self.db_path) as conn:
+        with get_db_connection(self.db_path) as conn:
             row = conn.execute('SELECT name FROM Graph_Addresses WHERE address = ?', [address.lower()]).fetchone()
         return row[0] if row else None
 

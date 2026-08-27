@@ -32,7 +32,6 @@ import io
 import os
 import sys
 import time
-import sqlite3
 import logging
 import tempfile
 import threading
@@ -131,9 +130,7 @@ class ExplorerCase(unittest.TestCase):
         os.close(handle)
 
         def connect():
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row
-            return conn
+            return get_db_connection(self.db_path)
 
         self.patches = [
             patch('app.evm_faucet.explorer.get_db_connection', side_effect=connect),
@@ -153,12 +150,12 @@ class ExplorerCase(unittest.TestCase):
         return int(time.time())
 
     def flag(self, address, column):
-        with sqlite3.connect(self.db_path) as conn:
+        with get_db_connection(self.db_path) as conn:
             row = conn.execute(f'SELECT {column} FROM Graph_Addresses WHERE address = ?', [address.lower()]).fetchone()
         return row[0] if row else None
 
     def stored_tx_count(self):
-        with sqlite3.connect(self.db_path) as conn:
+        with get_db_connection(self.db_path) as conn:
             return conn.execute('SELECT COUNT(*) FROM Graph_Transactions').fetchone()[0]
 
     def flows(self, address, from_ts, to_ts):
@@ -494,14 +491,14 @@ class PruneToolTests(ExplorerCase):
     Y = '0x' + 'ef' * 20
 
     def insert(self, network, sender, recipient, block):
-        with sqlite3.connect(self.db_path) as conn:
+        with get_db_connection(self.db_path) as conn:
             conn.execute('''
                 INSERT INTO Graph_Transactions (network, from_address, to_address, value, hash, block_number, timestamp)
                 VALUES (?, ?, ?, 1.0, ?, ?, ?)
             ''', [network, sender, recipient, f'0x{network}{block}', block, DAY])
 
     def name(self, address, name='Named wallet'):
-        with sqlite3.connect(self.db_path) as conn:
+        with get_db_connection(self.db_path) as conn:
             conn.execute('INSERT INTO Graph_Addresses (address, name, is_contract, is_hub) VALUES (?, ?, 0, 0)', [address, name])
 
     def apply(self):
@@ -511,7 +508,7 @@ class PruneToolTests(ExplorerCase):
                     prune.main()
 
     def remaining(self):
-        with sqlite3.connect(self.db_path) as conn:
+        with get_db_connection(self.db_path) as conn:
             return conn.execute('SELECT network, from_address, to_address FROM Graph_Transactions').fetchall()
 
     @unittest.expectedFailure
@@ -552,7 +549,7 @@ class PruneToolTests(ExplorerCase):
         self.name(self.ROOT)
         self.insert('net', self.ROOT, self.A, 1)
         hub = '0x' + 'ab' * 20
-        with sqlite3.connect(self.db_path) as conn:
+        with get_db_connection(self.db_path) as conn:
             conn.execute("INSERT INTO Graph_Addresses (address, name, is_contract, is_hub) VALUES (?, '', 0, 1)", [hub])
 
         self.apply()

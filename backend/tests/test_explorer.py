@@ -27,10 +27,10 @@ import os
 import time
 import logging
 import tempfile
-import sqlite3
 import unittest
 from unittest.mock import patch
 
+from app.database.db import get_db_connection
 from app.evm_faucet.explorer import (
     EtherscanExplorer,
     HUB_COUNTERPARTY_THRESHOLD,
@@ -94,7 +94,7 @@ class ExplorerTestCase(unittest.TestCase):
     def setUp(self):
         handle, self.db_path = tempfile.mkstemp(suffix='.db')
         os.close(handle)
-        with sqlite3.connect(self.db_path) as conn:
+        with get_db_connection(self.db_path) as conn:
             conn.execute('''
                 CREATE TABLE Graph_Addresses (
                     address TEXT NULL, name TEXT NULL,
@@ -114,7 +114,7 @@ class ExplorerTestCase(unittest.TestCase):
 
         self.db_patch = patch(
             'app.evm_faucet.explorer.get_db_connection',
-            side_effect=lambda: sqlite3.connect(self.db_path),
+            side_effect=lambda: get_db_connection(self.db_path),
         )
         self.db_patch.start()
         self.explorer = EtherscanExplorer(TESTCHAIN_CONFIGS, trusted_addresses=[FAUCET])
@@ -124,14 +124,14 @@ class ExplorerTestCase(unittest.TestCase):
         os.unlink(self.db_path)
 
     def address_flags(self, address):
-        with sqlite3.connect(self.db_path) as conn:
+        with get_db_connection(self.db_path) as conn:
             row = conn.execute(
                 'SELECT is_contract, is_hub FROM Graph_Addresses WHERE address = ?',
                 [address.lower()]).fetchone()
         return row
 
     def stored_tx_count(self):
-        with sqlite3.connect(self.db_path) as conn:
+        with get_db_connection(self.db_path) as conn:
             return conn.execute('SELECT COUNT(*) FROM Graph_Transactions').fetchone()[0]
 
 
@@ -195,7 +195,7 @@ class ExplorerPollutionTests(ExplorerTestCase):
     def test_flagged_addresses_are_never_scraped(self):
         # A live-window request for a contract or hub must serve the
         # cache without ever reaching for Etherscan
-        with sqlite3.connect(self.db_path) as conn:
+        with get_db_connection(self.db_path) as conn:
             conn.execute("INSERT INTO Graph_Addresses VALUES (?, '', 1, 0)", [TOKEN.lower()])
         with patch.object(self.explorer, '_refresh_address',
                           side_effect=AssertionError('must not scrape')) as refresh:
@@ -207,7 +207,7 @@ class ExplorerPollutionTests(ExplorerTestCase):
     def test_hub_is_never_scraped_either(self):
         # Same rule for is_hub as for is_contract
         hub = '0x' + 'ab' * 20
-        with sqlite3.connect(self.db_path) as conn:
+        with get_db_connection(self.db_path) as conn:
             conn.execute("INSERT INTO Graph_Addresses VALUES (?, '', 0, 1)", [hub.lower()])
         with patch.object(self.explorer, '_refresh_address') as refresh:
             data, status = self.explorer.get_stored_transactions(
