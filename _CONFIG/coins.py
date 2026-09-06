@@ -336,6 +336,15 @@ ERC20_TOKEN_CONFIGS = {
             'sepolia': '0x779877A7B0D9E8603169DdbD7836e478b4624789',
         },
     },
+    'FOLD': {
+        'name': 'Interfold',
+        'decimals': 18,
+        'chunk_size': 5,
+        'deployments': {
+            # Interfold testnet token (docs.theinterfold.com)
+            'sepolia': '0x9752444A6a955D420402EaFf5f818afCddb9c340',
+        },
+    },
 }
 
 
