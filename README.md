@@ -52,7 +52,7 @@ cd crypto-faucet
 ### 2. Configure Environment
 Copy the sample configuration:
 ```bash
-cp docker-compose.yml.sample docker-compose.yml
+cp docker-compose.sample.yml docker-compose.yml
 ```
 
 Create a `.env` file next to `docker-compose.yml` with your secrets (the compose file reads them via `${...}` substitution):
