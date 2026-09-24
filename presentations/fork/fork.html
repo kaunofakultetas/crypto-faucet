@@ -8,11 +8,8 @@
 
   How to use
     Open in a modern browser (WebGL 2). three.js and the fonts are SELF-HOSTED in
-    ../_lib: three/ mirrors the npm package (LICENSE, build/three.module.min.js
-    0.170, the jsm/ addons), fonts.css + fonts/ carry the woff2 files — so the
-    page works without internet access; everything else (data, land mask,
-    shaders) is inline. Serve the presentations folder as one tree — this file
-    reaches the library at ../_lib relative to itself.
+    ../_lib (the presentations share one library tree, reached at ../_lib relative to
+    this file — see the Replace-By-Fee simulator); everything else is inline.
     Keys: ← → step · Space next · R replay · A autoplay · H hide interface · drag to orbit.
     Deep-link to a step with #step-N (1–19).
 
@@ -674,10 +671,11 @@ body.nohud .top, body.nohud .bottom, body.nohud .narr, body.nohud .side, body.no
   .f-row { font-size: 13px; gap: 6px; } .f-row .res { font-size: 15px; }
 }
 
-/* Users who prefer reduced motion get instant transitions; the script also shortens camera flights. */
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
-}
+/* prefers-reduced-motion deliberately changes NO durations here: Windows machines with
+   "animation effects" switched off (and remote-desktop sessions) report it in every
+   browser, and instant transitions plus shortened flights made the whole piece race on
+   those boxes. The script instead calms the continuous ambient motion only: no auto-orbit,
+   slower globe spin, rarer gossip pulses. */
 
 
 
@@ -720,6 +718,10 @@ body.nohud .top, body.nohud .bottom, body.nohud .narr, body.nohud .side, body.no
 .co.co--side .co-stem { width: 30px; height: 1px; background: linear-gradient(to left, var(--k), color-mix(in srgb, var(--k) 10%, transparent)); }
 .co.co--sideL { flex-direction: row; align-items: center; }
 .co.co--sideL .co-stem { width: 30px; height: 1px; background: linear-gradient(to right, var(--k), color-mix(in srgb, var(--k) 10%, transparent)); }
+
+/* Callouts track their cube rigidly: transform transitions would make a re-anchored callout
+   glide across the scene (and across other labels) instead of appearing at its new spot. */
+.Li.co { transition-property: opacity; }
 
 /* A callout that must vanish quickly (its cube was just picked into a frame). */
 .Li.fast { transition-duration: .12s; }
@@ -913,8 +915,8 @@ body.nohud .top, body.nohud .bottom, body.nohud .narr, body.nohud .side, body.no
 //
 //  The module script sets window.__rbfReady when it starts.
 //  If that has not happened after 15 s (an old browser, the
-//  ../_lib library files missing), the boot overlay's spinner is
-//  replaced by an explanation instead of spinning forever.
+//  ../_lib library files missing), the boot overlay's spinner
+//  is replaced by an explanation instead of spinning forever.
 //  Plain ES5, so it also runs where modules are unsupported.
 // -----------------------------------------------------------
 
@@ -1108,6 +1110,8 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 //
 // Used by:
 //   - globe.update (section 6)
+//   - ChainBlock.seal (section 7)
+//   - chain.mpSync (section 7)
 //   - flyCube (section 9)
 // -----------------------------------------------------------
 
@@ -1136,7 +1140,7 @@ const lerp = (a, b, t) => a + (b - a) * t;
 //   - globe.ripple (section 6)
 //   - section 7 start-up code (HEAP)
 //   - cellVec (section 7)
-//   - … and 9 more callers (sections 1–10)
+//   - … and 10 more callers (sections 1–10)
 // -----------------------------------------------------------
 
 const V3 = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
@@ -1165,7 +1169,9 @@ const E = {
 const COL = { cyan: 0x45aaf2, gold: 0xf7b731, green: 0x26de81, red: 0xfc5c65, royal: 0x4a6cf7, violet: 0xa55eea, ember: 0xff8c42, teal: 0x2ed3a0, alice: 0x7b94ff };
 const CSSV = { cyan: 'var(--cyan)', gold: 'var(--gold)', green: 'var(--green)', red: 'var(--red)', royal: 'var(--royal)', violet: 'var(--violet)', teal: 'var(--teal)', ember: 'var(--ember)' };
 
-// True when the visitor asked the OS for reduced motion: shorter flights, no auto-rotation.
+// Reduced-motion preference. It only tames the continuous ambient motion (no auto-orbit,
+// slower globe spin, rarer gossip pulses) — never the pacing: Windows reports it in every
+// browser when "animation effects" is off, and faster flights or instant fades raced there.
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 
@@ -1188,7 +1194,9 @@ const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 //   - buildGlobeLinks (section 6)
 //   - globe.dijkstra (section 6)
 //   - globe.setMixed (section 6)
-//   - buildChainHeap (section 7)
+//   - section 7 start-up code (chain)
+//   - buildMempoolSlots (section 7)
+//   - chain.mpReset (section 7)
 //   - sandbox (section 15)
 //   - sandbox.reset (section 15)
 // -----------------------------------------------------------
@@ -1342,7 +1350,7 @@ function el(html) {
 //   - TxCube.constructor (section 7)
 //   - ChainBlock.constructor (section 7)
 //   - buildChainFrames (section 7)
-//   - buildChainHeap (section 7)
+//   - buildMempool (section 7)
 //   - buildFrontLabels (section 8)
 // -----------------------------------------------------------
 
@@ -1439,9 +1447,9 @@ let simTime = 0;
 //   - globe.setStates (section 6)
 //   - globe.set (section 6)
 //   - ChainBlock.fill (section 7)
+//   - ChainBlock.seal (section 7)
 //   - ChainBlock.setKind (section 7)
-//   - chain.setChain (section 7)
-//   - … and 18 more callers (sections 2–16)
+//   - … and 21 more callers (sections 2–16)
 // -----------------------------------------------------------
 
 const Tw = {
@@ -1469,7 +1477,7 @@ const Tw = {
   //   - chain.layoutFrames (section 7)
   //   - chain.setFrames (section 7)
   //   - chain.set (section 7)
-  //   - … and 6 more callers (sections 2–8)
+  //   - … and 7 more callers (sections 2–8)
   // -----------------------------------------------------------
 
   to(target, props, o = {}) {
@@ -1508,14 +1516,13 @@ const Tw = {
   // Used by:
   //   - globe.setAll (section 6)
   //   - globe.setStates (section 6)
+  //   - ChainBlock.seal (section 7)
   //   - ChainBlock.setKind (section 7)
   //   - chain.fillFrame (section 7)
   //   - chain.pick (section 7)
   //   - chain.evict (section 7)
   //   - chain.drop (section 7)
-  //   - BigBlock.setKind (section 8)
-  //   - blockFoundFx (section 9)
-  //   - flyTo (section 10)
+  //   - … and 5 more callers (sections 6–10)
   // -----------------------------------------------------------
 
   num(a, b, o) {
@@ -1540,6 +1547,8 @@ const Tw = {
   //   - chain.fillFrame (section 7)
   //   - chain.clearFill (section 7)
   //   - chain.pick (section 7)
+  //   - chain.mpSync (section 7)
+  //   - chain.mpTake (section 7)
   //   - applyFrontObj (section 8)
   //   - flyTo (section 10)
   // -----------------------------------------------------------
@@ -1625,6 +1634,7 @@ const Tw = {
 //             abandoned)
 //
 // Used by:
+//   - ChainBlock.seal (section 7)
 //   - chain.set (section 7)
 //   - chain.mine (section 7)
 //   - chain.land (section 7)
@@ -1632,9 +1642,7 @@ const Tw = {
 //   - hashFx (section 9)
 //   - killRunning (section 14)
 //   - sandbox.mineOn (section 15)
-//   - sandbox.both (section 15)
-//   - sandbox.settle (section 15)
-//   - step (section 16)
+//   - … and 3 more callers (sections 7–16)
 // -----------------------------------------------------------
 
 const Sched = {
@@ -1653,6 +1661,7 @@ const Sched = {
   // Run fn after d simulation seconds; returns the entry.
   //
   // Used by:
+  //   - ChainBlock.seal (section 7)
   //   - chain.set (section 7)
   //   - chain.mine (section 7)
   //   - chain.land (section 7)
@@ -3642,8 +3651,8 @@ globe.update = function (dt) {
 //    ChainBlock           — A block on the chain
 //    buildChainFrames     — The candidate frames, one per
 //                           lane
-//    buildChainHeap       — The mempool heap: a small pile of
-//                           waiting transactions to the…
+//    buildMempool         — The mempool group: the pile of
+//                           waiting transactions lives here
 //    chain.x              — x position of height h
 //    chain.parentOf       — The parent of a block
 //    chain.setChain       — Reconcile the blocks with a
@@ -3679,15 +3688,26 @@ globe.update = function (dt) {
 //    chain.stopMining     — Hide every mining readout and
 //                           empty the frame fillers
 //    chain.update         — Per-frame chain work
+//    buildMempoolSlots    — The mempool slots: 5 columns × 3
+//                           rows × 6 layers above HEAP
+//    chain.mpReset        — Start the pile over: 54 waiting
+//                           transactions with seeded…
+//    chain.mpClear        — Dispose every pile cube
+//    chain.mpSync         — Reconcile the pile with `list`
+//    chain.mpTake         — A miner assembles its block from
+//                           the pile
+//    chain.mpRefill       — New transactions arrive to
+//                           replace the mined ones
 // -----------------------------------------------------------
 
 
 // Geometry: block size, block spacing, transactions per block (3×3×3), cell pitch, cube size, lane
 // offset (a clear gap of 1.4 between lanes, room for a block label), the extra offset of a stale
 // block (set further apart from the live chain), the x of the tip block and of the next slot, and
-// the mempool heap (its 3×3×3 pile is centred at block height, like the blocks).
+// the origin of the mempool pile (the bottom-front slot layer; the pile is built by
+// buildMempoolSlots, base level with the blocks' bottoms).
 const RB = 1.9, RS = 2.7, CAP = 27, CELL = 0.5, CUBE = 0.4, LANE_Y = 3.3, STALE_Y = 0.6, TIPX = 2.4, MINEX = TIPX + RS;
-const HEAP = V3(8.4, -0.47, 0);
+const HEAP = V3(8.4, -0.75, 0);
 
 // Cells inside a block are numbered 0..26: layer (top first) × row (front first) × column (left first).
 const SHOWCASE = [1, 10, 0, 2, 9, 11];        // front-face cells reserved for highlighted transactions
@@ -3772,10 +3792,13 @@ const BLOCK_STYLE = {
 };
 
 // The chain's state: groups, opacity, the blocks by id, the current preset (list of block
-// specs), the tip height, the candidate frames by lane, loose cubes (on the mempool heap or
-// already picked into a frame), cubes that are shrinking away, and the preset name shown.
+// specs), the tip height, the candidate frames by lane, loose highlighted cubes (on the
+// mempool pile or picked into a frame), cubes that are shrinking away, the pile's waiting
+// list / cubes / id counter / RNG, cubes flying from the pile into a frame, and the preset
+// name shown.
 const chain = {
   root: new THREE.Group(), st: { a: 0 }, blocks: new Map(), spec: [], tipH: 0, frames: {}, loose: new Map(), dying: new Set(),
+  mpl: [], mpCubes: new Map(), flying: new Set(), mpN: 0, mpOn: false, mpRng: rng32(1),
   key: null, detail: true, mp: { a: 0 },
 };
 scene.add(chain.root);
@@ -3798,6 +3821,7 @@ scene.add(chain.root);
 //   - chain.fillFrame (section 7)
 //   - chain.pick (section 7)
 //   - chain.stage (section 7)
+//   - chain.mpTake (section 7)
 //   - BigBlock.constructor (section 8)
 // -----------------------------------------------------------
 
@@ -3870,6 +3894,7 @@ function bgMat(rate) {
 //   - ChainBlock.fill (section 7)
 //   - chain.stage (section 7)
 //   - chain.addLoose (section 7)
+//   - chain.mpSync (section 7)
 // -----------------------------------------------------------
 
 class TxCube {
@@ -3892,6 +3917,7 @@ class TxCube {
   //   - ChainBlock.fill (section 7)
   //   - chain.stage (section 7)
   //   - chain.addLoose (section 7)
+  //   - chain.mpSync (section 7)
   // -----------------------------------------------------------
 
   constructor(tx) {
@@ -4030,6 +4056,10 @@ class TxCube {
 //   constructor    — Build the block from its spec
 //   fill           — Fill the block: highlighted cubes in
 //                    the showcase cells
+//   makeSealed     — One InstancedMesh for a batch of
+//                    sealed cells
+//   seal           — After mining: recolour the flown
+//                    mempool cubes to the block's…
 //   orientCallouts — Where this block's callouts go
 //   setKind        — Change the block's role
 //   dispose        — Remove the block and everything it
@@ -4060,10 +4090,11 @@ class ChainBlock {
   //   - chain.land (section 7)
   // -----------------------------------------------------------
 
-  constructor(spec, adopt) {
+  constructor(spec, adopt, bgFlown) {
 
     this.id = spec.id; this.h = spec.h; this.lane = spec.lane || 0; this.kind = null; this.note = spec.note || '';
-    this.g = new THREE.Group(); this.g.userData.a = 1; this.hl = []; this.sealed = null;
+    this.g = new THREE.Group(); this.g.userData.a = 1; this.hl = []; this.bg = []; this.sealedM = [];
+    this.clean = !(bgFlown && bgFlown.length);                       // false while the flown cubes still have to seal
     const S = BLOCK_STYLE[spec.kind];
 
 
@@ -4101,7 +4132,7 @@ class ChainBlock {
     this.g.add(this.shell, this.edges, l1, l2, this.label);
     chain.root.add(this.g);
     this.setKind(spec.kind, 0, spec.title);
-    this.fill(spec.hl || [], adopt);
+    this.fill(spec.hl || [], adopt, bgFlown);
   }
 
 
@@ -4114,8 +4145,9 @@ class ChainBlock {
   // -----------------------------------------------------------
   //
   // Fill the block: highlighted cubes in the showcase cells
-  // (adopted from `adopt` when the cube already exists), sealed
-  // cubes everywhere else.
+  // (adopted from `adopt` when the cube already exists), the
+  // mempool cubes that flew into the frame in their cells, and
+  // sealed cubes in whatever cells are left.
   //
   // Used by:
   //   - drawCoinFace (section 4)
@@ -4124,7 +4156,7 @@ class ChainBlock {
   //   - chain.clearFill (section 7)
   // -----------------------------------------------------------
 
-  fill(hlTxs, adopt) {
+  fill(hlTxs, adopt, bgFlown) {
 
     const used = new Set(), cells0 = this.lane < 0 ? SHOWCASE_RIGHT : SHOWCASE;   // callouts lean away from the block to the left
     hlTxs.forEach((tx, i) => {
@@ -4137,13 +4169,86 @@ class ChainBlock {
       used.add(cells0[i]);
     });
     this.orientCallouts();
+
+
+    // The flown mempool cubes become part of the block; they seal a moment later (seal()).
+    for (const f of bgFlown || []) {
+      Tw.kill(f.cube.tw); f.cube.tw = null;
+      chain.flying.delete(f.cube);
+      this.g.add(f.cube.g);
+      f.cube.g.position.copy(f.cell);
+      f.cube.g.scale.setScalar(1);
+      this.bg.push(f.cube);
+      used.add(f.idx);
+    }
+
+
     const cells = [];
     for (let i = 0; i < CAP; i++) if (!used.has(i)) cells.push(cellVec(i));
+    this.makeSealed(cells);
+  }
+
+
+
+
+
+
+  // -----------------------------------------------------------
+  // ChainBlock.makeSealed
+  // -----------------------------------------------------------
+  //
+  // One InstancedMesh for a batch of sealed cells (cheaper than
+  // one mesh per cube).
+  //
+  // Used by:
+  //   - ChainBlock.fill (section 7)
+  //   - ChainBlock.seal (section 7)
+  // -----------------------------------------------------------
+
+  makeSealed(cells) {
+
+    if (!cells.length) return;
     const m = new THREE.InstancedMesh(CUBE_GEO, this.sealMat, cells.length), mx = new THREE.Matrix4();
     cells.forEach((p, i) => { mx.makeTranslation(p.x, p.y, p.z); m.setMatrixAt(i, mx); });
     m.instanceMatrix.needsUpdate = true;
     this.g.add(m);
-    this.sealed = m;
+    this.sealedM.push(m);
+  }
+
+
+
+
+
+
+  // -----------------------------------------------------------
+  // ChainBlock.seal
+  // -----------------------------------------------------------
+  //
+  // After mining: recolour the flown mempool cubes to the
+  // block's sealed colour over `dur`, then swap them for one
+  // instanced mesh (the same move the RBF simulator makes).
+  //
+  // Used by:
+  //   - ChainBlock.constructor (section 7)
+  //   - ChainBlock.setKind (section 7)
+  //   - chain.land (section 7)
+  //   - BigBlock.setKind (section 8)
+  // -----------------------------------------------------------
+
+  seal(dur) {
+
+    const cubes = this.bg; this.bg = [];
+    for (const c of cubes) {
+      const m = c.mesh.material.clone(); m.userData = {}; c.mesh.material = m; c.ownMat = true;
+      const c0 = m.color.clone(), e0 = m.emissive.clone(), i0 = m.emissiveIntensity;
+      Tw.num(0, 1, { dur, onUpdate: v => { m.color.copy(c0).lerp(this.sealMat.color, v); m.emissive.copy(e0).lerp(this.sealMat.emissive, v); m.emissiveIntensity = lerp(i0, 0.7, v); } });
+    }
+    Sched.after(dur + 0.02, () => {
+      const cells = cubes.map(c => c.g.position.clone());
+      cubes.forEach(c => c.dispose());
+      this.makeSealed(cells);
+      this.clean = true;
+    });
   }
 
 
@@ -4155,9 +4260,9 @@ class ChainBlock {
   // ChainBlock.orientCallouts
   // -----------------------------------------------------------
   //
-  // Where this block's callouts go ('up' / 'right' / 'down',
-  // see TxCube.setCalloutSide); chain.setChain decides from
-  // what sits around the block.
+  // Where this block's callouts go ('up' / 'right' / 'left' /
+  // 'down', see TxCube.setCalloutSide); chain.setChain decides
+  // from what sits around the block.
   //
   // Used by:
   //   - ChainBlock.fill (section 7)
@@ -4224,7 +4329,8 @@ class ChainBlock {
     this.conn.removeFromParent(); this.conn.geometry.dispose();
     [this.shellMat, this.edgeMat, this.linkMat, this.sealMat, this.connMat].forEach(m => m.dispose());
     this.hl.forEach(c => c.dispose());
-    if (this.sealed) this.sealed.dispose();
+    this.bg.forEach(c => c.dispose());
+    for (const m of this.sealedM) m.dispose();
   }
 }
 
@@ -4300,33 +4406,28 @@ function buildChainFrames() {
 
 
 // -----------------------------------------------------------
-// buildChainHeap
+// buildMempool
 // -----------------------------------------------------------
 //
-// The mempool heap: a small pile of waiting transactions to
-// the right of the tip (an instanced mesh) with its label
-// under the front edge. Loose highlighted cubes sit on top.
+// The mempool group: the pile of waiting transactions lives
+// here (individual fee-coloured cubes, managed by
+// chain.mpSync / chain.mpTake in the mempool section below),
+// plus its label on the block-label row. The group fades with
+// chain.mp.a.
 //
 // Used by:
-//   - buildChainHeap (section 7)
+//   - buildMempool (section 7)
 // -----------------------------------------------------------
 
-function buildChainHeap() {
+function buildMempool() {
 
   const g = new THREE.Group();
   g.userData.a = 0;
-  const r = rng32(77), cells = [];
-  for (let ly = 0; ly < 3; ly++) for (let rz = 0; rz < 3; rz++) for (let cx = 0; cx < 3; cx++)
-    cells.push(V3(HEAP.x - 0.5 + cx * 0.5 + (r() - 0.5) * 0.08, HEAP.y + ly * 0.47, HEAP.z + 0.5 - rz * 0.5 + (r() - 0.5) * 0.08));
-  const mat = new THREE.MeshStandardMaterial({ color: 0x3a4e86, emissive: 0x3a4e86, emissiveIntensity: 0.14, roughness: 0.55, metalness: 0.2, transparent: true });
-  const m = new THREE.InstancedMesh(CUBE_GEO, mat, cells.length), mx = new THREE.Matrix4();
-  cells.forEach((p, i) => { mx.makeTranslation(p.x, p.y, p.z); m.setMatrixAt(i, mx); });
-  m.instanceMatrix.needsUpdate = true;
   const lbl = label(`<div class="Li on blk blk--wait detail frl"><div class="blk-t">Mempool</div><div class="blk-m">unconfirmed</div></div>`, [0.5, 0]);
   lbl.position.set(HEAP.x, -RB / 2 - 0.12, HEAP.z + RB / 2);        // on the same row as the block labels
-  g.add(m, lbl);
+  g.add(lbl);
   chain.root.add(g);
-  chain.heapG = g;
+  chain.mpG = g;
 }
 
 
@@ -4337,7 +4438,7 @@ function buildChainHeap() {
 
 // Build the chain's static parts once.
 buildChainFrames();
-buildChainHeap();
+buildMempool();
 
 
 
@@ -4423,7 +4524,7 @@ chain.setChain = function (spec, d = 0) {
   // Removals (also anything that scrolled off the left edge).
   for (const [id, b] of this.blocks) {
     const s = want.get(id);
-    if (s && this.tipH - s.h <= 6 && (d > 0 || hlKey(b.hl.map(c => c.tx)) === hlKey(s.hl))) continue;
+    if (s && this.tipH - s.h <= 6 && (d > 0 || (b.clean && hlKey(b.hl.map(c => c.tx)) === hlKey(s.hl)))) continue;
     this.blocks.delete(id);
     if (d <= 0) b.dispose();
     else Tw.to(b.g.userData, { a: 0 }, { dur: d * 0.7, onComplete: () => b.dispose() });
@@ -4637,8 +4738,10 @@ chain.set = function (s, d) {
   const on = s.on ?? 0, preset = CH[s.chain] || CH.base;
   this.detail = s.detail !== 0;                                                 // fine labels allowed?
   labelRenderer.domElement.classList.toggle('nofr', s.frames === 0);           // frame labels hidden?
-  Tw.to(this.mp, { a: s.mp ? 1 : 0 }, { dur: d });
-  const swap = () => { this.setChain(preset, 0); this.setFrames(s.mining || [], 0); this.clearLoose(); this.key = s.chain; };
+  this.mpOn = !!s.mp;
+  Tw.to(this.mp, { a: this.mpOn ? 1 : 0 }, { dur: d });
+  if (this.mpOn && !this.mpCubes.size) this.mpReset({ fall: d > 0 });          // first sight of the pile: populate it
+  const swap = () => { this.setChain(preset, 0); this.setFrames(s.mining || [], 0); this.clearLoose(); if (!this.mpOn) this.mpClear(); this.key = s.chain; };
 
 
   // Instant: fade state and content both snap.
@@ -4677,13 +4780,16 @@ chain.set = function (s, d) {
 // chain.mine
 // -----------------------------------------------------------
 //
-// Mine one or more blocks at once: the miner first picks its
-// highlighted transactions (loose cubes glide into the
-// frame), then hashes on each block's lane frame while the
-// frame fills with the rest of the block's transactions →
-// "block found" → the blocks land and the chain shifts.
-// `quick` shortens everything; hash: false skips the hashing.
-// Returns the total duration in seconds.
+// Mine one or more blocks at once: the miner picks its
+// highlighted transactions (loose cubes glide into the frame)
+// and, when the mempool is on screen, pulls the rest of the
+// block out of the pile — the cubes fly from the mempool into
+// the frame's free cells (a hidden mempool fills the frame
+// with filler cubes instead). Then hashing → "block found" →
+// the blocks land, seal their cubes and the chain shifts; the
+// pile refills with new arrivals. `quick` shortens
+// everything; hash: false skips the hashing. Returns the
+// total duration in seconds.
 //
 // Used by:
 //   - STEP_DECIDE.play (section 13)
@@ -4701,17 +4807,34 @@ chain.mine = function (specs, o = {}) {
   const list = Array.isArray(specs) ? specs : [specs], quick = !!o.quick;
   const frames = list.map(s => this.frames[s.lane || 0]);
   const tPick = this.pick(list, quick ? 0.45 : 0.9);
-  const tHash = o.hash === false ? 0 : quick ? 0.6 : 1.35;
-  if (tHash > 0) Sched.after(tPick, () => list.forEach((s, i) => {
-    hashFx(frames[i], tHash, quick, s.kind);
-    const cells0 = (s.lane || 0) < 0 ? SHOWCASE_RIGHT : SHOWCASE;
-    this.fillFrame(s.lane || 0, new Set(cells0.slice(0, (s.hl || []).length)), quick ? 0.5 : 0.9);
-  }));
-  Sched.after(tPick + tHash, () => {
-    list.forEach((s, i) => blockFoundFx(frames[i].g.position.clone(), BLOCK_STYLE[s.kind].col));
-    this.land(list, quick ? 0.9 : 1.35);
+
+
+  // Assemble each block's content: cubes from the pile first, filler for what is left.
+  const bgFly = new Map();
+  let tFill = 0, taken = 0;
+  list.forEach((s, i) => {
+    const lane = s.lane || 0, cells0 = lane < 0 ? SHOWCASE_RIGHT : SHOWCASE;
+    const used = new Set(cells0.slice(0, (s.hl || []).length));
+    if (this.mpOn && this.mpl.length) {
+      const take = this.mpTake(used, frames[i], quick);
+      bgFly.set(s.id, take.list);
+      taken += take.list.length;
+      tFill = Math.max(tFill, take.dur);
+      for (const f of take.list) used.add(f.idx);
+    }
+    if (used.size < CAP) { this.fillFrame(lane, used, quick ? 0.5 : 0.9); tFill = Math.max(tFill, quick ? 0.5 : 0.9); }
   });
-  return tPick + tHash + (quick ? 1.3 : 2.0);
+
+
+  const tPre = Math.max(tPick, tFill * 0.7);                         // hashing may start while the last cubes arrive
+  const tHash = o.hash === false ? 0 : quick ? 0.6 : 1.35;
+  if (tHash > 0) Sched.after(tPre, () => list.forEach((s, i) => hashFx(frames[i], tHash, quick, s.kind)));
+  Sched.after(tPre + tHash, () => {
+    list.forEach((s, i) => blockFoundFx(frames[i].g.position.clone(), BLOCK_STYLE[s.kind].col));
+    this.land(list, quick ? 0.9 : 1.35, bgFly);
+    if (taken) this.mpRefill(taken, quick ? 0.7 : 1.1);              // new transactions replace the mined ones
+  });
+  return tPre + tHash + (quick ? 1.3 : 2.0);
 };
 
 
@@ -4815,7 +4938,7 @@ chain.addLoose = function (tx, note) {
   if (this.loose.has(tx.id)) return;
   const c = new TxCube(tx);
   this.root.add(c.g);
-  c.g.position.set(HEAP.x, HEAP.y + 1.41, HEAP.z + 0.3);
+  c.g.position.set(HEAP.x, HEAP.y + 2.15, HEAP.z + 0.85);
   c.g.scale.setScalar(0.001);
   c.tw = Tw.to(c.g.scale, { x: 1, y: 1, z: 1 }, { dur: 0.6, ease: E.oBack, onComplete: () => { c.quiet = false; this.updateCallouts(); } });
   Object.assign(c, { note, tone: '', picked: false, staged: false, follow: false, quiet: true });   // speaks once it has popped in
@@ -4836,29 +4959,32 @@ chain.addLoose = function (tx, note) {
 //
 // Put found blocks on the chain: each appears where its
 // lane's frame is, then everything slides so the new tip sits
-// at TIPX. Loose cubes picked into the frame become the
-// block's own cubes. The preset grows by the new specs.
+// at TIPX. Loose cubes picked into the frame and mempool
+// cubes that flew in become the block's own cubes; the flown
+// ones then seal to the block's colour. The preset grows by
+// the new specs.
 //
 // Used by:
 //   - chain.mine (section 7)
 //   - blockFromNode (section 13)
 // -----------------------------------------------------------
 
-chain.land = function (specs, d = 1.2) {
+chain.land = function (specs, d = 1.2, bgFly) {
 
   const list = Array.isArray(specs) ? specs : [specs];
   for (const s of list) {
     if (this.blocks.has(s.id)) continue;
     const adopt = new Map();
     for (const tx of s.hl || []) { const c = this.loose.get(tx.id); if (c) { this.loose.delete(tx.id); adopt.set(tx.id, c); } }
-    this.clearFill(s.lane || 0);                                     // the block brings its own cubes
-    const b = new ChainBlock(s, adopt);
+    this.clearFill(s.lane || 0);                                     // the filler's cells now belong to the block
+    const b = new ChainBlock(s, adopt, bgFly && bgFly.get(s.id));
     this.blocks.set(s.id, b);
     b.g.position.copy(this.frames[s.lane || 0].g.position);
     b.shellMat.userData.o = 0; b.edgeMat.userData.o = 0; b.linkMat.userData.o = 0;
     Tw.to(b.shellMat.userData, { o: 0.4 }, { dur: 0.8, delay: 0.25 });
     Tw.to(b.edgeMat.userData, { o: 0.9 }, { dur: 0.5 });
     Tw.to(b.linkMat.userData, { o: 1 }, { dur: 0.6, delay: 0.6 });
+    if (!b.clean) Sched.after(d * 0.85, () => b.seal(d * 0.5));      // the flown cubes take the sealed colour
     b.lblBox.classList.remove('on');
     Sched.after(d, () => b.lblBox.classList.add('on'));
   }
@@ -4923,7 +5049,7 @@ chain.evict = function (blockId, txId, note) {
   const c = this.takeOut(blockId, txId); if (!c) return;
   Object.assign(c, { note, tone: 'x', picked: false, staged: false, follow: false, quiet: true });   // silent while it flies
   this.loose.set(txId, c);
-  const tgt = V3(HEAP.x, HEAP.y + 1.41, HEAP.z + 0.3), from = c.g.position.clone();
+  const tgt = V3(HEAP.x, HEAP.y + 2.15, HEAP.z + 0.85), from = c.g.position.clone();
   c.tw = Tw.num(0, 1, {
     dur: 1.2, ease: E.io3,
     onUpdate: v => { c.g.position.lerpVectors(from, tgt, v); c.g.position.y += Math.sin(Math.PI * v) * 1.6; },
@@ -5047,8 +5173,11 @@ chain.clearLoose = function () {
 // -----------------------------------------------------------
 
 chain.clearDying = function () {
+
   for (const c of this.dying) c.dispose();
   this.dying.clear();
+  for (const c of this.flying) c.dispose();                          // mempool cubes caught mid-flight
+  this.flying.clear();
 };
 
 
@@ -5108,7 +5237,236 @@ chain.update = function () {
     c.mesh.rotation.y = simTime * 0.6;
     if (c.follow) c.g.position.copy(this.frames[c.lane].g.position).add(c.cell);
   }
-  this.heapG.userData.a = this.mp.a;
+  this.mpG.userData.a = this.mp.a;
+};
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// buildMempoolSlots
+// -----------------------------------------------------------
+//
+// The mempool slots: 5 columns × 3 rows × 6 layers above
+// HEAP, filled front-bottom first, with a little jitter so
+// the pile reads as a heap rather than a grid (the same pile
+// the RBF simulator uses for its waiting transactions).
+//
+// Used by:
+//   - section 7 start-up code (MP_SLOTS)
+// -----------------------------------------------------------
+
+function buildMempoolSlots() {
+
+  const slots = [], r = rng32(99);
+  for (let ly = 0; ly < 6; ly++)
+    for (let rz = 0; rz < 3; rz++)
+      for (let cx = 0; cx < 5; cx++)
+        slots.push(V3(HEAP.x - 1.0 + cx * 0.5 + (r() - 0.5) * 0.07, HEAP.y + ly * 0.47, HEAP.z + 0.5 - rz * 0.5 + (r() - 0.5) * 0.07));
+  return slots;
+}
+
+
+
+
+
+
+
+// The 90 pile slots, computed once.
+const MP_SLOTS = buildMempoolSlots();
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// chain.mpReset
+// -----------------------------------------------------------
+//
+// Start the pile over: 54 waiting transactions with seeded
+// log-uniform fee rates (1.5–45), so the bucketed materials
+// give the pile the RBF simulator's colour variety. They drop
+// in from above when `fall` is set, or snap into place for
+// instant jumps.
+//
+// Used by:
+//   - chain.set (section 7)
+//   - sandbox.reset (section 15)
+// -----------------------------------------------------------
+
+chain.mpReset = function (o = {}) {
+
+  this.mpClear();
+  this.mpRng = rng32(4242);
+  const list = [];
+  for (let i = 0; i < 54; i++) list.push({ id: 'mp' + this.mpN++, kind: 'bg', rate: Math.round(Math.exp(Math.log(1.5) + this.mpRng() * (Math.log(45) - Math.log(1.5))) * 10) / 10 });
+  this.mpSync(list, o.fall ? { enter: 'fall', dur: 1.0, stagger: 0.015 } : { dur: 0 });
+};
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// chain.mpClear
+// -----------------------------------------------------------
+//
+// Dispose every pile cube (an instant jump to a state without
+// the mempool).
+//
+// Used by:
+//   - chain.set (section 7)
+//   - chain.mpReset (section 7)
+// -----------------------------------------------------------
+
+chain.mpClear = function () {
+
+  for (const c of this.mpCubes.values()) c.dispose();
+  this.mpCubes.clear();
+  this.mpl = [];
+};
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// chain.mpSync
+// -----------------------------------------------------------
+//
+// Reconcile the pile with `list` (the RBF simulator's sync,
+// reduced to one pile): new transactions enter ('fall' from
+// above, 'pop' in place, or 'none'), the rest settle into
+// their slot, missing ones shrink away. dur 0 snaps
+// everything instantly.
+//
+// Used by:
+//   - chain.mpReset (section 7)
+//   - chain.mpRefill (section 7)
+// -----------------------------------------------------------
+
+chain.mpSync = function (list, o = {}) {
+
+  const dur = o.dur ?? 1.0, stagger = o.stagger ?? 0.015, enter = o.enter || 'fall';
+  this.mpl = list.slice();
+  const want = new Set(list.map(t => t.id));
+
+
+  // Exits: cubes whose transaction is no longer waiting.
+  for (const [id, c] of this.mpCubes) {
+    if (want.has(id)) continue;
+    this.mpCubes.delete(id);
+    if (dur <= 0) c.dispose();
+    else { Tw.kill(c.tw); this.dying.add(c); Tw.to(c.g.scale, { x: 0.001, y: 0.001, z: 0.001 }, { dur: 0.35, ease: E.i3, onComplete: () => { this.dying.delete(c); c.dispose(); } }); }
+  }
+
+
+  // Entries and moves, slot by slot.
+  let kn = 0;
+  list.forEach((tx, i) => {
+    const tgt = MP_SLOTS[Math.min(i, MP_SLOTS.length - 1)];
+    let c = this.mpCubes.get(tx.id);
+    if (!c) {
+      c = new TxCube(tx);
+      this.mpG.add(c.g);
+      this.mpCubes.set(tx.id, c);
+      if (dur <= 0 || enter === 'none') { c.g.position.copy(tgt); return; }
+      if (enter === 'fall') {
+        // Drop in from above and behind, growing as it lands.
+        const from = tgt.clone().add(V3((Math.random() - 0.5) * 1.5, 5.5 + Math.random() * 2.0, -1.5 - Math.random() * 1.5));
+        c.g.position.copy(from); c.g.scale.setScalar(0.4);
+        c.tw = Tw.num(0, 1, { dur: 1.0, delay: kn * stagger * 2, ease: E.o3, onUpdate: v => { c.g.position.lerpVectors(from, tgt, v); c.g.scale.setScalar(lerp(0.4, 1, Math.min(1, v * 1.4))); } });
+      } else {
+        c.g.position.copy(tgt); c.g.scale.setScalar(0.001);
+        c.tw = Tw.to(c.g.scale, { x: 1, y: 1, z: 1 }, { dur: 0.5, delay: kn * stagger * 2, ease: E.oBack });
+      }
+      kn++;
+    } else if (dur <= 0) { Tw.kill(c.tw); c.g.position.copy(tgt); c.g.scale.setScalar(1); }
+    else if (c.g.position.distanceTo(tgt) > 1e-3) {
+      const from = c.g.position.clone();
+      Tw.kill(c.tw);
+      c.tw = Tw.num(0, 1, { dur: dur * 0.8, delay: i * stagger, ease: E.io3, onUpdate: v => { c.g.position.lerpVectors(from, tgt, v); c.g.position.y += Math.sin(Math.PI * v) * 0.3; } });
+    }
+  });
+};
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// chain.mpTake
+// -----------------------------------------------------------
+//
+// A miner assembles its block from the pile: the cubes on top
+// fly, staggered along small arcs, into the frame's free
+// cells (every cell not in `used`, bottom cells first).
+// Returns the flown cubes with their cells — chain.land hands
+// them to the block — and how long the flight takes.
+//
+// Used by:
+//   - chain.mine (section 7)
+// -----------------------------------------------------------
+
+chain.mpTake = function (used, fr, quick) {
+
+  const free = [];
+  for (let i = 0; i < CAP; i++) if (!used.has(i)) free.push(i);
+  free.sort((a, b) => cellVec(a).y - cellVec(b).y);                  // fill the block bottom-up
+  const n = Math.min(free.length, this.mpl.length);
+  const txs = this.mpl.splice(this.mpl.length - n, n);               // the top of the pile goes first
+
+
+  const dur = quick ? 0.45 : 0.85, stagger = quick ? 0.006 : 0.018, list = [];
+  txs.forEach((tx, k) => {
+    const c = this.mpCubes.get(tx.id); if (!c) return;
+    this.mpCubes.delete(tx.id);
+    this.flying.add(c);
+    this.root.add(c.g);                                              // out of the fading pile group
+    const idx = free[k], cell = cellVec(idx), from = c.g.position.clone();
+    Tw.kill(c.tw);
+    c.tw = Tw.num(0, 1, {
+      dur, delay: k * stagger, ease: E.io3,
+      onUpdate: v => { c.g.position.lerpVectors(from, _tmp.copy(fr.g.position).add(cell), v); c.g.position.y += Math.sin(Math.PI * v) * 0.9; },
+    });
+    list.push({ cube: c, cell, idx });
+  });
+  return { list, dur: dur + txs.length * stagger };
+};
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// chain.mpRefill
+// -----------------------------------------------------------
+//
+// New transactions arrive to replace the mined ones: n fresh
+// fee rates drop into the pile.
+//
+// Used by:
+//   - chain.mine (section 7)
+// -----------------------------------------------------------
+
+chain.mpRefill = function (n, dur = 1.1) {
+
+  const adds = [];
+  for (let i = 0; i < n; i++) adds.push({ id: 'mp' + this.mpN++, kind: 'bg', rate: Math.round(Math.exp(Math.log(1.5) + this.mpRng() * (Math.log(45) - Math.log(1.5))) * 10) / 10 });
+  this.mpSync([...this.mpl, ...adds], { enter: 'fall', dur, stagger: 0.02 });
 };
 
 
@@ -6000,7 +6358,7 @@ function flyTo(name, dur = 2.2) {
   mid.y += Math.min(9, p0.distanceTo(p1) * 0.16);
   controls.enabled = false;
   camCtl.flying = Tw.num(0, 1, {
-    dur: REDUCED ? dur * 0.35 : dur, ease: E.io3,
+    dur, ease: E.io3,
     onUpdate: v => {
       const a = p0.clone().lerp(mid, v), b = mid.clone().lerp(p1, v);
       camera.position.copy(a.lerp(b, v));
@@ -7124,12 +7482,12 @@ ST.stale = S({ cam: 'chainLow', globe: { dim: 0.5, face: 'race', nodes: 'A' }, c
 ST.payment = S({ cam: 'chainMp', globe: { dim: 0.5, face: 'race', nodes: 'A' }, chain: { on: 1, chain: 'f4', mining: [0], mp: 1 } });
 ST.confs = S({ cam: 'chainWide', globe: { dim: 0.45 }, chain: { on: 1, chain: 'f5', mining: [0], frames: 0 } });
 ST.secret = S({ cam: 'chainHigh', globe: { dim: 0.5, face: 'atl' }, chain: { on: 1, chain: 'k1', mining: [0, { lane: 1, title: 'Mallory', note: 'secret mining' }], mp: 1 } });
-ST.release = S({ cam: 'fork', globe: { dim: 0.5, face: 'atl', nodes: 'att' }, chain: { on: 1, chain: 'k2', mining: [0] } });
+ST.release = S({ cam: 'fork', globe: { dim: 0.5, face: 'atl', nodes: 'att' }, chain: { on: 1, chain: 'k2', mining: [0], mp: 1 } });
 ST.meanings = S({ cam: 'globeWide', globe: { face: 'wide', mix: 0.8, auto: 1, ambient: 0 }, chain: { on: 0, chain: 'r0', mining: [0] } });
 ST.soft = S({ cam: 'chain', globe: { dim: 0.5, mix: 0.8 }, chain: { on: 1, chain: 'r1', mining: [{ lane: 0, title: 'New rules', note: 'one chain' }] } });
 ST.hard = S({ cam: 'fork', globe: { dim: 0.5, mix: 0.8 }, chain: { on: 1, chain: 'r2', mining: [{ lane: 1, title: 'New rules', note: 'Bitcoin Cash' }, { lane: -1, title: 'Old rules', note: 'Bitcoin' }] } });
 ST.outro = S({ cam: 'outro', globe: { face: 'atl', auto: 1 }, chain: { on: 1, chain: 'f5', mining: [0], detail: 0 } });
-ST.sandbox = S({ cam: 'sandbox', globe: { dim: 0.45, face: 'race' }, chain: { on: 1, chain: 'sb', mining: [0] } });
+ST.sandbox = S({ cam: 'sandbox', globe: { dim: 0.45, face: 'race' }, chain: { on: 1, chain: 'sb', mining: [0], mp: 1 } });
 
 
 
@@ -7544,7 +7902,7 @@ const STEP_RELEASE = {
   play(tl) {
     const wt = globe.waveTime(NODE.asuncion), T = 1.2 + wt * 0.8;
     applyState(merge(this.state, { cam: 'globe', globe: { dim: 1, nodes: 'none', labels: ['mallory', 'exchange'] }, chain: { on: 0, chain: 'k1', mining: [] } }), 1.6);
-    chain.set(merge(this.state.chain, { on: 0, chain: 'k1', mining: [] }), 0.6);         // gone before the camera passes it
+    chain.set(merge(this.state.chain, { on: 0, chain: 'k1', mining: [] }), 0.35);        // gone before the side panel and the camera arrive
     tl.at(1.2, () => globe.wave(NODE.asuncion, 'att', { onReach: chipFor('att') }));
     tl.at(T, () => {                                                    // back to the chain as it was
       flyTo(this.state.cam, 2.4);
@@ -8149,7 +8507,7 @@ const sandbox = {
 
     this.on = true; this.spec = CH.sb.map(b => ({ ...b })); this.fork = null; this.h = 966438; this.busy = false; this.autoLeft = 0;
     this.stale = 0; this.reorgs = 0; this.log = []; this.rng = rng32((Date.now() % 1e6) | 0);
-    if (animate) { chain.setChain(this.spec, 0.8); chain.setFrames([0], 0.8); globe.setAll('none', 0.8); }
+    if (animate) { chain.setChain(this.spec, 0.8); chain.setFrames([0], 0.8); chain.mpReset({ fall: true }); globe.setAll('none', 0.8); }
     this.refresh();
   },
 
@@ -8452,8 +8810,9 @@ const sandbox = {
 // -----------------------------------------------------------
 
 
-// Frame timing, the quality watchdog's accumulators and the current label LOD state.
-let last = performance.now(), fpsAcc = 0, fpsN = 0, labelsFar = false;
+// Frame timing (nextFrame is the ~60 fps governor's next slot), the quality watchdog's
+// accumulators and the current label LOD state.
+let last = performance.now(), nextFrame = 0, fpsAcc = 0, fpsN = 0, labelsFar = false;
 
 
 
@@ -8608,7 +8967,15 @@ function step(dt) {
 
 function frame() {
 
+  // The loop is governed to ~60 fps — Safari's requestAnimationFrame cap, the pace every
+  // timing here was tuned on. On 120 Hz displays Chrome, Edge and Firefox would otherwise
+  // render twice as often, which doubles the camera orbit and makes the whole piece feel
+  // rushed next to Safari. Skipped frames still advance nothing: the clock reads wall time.
   const now = performance.now();
+  if (now < nextFrame - 2) return;
+  nextFrame = Math.max(nextFrame, now) + 1000 / 62;
+
+
   const real = Math.min(1, (now - last) / 1000);
   last = now;
   const n = Math.max(1, Math.ceil(real / 0.05)), dt = real / n;
@@ -8622,7 +8989,7 @@ function frame() {
   if (Math.abs(layout.dx) > 0.5 || Math.abs(layout.dy) > 0.5) camera.setViewOffset(W, H, -layout.dx, -layout.dy, W, H); else camera.clearViewOffset();
 
 
-  if (!camCtl.flying) controls.update();
+  if (!camCtl.flying) controls.update(real);                       // delta keeps the auto-orbit refresh-rate independent
   stars.position.copy(camera.position); sky.position.copy(camera.position);
   applyGroup(globe); applyGroup(chain); applyGroup(front);
 
