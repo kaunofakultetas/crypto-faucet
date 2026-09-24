@@ -98,11 +98,11 @@
                 }
             }
 
-            # VIDEOS
-            redir /served/videos /served/videos/
-            handle /served/videos/* {
-                root * /var/www/videos
-                uri strip_prefix /served/videos
+            # PRESENTATIONS
+            redir /served/presentations /served/presentations/
+            handle /served/presentations/* {
+                root * /var/www/presentations
+                uri strip_prefix /served/presentations
                 file_server browse
                 header {
                     Cache-Control "public, max-age=86400"

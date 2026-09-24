@@ -577,8 +577,8 @@ export default function Navbar() {
         {/* Spacer pushes the right-side buttons to the edge */}
         <div className="ml-auto" />
 
-        <Button component={Link} to="/videos" variant="outlined" sx={WHITE_OUTLINED_SX}>
-          Vaizdo įrašai
+        <Button component={Link} to="/presentations" variant="outlined" sx={WHITE_OUTLINED_SX}>
+          Prezentacijos
         </Button>
 
         <ToolsMenu />

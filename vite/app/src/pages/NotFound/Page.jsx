@@ -34,7 +34,7 @@ export default function NotFoundPage() {
         <div className="flex flex-wrap justify-center gap-2">
           <Button component={Link} to="/" variant="contained">Į faucet&apos;ą</Button>
           <Button component={Link} to="/sha256" variant="outlined">Blokų grandinės simuliatorius</Button>
-          <Button component={Link} to="/videos" variant="outlined">Vaizdo įrašai</Button>
+          <Button component={Link} to="/presentations" variant="outlined">Prezentacijos</Button>
         </div>
       </div>
     </Box>

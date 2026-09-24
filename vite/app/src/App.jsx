@@ -9,7 +9,7 @@
 //                 /faucet/svm/:network, /faucet/move/:network,
 //                 /faucet/utxo/:network
 //    - graph    — /graph/:network (transaction flow)
-//    - teaching — /sha256 (simulator), /videos
+//    - teaching — /sha256 (simulator), /presentations
 //    - dapps    — /dapps-server launcher
 //  "/" redirects into the first faucet family that has
 //  entries configured, EVM preferred — a family the operator
@@ -58,7 +58,7 @@ import FaucetUTXO from '@/pages/Faucet_UTXO/Page';
 import GraphPage from '@/pages/Graph/Page';
 import BlockchainSimulatorPage from '@/pages/BlockchainSimulator/Page';
 import DappsServerPage from '@/pages/DappsServer/Page';
-import VideosPage from '@/pages/Videos/Page';
+import PresentationsPage from '@/pages/Presentations/Page';
 import NotFoundPage from '@/pages/NotFound/Page';
 
 
@@ -138,7 +138,7 @@ function CatalogUnavailable({ onRetry }) {
         <div className="flex flex-wrap justify-center gap-2">
           <Button variant="contained" onClick={() => onRetry()}>Bandyti dar kartą</Button>
           <Button component={Link} to="/sha256" variant="outlined">Blokų grandinės simuliatorius</Button>
-          <Button component={Link} to="/videos" variant="outlined">Vaizdo įrašai</Button>
+          <Button component={Link} to="/presentations" variant="outlined">Prezentacijos</Button>
         </div>
       </div>
     </Box>
@@ -174,7 +174,7 @@ const ROUTE_TITLES = [
   ['/faucet/utxo', 'UTXO čiaupas'],
   ['/graph', 'Transakcijų srautas'],
   ['/sha256', 'Blokų grandinės simuliatorius'],
-  ['/videos', 'Vaizdo įrašai'],
+  ['/presentations', 'Prezentacijos'],
   ['/dapps-server', 'DAPPS serveris'],
 ];
 
@@ -253,7 +253,7 @@ function PageArea() {
 
         {/* Teaching pages */}
         <Route path="sha256" element={<BlockchainSimulatorPage />} />
-        <Route path="videos" element={<VideosPage />} />
+        <Route path="presentations" element={<PresentationsPage />} />
 
         {/* Dapps server launcher */}
         <Route path="dapps-server" element={<DappsServerPage />} />
