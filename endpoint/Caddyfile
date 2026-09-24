@@ -44,6 +44,9 @@
         }
 
 
+
+
+
         ##### UNAUTHENTICATED: Etherpad Notes
         redir /etherpad /etherpad/
         handle /etherpad/* {
@@ -56,7 +59,12 @@
 
 
 
-        ############ APP PASSWORD 1 ############
+
+
+
+        # ------------------------------------------------------------
+        #              Protected behind: APP_PASSWORD_1
+        # ------------------------------------------------------------
         @hasCookie1 header_regexp cookieCheck Cookie "(;|^|\ )app-password={$APP_PASSWORD_1}(;|$|\ )"
         handle @hasCookie1 {
 
@@ -109,22 +117,62 @@
                 }
             }
         }
-        ########################################
+
+        # ------------------------------------------------------------
+        # ------------------------------------------------------------
+        # ------------------------------------------------------------
 
 
 
 
-        ######## UNAUTHENTICATED ROUTES ########
-        handle /* {
-            header {
-                Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
-                Pragma "no-cache"
-            }
+
+
+
+
+
+
+        # ------------------------------------------------------------
+        #                   UNAUTHENTICATED ROUTES
+        # ------------------------------------------------------------
+        #
+        # The login SPA and the files it needs to render — the only
+        # paths served without the cookie: the page itself, its
+        # js/css bundles, the VU logo, the system-name endpoint and
+        # the favicon (no-store caching comes from the global
+        # header block above)
+        # ------------------------------------------------------------
+
+        @loginApp path /login /assets/* /img/* /app/title /favicon.ico
+        handle @loginApp {
             reverse_proxy faucet-login:80 {
                 header_up X-Forwarded-For {http.request.header.X-Forwarded-For}
             }
         }
-        ########################################
+
+
+
+        # Everything else bounces to the login page carrying the
+        # wanted URL ({uri} = path+query); after a successful login
+        # the login app sends the user back there. Caddy cannot
+        # url-encode, so a wanted URL holding '&' keeps only its
+        # first query parameter through the bounce — fine for the
+        # faucet's URLs.
+        # =========================================================
+        handle /* {
+
+            # the '*' matcher is required: a target starting with
+            # '/' would otherwise parse as a path matcher
+            # ===================================================
+            redir * /login?redirect={uri}
+
+        }
+
+        # ------------------------------------------------------------
+        # ------------------------------------------------------------
+        # ------------------------------------------------------------
+
+
+
 
 
     }
