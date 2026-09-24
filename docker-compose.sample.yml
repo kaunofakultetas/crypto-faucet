@@ -50,7 +50,7 @@ services:
   # ------------------------------------------------------------
   faucet-login:
     container_name: faucet-login
-    image: vuknf/simple-login-page:20260401
+    image: vuknf/simple-login-page:20260924
     user: 1000:1000
     read_only: true
     environment:
