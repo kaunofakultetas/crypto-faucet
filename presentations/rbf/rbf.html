@@ -671,10 +671,11 @@ body.nohud .top, body.nohud .bottom, body.nohud .narr, body.nohud .side, body.no
   .f-row { font-size: 13px; gap: 6px; } .f-row .res { font-size: 15px; }
 }
 
-/* Users who prefer reduced motion get instant transitions; the script also shortens camera flights. */
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
-}
+/* prefers-reduced-motion deliberately changes NO durations here: Windows machines with
+   "animation effects" switched off (and remote-desktop sessions) report it in every
+   browser, and instant transitions plus shortened flights made the whole piece race on
+   those boxes. The script instead calms the continuous ambient motion only: no auto-orbit,
+   slower globe spin, rarer gossip pulses. */
 </style>
 </head>
 <body>
@@ -1051,7 +1052,9 @@ const E = {
 const COL = { cyan: 0x45aaf2, gold: 0xf7b731, green: 0x26de81, red: 0xfc5c65, royal: 0x4a6cf7, violet: 0xa55eea, ember: 0xff8c42, teal: 0x2ed3a0, alice: 0x7b94ff };
 const CSSV = { cyan: 'var(--cyan)', gold: 'var(--gold)', green: 'var(--green)', red: 'var(--red)', royal: 'var(--royal)', violet: 'var(--violet)', teal: 'var(--teal)', ember: 'var(--ember)' };
 
-// True when the visitor asked the OS for reduced motion: shorter flights, no auto-rotation.
+// Reduced-motion preference. It only tames the continuous ambient motion (no auto-orbit,
+// slower globe spin, rarer gossip pulses) — never the pacing: Windows reports it in every
+// browser when "animation effects" is off, and faster flights or instant fades raced there.
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 
@@ -6042,7 +6045,7 @@ function flyTo(name, dur = 2.2) {
   mid.y += Math.min(9, p0.distanceTo(p1) * 0.16);
   controls.enabled = false;
   camCtl.flying = Tw.num(0, 1, {
-    dur: REDUCED ? dur * 0.35 : dur, ease: E.io3,
+    dur, ease: E.io3,
     onUpdate: v => {
       const a = p0.clone().lerp(mid, v), b = mid.clone().lerp(p1, v);
       camera.position.copy(a.lerp(b, v));
@@ -8534,8 +8537,9 @@ const sandbox = {
 // -----------------------------------------------------------
 
 
-// Frame timing, the quality watchdog's accumulators and the current label LOD state.
-let last = performance.now(), fpsAcc = 0, fpsN = 0, labelsFar = false;
+// Frame timing (nextFrame is the ~60 fps governor's next slot), the quality watchdog's
+// accumulators and the current label LOD state.
+let last = performance.now(), nextFrame = 0, fpsAcc = 0, fpsN = 0, labelsFar = false;
 
 
 
@@ -8681,7 +8685,15 @@ function step(dt) {
 
 function frame() {
 
+  // The loop is governed to ~60 fps — Safari's requestAnimationFrame cap, the pace every
+  // timing here was tuned on. On 120 Hz displays Chrome, Edge and Firefox would otherwise
+  // render twice as often, which doubles the camera orbit and makes the whole piece feel
+  // rushed next to Safari. Skipped frames still advance nothing: the clock reads wall time.
   const now = performance.now();
+  if (now < nextFrame - 2) return;
+  nextFrame = Math.max(nextFrame, now) + 1000 / 62;
+
+
   const real = Math.min(1, (now - last) / 1000);
   last = now;
   const n = Math.max(1, Math.ceil(real / 0.05)), dt = real / n;
@@ -8695,7 +8707,7 @@ function frame() {
   if (Math.abs(layout.dx) > 0.5 || Math.abs(layout.dy) > 0.5) camera.setViewOffset(W, H, -layout.dx, -layout.dy, W, H); else camera.clearViewOffset();
 
 
-  if (!camCtl.flying) controls.update();
+  if (!camCtl.flying) controls.update(real);                       // delta keeps the auto-orbit refresh-rate independent
   stars.position.copy(camera.position); sky.position.copy(camera.position);
   applyGroup(globe); applyGroup(rail); applyGroup(front);
 
