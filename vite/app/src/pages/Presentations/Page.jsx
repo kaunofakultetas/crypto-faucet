@@ -57,7 +57,7 @@ const PRESENTATIONS = [
       + 'mechanizmas buvo sukurtas tam, kad kriptovaliutos naudotojai galėtų atnaujinti užstrigusias transakcijas '
       + 'ir pakelti kasėjams mokamą transakcijos mokestį, taip paspartinant transakcijos patvirtinimą '
       + 'blokų grandinėje. Interaktyvi 3D simuliacija žingsnis po žingsnio parodo mokesčių rinką, '
-      + 'mempool\'ą, transakcijos pakeitimą ir kaip apsisaugoti nuo dvigubo apmokėjimo.',
+      + 'mempool\'ą, transakcijos pakeitimą ir kaip apsisaugoti nuo dvigubo apmokėjimo atakos.',
     href: '/served/presentations/rbf/rbf.html',
     thumbnail: '/served/presentations/rbf/Thumbnail.png',
     buttons: [
@@ -83,6 +83,14 @@ const PRESENTATIONS = [
       + 'Interaktyvi 3D simuliacija parodo skilimą, ilgiausios grandinės taisyklę, '
       + 'pasenusius (stale) blokus, reorganizacijas ir 51% ataką.',
     href: '/served/presentations/fork/fork.html',
+    thumbnail: '/served/presentations/fork/Thumbnail.png',
+    buttons: [
+      { 
+        label: 'Prezentacija', 
+        href: '/served/presentations/fork/fork.html',
+        variant: "contained",
+      },
+    ],
   },
 ];
 
