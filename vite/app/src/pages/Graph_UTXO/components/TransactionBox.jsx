@@ -16,12 +16,13 @@
 //  block's reward.
 //
 //  Output rows name the recipient over the amount (an output
-//  with no address by what its script is — OP_RETURN data);
-//  change (back to one of the sender's own addresses) is
-//  marked ↩. The row's end tells the coin's state: a gold coin
-//  while nobody has spent it, a dashed ring when nobody can
-//  say (its address's history was never read), nothing for
-//  data, and the plain port an edge leaves from once spent.
+//  with no address by what its script is — OP_RETURN data).
+//  Change carries no mark on the drawing — only the row's
+//  tooltip says it went back to the sender. The row's end
+//  tells the coin's state: a gold coin while nobody has spent
+//  it, a dashed ring when nobody can say (its address's
+//  history was never read), nothing for data, and the plain
+//  port an edge leaves from once spent.
 //  The faucet's own transactions carry a burgundy band, a box
 //  still in the mempool a dashed amber frame. The box is a
 //  button: a click (or Enter / Space when it has focus) opens
@@ -39,7 +40,7 @@
 
 import { COLORS, NODE_CONFIG } from '../constants';
 import { rowCenterY, rowTop, transactionHeight } from '../hooks/useNodePositions';
-import { formatAmount, isChange, nameOf, senderOf, shortTxid, spendStateOf } from '../hooks/useTransactionGraph';
+import { formatAmount, groupThousands, isChange, nameOf, senderOf, shortTxid, spendStateOf } from '../hooks/useTransactionGraph';
 
 
 // Room between a row's text and the box edge
@@ -96,8 +97,8 @@ function inputLabels(input, sender, names, faucetAddress, unit) {
 // outputLabels
 // -----------------------------------------------------------
 //
-// An output row's text: the recipient's name (↩ in front when
-// the output is change) over the amount.
+// An output row's text: the recipient's name over the amount;
+// the tooltip adds "grąža" when the output is change.
 //
 // Used by:
 //   - TransactionBox (below) — one per output
@@ -113,7 +114,7 @@ function outputLabels(output, change, state, names, faucetAddress, unit) {
 
 
   return {
-    primary: change ? `↩ ${name}` : name,
+    primary: name,
     secondary: amount,
     fill: output.address && output.address === faucetAddress ? COLORS.BRAND : COLORS.INK,
     tooltip,
@@ -233,7 +234,7 @@ export default function TransactionBox({ id, tx, x, y, names, faucetAddress, uni
 
   // A coinbase has no fee to show; "?" when an input's amount
   // is not known
-  let feeText = tx.fee === null ? 'mokestis ?' : `mokestis ${tx.fee.toLocaleString('lt-LT')} sat`;
+  let feeText = tx.fee === null ? 'mokestis ?' : `mokestis ${groupThousands(tx.fee)} sat`;
   if (tx.coinbase) feeText = '';
 
   // The frame: grey when mined, amber while waiting — brand

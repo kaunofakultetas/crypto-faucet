@@ -64,7 +64,7 @@ export const LAYOUT_CONFIG = {
 // -----------------------------------------------------------
 
 export const NODE_CONFIG = {
-  WIDTH: 280,            // each half fits a bold "749.8999859 tBTC4"
+  WIDTH: 320,            // each half fits a bold "66'691.188'146'36 tLTC4" — the faucet's change on ltc4
   BAND_HEIGHT: 28,       // the sender + fee band
   TXID_HEIGHT: 18,       // the short txid line under the band
   ROW_HEIGHT: 36,        // one input or output: two text lines
@@ -111,11 +111,14 @@ export const ZOOM_CONFIG = {
 // -----------------------------------------------------------
 //
 // How often the day's graph is asked for again, in ms: fast
-// while the backend says a crawl is filling its cache
-// (`updating`), so its transactions land as they come; steady
-// on a live window (today — new payouts, blocks mined); a past
-// day, once its crawl has landed, is history and not asked
-// again.
+// while the backend says the day's first crawl is still
+// filling its cache (`updating`), so its transactions land as
+// they come; steady on a live window (today) — the backend
+// learns of a new payout, a student's transaction or a mined
+// block within seconds (it watches the addresses), so this is
+// most of the wait; a past day, once its crawl has landed, is
+// history and not asked again. Each ask is read from the
+// backend's cache — no Electrum call behind it.
 //
 // Used by:
 //   - useTransactionGraph.js — the graph query's refetchInterval
@@ -123,7 +126,7 @@ export const ZOOM_CONFIG = {
 
 export const POLL_CONFIG = {
   UPDATING_MS: 3_000,
-  LIVE_MS: 15_000,
+  LIVE_MS: 5_000,
 };
 
 

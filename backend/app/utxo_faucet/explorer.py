@@ -30,18 +30,30 @@
 #  re-read at most every ADDRESS_REFRESH_INTERVAL_S, and a past
 #  window reads only addresses never read before. A request
 #  never waits on ElectrumX: it answers from SQLite, with
-#  `updating` telling the page a crawl is under way. The
-#  explorer keeps its OWN Electrum connection per network, so a
-#  crawl never holds up a payout on the faucet's.
+#  `updating` telling the page the window's first crawl has
+#  not landed yet. The explorer keeps its OWN Electrum
+#  connection per network, so a crawl never holds up a payout
+#  on the faucet's.
+#
+#  A live window does not wait for those intervals to see news:
+#  every address its crawl followed is WATCHED (electrum_
+#  watcher.py — the server pushes a notification when an
+#  address' history changes), and a change marks that address
+#  due and crawls the window at once, while somebody has it on
+#  screen. A payout or a student's transaction reaches the
+#  graph in seconds, and watching costs the server next to
+#  nothing — re-reading every address every few seconds would
+#  get this IP throttled, the faucet's payouts included.
 #
 #  What never changes is fetched once — decoded transactions,
 #  block times. What moves is re-read: histories. A new block
 #  takes a transaction out of the mempool, a reorg moves it to
 #  another height, and one replaced or evicted drops out of
 #  every history — its rows are gone, and it is no longer shown.
-#  Only read-only calls of Electrum protocol 1.4, and no
-#  subscriptions: ElectrumClient is strictly request/response
-#  and treats an unsolicited notification as a broken session.
+#  Only read-only calls of Electrum protocol 1.4 on the
+#  explorer's own connection — ElectrumClient is strictly
+#  request/response and treats an unsolicited notification as
+#  a broken session, so notifications arrive on the watcher's.
 #
 #  Used by:
 #    - utxo_routes.py — the graph endpoints
@@ -59,6 +71,7 @@ from zoneinfo import ZoneInfo
 from embit.transaction import Transaction
 
 from .electrum_client import ElectrumClient
+from .electrum_watcher import ElectrumWatcher
 from .utxo_faucet import _electrum_scripthash
 from ..database.db import get_db_connection
 
@@ -90,6 +103,11 @@ HISTORICAL_RECRAWL_S = 600
 
 # A window reaching into the last hour is live (the EVM rule)
 LIVE_WINDOW_S = 3600
+
+# A watched change crawls the live window at once only while
+# somebody asked for it this recently — nobody watching, the
+# next request's crawl picks the change up
+KICK_VIEWED_S = 600
 
 # The protocol's cap on one blockchain.block.headers call, and
 # the gap between needed heights still worth bridging with one
@@ -348,6 +366,7 @@ def _ordered(transactions, root):
 #            set_address_name
 #   crawl  — _maybe_start_crawl, _crawl, _crawl_window,
 #            _refresh_address, _ensure_block_times
+#   watch  — _watch, _on_change, _kick
 #   fetch  — _ensure_decoded, _ensure_parents,
 #            _store_transaction, _locate
 #   read   — _window_txids, _addresses_in, _window_payload,
@@ -386,12 +405,21 @@ class UtxoGraphExplorer:
             for key, config in self.network_configs.items()
         }
 
-        # Guards the two crawl records below: which networks are
-        # crawling right now, and when each (network, window) was
-        # last crawled
+        # Guards the crawl and watch records below: which networks
+        # are crawling right now, when each (network, window) was
+        # last crawled, which windows have had a crawl land, the
+        # live window of each network last asked for (from, to,
+        # when), which networks a change wants crawled at once,
+        # and the watchers with the addresses they follow
+        # (scripthash → address)
         self._lock = threading.Lock()
         self._crawling = set()
         self._last_crawl = {}
+        self._completed = set()
+        self._live = {}
+        self._nudged = set()
+        self._watchers = {}
+        self._watched = {}
 
         # txids the server answered with something embit cannot
         # decode (a Litecoin MWEB transaction, say) — not asked
@@ -428,11 +456,13 @@ class UtxoGraphExplorer:
     #
     # One window of the graph — [from_ts, to_ts), unix seconds,
     # computed by the page from the student's local day. Starts
-    # a background crawl when one is due, then answers from
-    # SQLite right away: the faucet's address, whether the window
-    # is live, whether a crawl is running (`updating`), the
-    # window's blocks and transactions, how many of them cannot
-    # be shown yet (`missing`), and the names.
+    # a background crawl when one is due (a live window is
+    # remembered as the one on screen, for _kick), then answers
+    # from SQLite right away: the faucet's address, whether the
+    # window is live, whether its first crawl is still to land
+    # (`updating` — the later, routine ones are not announced),
+    # the window's blocks and transactions, how many of them
+    # cannot be shown yet (`missing`), and the names.
     #
     # Used by:
     #   - utxo_routes.py — GET /api/utxo/<network>/graph
@@ -445,13 +475,16 @@ class UtxoGraphExplorer:
             return {"error": "Reikalingas teisingas laiko intervalas (from < to)"}, 400
 
         live = to_ts > int(time.time()) - LIVE_WINDOW_S
+        if live:
+            with self._lock:
+                self._live[network] = (from_ts, to_ts, time.time())
         self._maybe_start_crawl(network, from_ts, to_ts, live)
 
         with get_db_connection() as conn:
             payload = self._window_payload(conn, network, from_ts, to_ts, live)
 
         with self._lock:
-            payload['updating'] = network in self._crawling
+            payload['updating'] = (network, from_ts, to_ts) not in self._completed
         return payload, 200
 
 
@@ -525,7 +558,7 @@ class UtxoGraphExplorer:
 
         # STEP 1: make sure it is decoded, its inputs resolved and
         # its status known — failures fall through to the cache
-        # =========================================================
+        # ========================================================
         budget = {'fetches': MAX_TX_FETCHES_PER_REQUEST}
         try:
             if self._ensure_decoded(network, txid, budget):
@@ -597,12 +630,15 @@ class UtxoGraphExplorer:
     # Start a background crawl of the window when one is due: no
     # crawl of this network is running, and this window was not
     # crawled within CRAWL_INTERVAL_S (live) or
-    # HISTORICAL_RECRAWL_S (past). Both records are claimed under
-    # the lock BEFORE the thread starts, so a lecture hall opening
-    # the page at once starts one crawl.
+    # HISTORICAL_RECRAWL_S (past) — or, for a live window, a
+    # watched change asked for one (the network is nudged),
+    # which skips the interval. The records are claimed under
+    # the lock BEFORE the thread starts, so a lecture hall
+    # opening the page at once starts one crawl.
     #
     # Used by:
     #   - get_graph (above)
+    #   - _kick (below) — a watched change
     ############################################################
 
     def _maybe_start_crawl(self, network, from_ts, to_ts, live):
@@ -611,9 +647,12 @@ class UtxoGraphExplorer:
         now = time.time()
 
         with self._lock:
-            if network in self._crawling or now - self._last_crawl.get(key, 0) < interval:
+            nudged = live and network in self._nudged
+            if network in self._crawling or (not nudged and now - self._last_crawl.get(key, 0) < interval):
                 return
             self._crawling.add(network)
+            if live:
+                self._nudged.discard(network)
             self._last_crawl[key] = now
 
         threading.Thread(
@@ -632,10 +671,12 @@ class UtxoGraphExplorer:
     # _crawl
     ############################################################
     #
-    # The crawl thread's body: the crawl itself, a failure logged
-    # (the cache keeps serving, the next due request retries),
-    # and the network released for the next crawl whatever
-    # happened.
+    # The crawl thread's body: the crawl itself — a live one then
+    # watches every address it followed — a failure logged (the
+    # cache keeps serving, the next due request retries), and,
+    # whatever happened, the window marked as crawled and the
+    # network released. A change that came in during the crawl
+    # starts the next one right away.
     #
     # Used by:
     #   - _maybe_start_crawl (above) — as the thread target
@@ -643,12 +684,18 @@ class UtxoGraphExplorer:
 
     def _crawl(self, network, from_ts, to_ts, live):
         try:
-            self._crawl_window(network, from_ts, to_ts, live)
+            followed = self._crawl_window(network, from_ts, to_ts, live)
+            if live:
+                self._watch(network, followed)
         except Exception:
             logging.exception(f"[UTXO graph] {network} crawl failed; the cache keeps serving")
         finally:
             with self._lock:
                 self._crawling.discard(network)
+                self._completed.add((network, from_ts, to_ts))
+                again = network in self._nudged
+            if again:
+                self._kick(network)
 
 
 
@@ -664,7 +711,9 @@ class UtxoGraphExplorer:
     # brought up to date, its window transactions fetched with
     # their parents, and — within MAX_DEPTH — every other address
     # in them queued. Stops early when the fetch budget runs out;
-    # the next crawl continues where this one stopped.
+    # the next crawl continues where this one stopped. Returns
+    # the addresses it followed (read or up to date, not hubs) —
+    # what a live window watches.
     #
     # Used by:
     #   - _crawl (above)
@@ -675,6 +724,7 @@ class UtxoGraphExplorer:
         budget = {'fetches': MAX_TX_FETCHES_PER_CRAWL}
         queue = deque([(root, 0)])
         seen = {root}
+        followed = []
 
         while queue:
             address, depth = queue.popleft()
@@ -682,21 +732,22 @@ class UtxoGraphExplorer:
 
             # STEP 1: the address' history, re-read when due — a hub
             # or an address this network cannot read ends here
-            # ========================================================
+            # ======================================================
             if not self._refresh_address(network, address, live, trusted=address == root):
                 continue
+            followed.append(address)
 
 
             # STEP 2: its transactions inside the window, decoded,
             # with the parents their inputs spend
-            # =====================================================
+            # ====================================================
             with get_db_connection() as conn:
                 txids = self._window_txids(conn, network, address, from_ts, to_ts, live)
             for txid in txids:
                 if not self._ensure_decoded(network, txid, budget):
-                    return
+                    return followed
                 if not self._ensure_parents(network, txid, budget):
-                    return
+                    return followed
 
 
             # STEP 3: every other address in them, one hop further
@@ -710,6 +761,8 @@ class UtxoGraphExplorer:
                     break
                 seen.add(other)
                 queue.append((other, depth + 1))
+
+        return followed
 
 
 
@@ -866,6 +919,109 @@ class UtxoGraphExplorer:
                 INSERT OR REPLACE INTO GraphUtxo_Blocks (network, height, time)
                 VALUES (?, ?, ?)
             ''', rows)
+
+
+
+
+
+
+    ############################################################
+    # _watch
+    ############################################################
+    #
+    # Follow a live window's addresses: each one's scripthash to
+    # the network's watcher (started with the first live crawl;
+    # its own Electrum connection), and remembered for
+    # _on_change to map a notification back to its address. An
+    # address the network cannot read is left out.
+    #
+    # Used by:
+    #   - _crawl (above) — after every live crawl
+    ############################################################
+
+    def _watch(self, network, addresses):
+        dialect = self.faucet.network_dialect(network)
+        hashes = {}
+        for address in addresses:
+            try:
+                hashes[_electrum_scripthash(dialect.recipient_script(address))] = address
+            except ValueError:
+                continue
+
+        with self._lock:
+            self._watched.setdefault(network, {}).update(hashes)
+            watcher = self._watchers.get(network)
+            if watcher is None:
+                endpoint = self.network_configs[network].get('faucet', {}).get('electrum_server', '')
+                watcher = self._watchers[network] = ElectrumWatcher(
+                    endpoint,
+                    lambda scripthash: self._on_change(network, scripthash),
+                    label=f'{network}-watch',
+                )
+        watcher.watch(hashes)
+
+
+
+
+
+
+    ############################################################
+    # _on_change
+    ############################################################
+    #
+    # A watched address' history changed (a new transaction, one
+    # confirmed, a reorg): mark it due — last_refresh 0 is long
+    # ago for a live window and still "read" for everything
+    # else — nudge the network and crawl the live window at once.
+    # Runs on the watcher's thread.
+    #
+    # Used by:
+    #   - _watch (above) — as the watcher's on_change
+    ############################################################
+
+    def _on_change(self, network, scripthash):
+        with self._lock:
+            address = self._watched.get(network, {}).get(scripthash)
+        if address is None:
+            return
+
+        with get_db_connection() as conn:
+            conn.execute('''
+                UPDATE GraphUtxo_Addresses SET last_refresh = 0 WHERE network = ? AND address = ?
+            ''', [network, address])
+        with self._lock:
+            self._nudged.add(network)
+        self._kick(network)
+
+
+
+
+
+
+    ############################################################
+    # _kick
+    ############################################################
+    #
+    # Crawl a nudged network's live window now — the one last
+    # asked for, while it is still live and somebody asked for
+    # it within KICK_VIEWED_S. A crawl already running leaves
+    # the nudge in place, and _crawl kicks again when it ends.
+    #
+    # Used by:
+    #   - _on_change (above)
+    #   - _crawl (above) — a change that came in mid-crawl
+    ############################################################
+
+    def _kick(self, network):
+        with self._lock:
+            window = self._live.get(network)
+        if window is None:
+            return
+
+        from_ts, to_ts, asked = window
+        now = time.time()
+        if to_ts > now - LIVE_WINDOW_S and now - asked < KICK_VIEWED_S:
+            self._maybe_start_crawl(network, from_ts, to_ts, True)
 
 
 

@@ -2,7 +2,7 @@
 #  [*] UTXO transaction graph tests
 #
 #  Offline checks of the UTXO graph's explorer and endpoints,
-#  in five parts:
+#  in six parts:
 #
 #    dialects — an output script back to its address on every
 #               address family (bech32, bech32m, base58), and
@@ -16,15 +16,19 @@
 #               transactions, the fetch budget, a refused
 #               transaction and a broken connection
 #    serve    — the request side: validation, one background
-#               crawl per interval, the day list in the
-#               browser's zone, single transactions (fetched and
-#               located when missing, coinbases), names
+#               crawl per interval and `updating` until the
+#               first lands, the day list in the browser's
+#               zone, single transactions (fetched and located
+#               when missing, coinbases), names
+#    watch    — what a live crawl watches, and a notification
+#               crawling the window at once
 #    routes   — the four endpoints reach the explorer
 #
 #  Everything runs against a fake ElectrumX serving a small
 #  sample chain built with embit (real transactions, real
 #  txids) and a throwaway SQLite file — no network, no real
-#  database.
+#  database; the watcher is a fake too (its own tests are in
+#  test_electrum_watcher.py).
 ############################################################
 
 
@@ -224,6 +228,7 @@ class GraphWorld:
         t5 = make_tx([(t3.txid().hex(), 0)], [(hub, CHUNK // 2), (egle, CHUNK // 2 - 900)])
         self.tx = {'t0': t0, 't1': t1, 't2': t2, 't3': t3, 't4': t4, 't5': t5}
         self.id = {name: tx.txid().hex() for name, tx in self.tx.items()}
+        self.script = {'lecturer': lecturer, 'faucet': faucet_script, 'jonas': jonas, 'egle': egle, 'hub': hub}
 
 
         self.electrum = FakeGraphElectrum()
@@ -251,16 +256,68 @@ class GraphWorld:
 
 
 ############################################################
+# FakeWatcher
+############################################################
+#
+# Stands in for ElectrumWatcher in the explorer tests: keeps
+# what it was asked to watch and the explorer's on_change, so
+# a test can play a notification — no connection, no thread.
+#
+# Used by:
+#   - ExplorerTestCase (below)
+############################################################
+
+class FakeWatcher:
+
+    def __init__(self, endpoint, on_change, label=''):
+        self.endpoint = endpoint
+        self.on_change = on_change
+        self.watched = set()
+
+    def watch(self, scripthashes):
+        self.watched |= set(scripthashes)
+
+
+
+
+############################################################
+# RecordingThread
+############################################################
+#
+# Stands in for threading.Thread where a test needs to see
+# which crawls would start without starting them: every
+# start() is recorded with its args in `started`.
+#
+# Used by:
+#   - ServeTests, WatchTests (below)
+############################################################
+
+def recording_threads(started):
+
+    class RecordingThread:
+        def __init__(self, target, args, name, daemon):
+            self.args = args
+
+        def start(self):
+            started.append(self.args)
+
+    return SimpleNamespace(Thread=RecordingThread)
+
+
+
+
+############################################################
 # ExplorerTestCase
 ############################################################
 #
 # The shared fixture: a throwaway SQLite file with the full
 # schema, the explorer's database pointed at it, a UTXOFaucet
-# with the test key, and the explorer's btc4 connection
-# replaced by the sample chain's fake server.
+# with the test key, the explorer's btc4 connection replaced
+# by the sample chain's fake server, and its watchers by
+# FakeWatcher.
 #
 # Used by:
-#   - CrawlTests, ServeTests (below)
+#   - CrawlTests, ServeTests, WatchTests (below)
 ############################################################
 
 class ExplorerTestCase(unittest.TestCase):
@@ -272,6 +329,8 @@ class ExplorerTestCase(unittest.TestCase):
             init_db_tables()
         self.db_patch = patch.object(explorer_module, 'get_db_connection', lambda: get_db_connection(self.db_path))
         self.db_patch.start()
+        self.watcher_patch = patch.object(explorer_module, 'ElectrumWatcher', FakeWatcher)
+        self.watcher_patch.start()
 
         self.faucet = helpers.make_utxo_faucet()
         self.explorer = UtxoGraphExplorer(self.faucet)
@@ -279,6 +338,7 @@ class ExplorerTestCase(unittest.TestCase):
         self.explorer._clients['btc4'] = self.world.electrum
 
     def tearDown(self):
+        self.watcher_patch.stop()
         self.db_patch.stop()
         for suffix in ('', '-wal', '-shm'):
             if os.path.exists(self.db_path + suffix):
@@ -621,23 +681,26 @@ class ServeTests(ExplorerTestCase):
         self.assertEqual(self.explorer.set_address_name('nope', self.world.jonas, 'Jonas')[1], 400)
         self.assertEqual(self.explorer.set_address_name('btc4', '', 'Jonas')[1], 400)
 
-    def test_one_background_crawl_per_interval(self):
+    def test_one_background_crawl_per_interval_updating_until_the_first_lands(self):
         started = []
-
-        class RecordingThread:
-            def __init__(self, target, args, name, daemon):
-                self.args = args
-
-            def start(self):
-                started.append(self.args)
-
-        with patch.object(explorer_module, 'threading', SimpleNamespace(Thread=RecordingThread)):
+        with patch.object(explorer_module, 'threading', recording_threads(started)):
             self.assertTrue(self.explorer.get_graph('btc4', *TODAY)[0]['updating'])
-            self.explorer.get_graph('btc4', *TODAY)                 # still crawling
-            self.explorer._crawling.discard('btc4')
-            self.assertFalse(self.explorer.get_graph('btc4', *TODAY)[0]['updating'])   # crawled just now
+            self.assertTrue(self.explorer.get_graph('btc4', *TODAY)[0]['updating'])   # still crawling
+            self.explorer._crawl(*started[0])                                          # it lands
+            payload = self.explorer.get_graph('btc4', *TODAY)[0]                      # crawled just now
 
         self.assertEqual(started, [('btc4', *TODAY, True)])
+        self.assertFalse(payload['updating'])
+        self.assertEqual(len(payload['transactions']), 4)
+
+    def test_a_failed_first_crawl_still_ends_updating(self):
+        # The page must not poll fast forever over a dead server
+        self.world.electrum.broken = True
+        started = []
+        with patch.object(explorer_module, 'threading', recording_threads(started)):
+            self.explorer.get_graph('btc4', *TODAY)
+            self.explorer._crawl(*started[0])
+            self.assertFalse(self.explorer.get_graph('btc4', *TODAY)[0]['updating'])
 
     def test_days_are_bucketed_in_the_browsers_zone(self):
         # t1's block: 23:30 UTC on March 1st, 01:30 in Vilnius
@@ -699,6 +762,91 @@ class ServeTests(ExplorerTestCase):
         # An empty name clears it
         self.explorer.set_address_name('btc4', self.world.jonas, '')
         self.assertNotIn(self.world.jonas, self.graph()['names'])
+
+
+
+
+############################################################
+# WatchTests
+############################################################
+#
+# Watching a live window: what a crawl hands the watcher, and
+# what a notification does — the address due, the window
+# crawled at once, the news in the graph without waiting out
+# the refresh interval.
+############################################################
+
+class WatchTests(ExplorerTestCase):
+
+    def first_live_crawl(self, started):
+        # A request (the live window is on screen), then its crawl
+        with patch.object(explorer_module, 'threading', recording_threads(started)):
+            self.explorer.get_graph('btc4', *TODAY)
+        self.explorer._crawl(*started[0])
+        return self.explorer._watchers['btc4']
+
+    def test_a_live_crawl_watches_what_it_followed_but_no_hub(self):
+        watcher = self.first_live_crawl([])
+        self.assertEqual(watcher.watched, {self.world.hash[name] for name in ('faucet', 'jonas', 'egle')})
+        self.assertEqual(watcher.endpoint, '127.0.0.1:9999')
+
+    def test_a_past_crawl_watches_nothing(self):
+        self.explorer._crawl('btc4', *PAST, False)
+        self.assertEqual(self.explorer._watchers, {})
+
+    def test_a_change_crawls_the_live_window_at_once(self):
+        started = []
+        watcher = self.first_live_crawl(started)
+        with patch.object(explorer_module, 'threading', recording_threads(started)):
+            self.explorer.get_graph('btc4', *TODAY)                   # inside the interval: no crawl
+            watcher.on_change(self.world.hash['jonas'])               # a change: at once
+
+        self.assertEqual(started, [('btc4', *TODAY, True)] * 2)
+        self.assertEqual(self.address_row(self.world.jonas)['last_refresh'], 0)
+
+    def test_a_change_nobody_is_looking_at_waits(self):
+        started = []
+        watcher = self.first_live_crawl(started)
+        self.explorer._live['btc4'] = (*TODAY, time.time() - explorer_module.KICK_VIEWED_S)
+        with patch.object(explorer_module, 'threading', recording_threads(started)):
+            watcher.on_change(self.world.hash['jonas'])
+
+        self.assertEqual(len(started), 1)
+        self.assertIn('btc4', self.explorer._nudged)
+
+    def test_a_watched_change_reaches_the_graph_without_waiting_for_the_interval(self):
+        # Jonas pays Petras from the change t4 left him
+        started = []
+        watcher = self.first_live_crawl(started)
+        petras = p2wpkh(0x23)
+        t6 = make_tx([(self.world.id['t4'], 1)], [(petras, CHUNK // 4), (self.world.script['jonas'], CHUNK // 4 - 1800)])
+        t6_id = t6.txid().hex()
+        self.world.electrum.raw[t6_id] = t6.serialize().hex()
+        self.world.history('jonas').append({'tx_hash': t6_id, 'height': 0})
+        self.world.electrum.histories[_electrum_scripthash(petras)] = [{'tx_hash': t6_id, 'height': 0}]
+
+        # A routine crawl reads nobody again within the interval
+        self.explorer._crawl('btc4', *TODAY, True)
+        self.assertNotIn(t6_id, self.by_id(self.graph()))
+
+        with patch.object(explorer_module, 'threading', recording_threads(started)):
+            watcher.on_change(self.world.hash['jonas'])
+        self.explorer._crawl(*started[-1])
+        payload = self.graph()
+
+        self.assertIn(t6_id, self.by_id(payload))
+        self.assertEqual(self.by_id(payload)[self.world.id['t4']]['outputs'][1]['spent_by'], {'txid': t6_id, 'vin': 0})
+        self.assertIn(_electrum_scripthash(petras), watcher.watched)
+
+    def test_a_change_during_a_crawl_crawls_again_when_it_ends(self):
+        started = []
+        watcher = self.first_live_crawl(started)
+        with patch.object(explorer_module, 'threading', recording_threads(started)):
+            self.explorer._crawling.add('btc4')                       # a crawl is running
+            watcher.on_change(self.world.hash['egle'])
+            self.assertEqual(len(started), 1)
+            self.explorer._crawl('btc4', *TODAY, True)                # it ends
+        self.assertEqual(len(started), 2)
 
 
 

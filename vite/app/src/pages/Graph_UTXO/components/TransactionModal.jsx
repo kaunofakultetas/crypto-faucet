@@ -64,7 +64,9 @@ import TollIcon from '@mui/icons-material/Toll';
 import UniversalModal from '@/components/UniversalModal';
 
 import { COLORS, NAME_MAX_LENGTH } from '../constants';
-import { formatAmount, isChange, nameOf, senderOf, shortTxid, spendStateOf, useTransaction } from '../hooks/useTransactionGraph';
+import {
+  formatAmount, groupThousands, isChange, nameOf, senderOf, shortTxid, spendStateOf, useTransaction,
+} from '../hooks/useTransactionGraph';
 
 
 // Avatar colours for named people — picked by a hash of the
@@ -544,7 +546,7 @@ function FeeEquation({ tx, unit }) {
 
       {rate && (
         <p className="mt-3 text-center text-xs text-slate-500">
-          Mokesčio tarifas: {fee.toLocaleString('lt-LT')} sat ÷ {tx.vsize} vB = <b className="text-slate-700">{rate} sat/vB</b>.
+          Mokesčio tarifas: {groupThousands(fee)} sat ÷ {groupThousands(tx.vsize)} vB = <b className="text-slate-700">{rate} sat/vB</b>.
         </p>
       )}
     </div>
@@ -728,7 +730,7 @@ export default function TransactionModal({ network, txid, sourceRect, onClose, t
                   unit={unit}
                   editor={output.address ? editorFor(`out-${vout}`, output.address) : null}
                 >
-                  {isChange(tx, output) && <Chip label="↩ Grąža" size="small" variant="outlined" />}
+                  {isChange(tx, output) && <Chip label="Grąža" size="small" variant="outlined" />}
                   <SpendNote output={output} onOpen={openTx} />
                 </CoinCard>
               ))}

@@ -68,10 +68,6 @@ const LEGEND = [
     swatch: <rect x="1.5" y="1.5" width="25" height="11" rx="3" fill="none" stroke={COLORS.COIN_EDGE} strokeWidth="1.5" strokeDasharray="4 3" />,
   },
   {
-    label: '↩ Grąža',
-    swatch: <line x1="1" y1="7" x2="27" y2="7" stroke={COLORS.MUTED} strokeWidth="2" strokeDasharray="5 3" />,
-  },
-  {
     label: 'Neišleista išvestis (UTXO)',
     swatch: <circle cx="14" cy="7" r="5.5" fill={COLORS.COIN} stroke={COLORS.COIN_EDGE} strokeWidth="1.5" />,
   },
@@ -174,7 +170,7 @@ export default function GraphUtxoPage() {
           page; on narrow screens the two stack */}
       <div className="grid items-center gap-3 lg:grid-cols-[1fr_minmax(0,720px)_1fr]">
         <h1 className="text-xl font-bold text-[var(--color-primary)]">
-          UTXO transakcijos — {info?.full_name ?? network}
+          Transakcijų Srautas - {info?.full_name ?? network}
         </h1>
         <DateSliderBar days={days} selectedDay={selectedDay} today={today} onCommit={setSelectedDay} />
       </div>

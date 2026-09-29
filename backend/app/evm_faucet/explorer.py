@@ -86,6 +86,13 @@ REORG_OVERLAP_BLOCKS = 10
 # 1900+.
 HUB_COUNTERPARTY_THRESHOLD = 200
 
+# The names of UTC itself — answered with Python's own UTC,
+# never through the tz database: the compose file mounts the
+# host's /etc/localtime, which in the image links to Etc/UTC, so
+# the mount lands ON that file and ZoneInfo('UTC') (and every
+# alias linked to it) reads the host's zone
+UTC_NAMES = frozenset({'UTC', 'Etc/UTC', 'Etc/UCT', 'Etc/Universal', 'Etc/Zulu', 'UCT', 'Universal', 'Zulu'})
+
 
 
 
@@ -100,7 +107,8 @@ HUB_COUNTERPARTY_THRESHOLD = 200
 # The tzinfo a day list is bucketed in: an IANA zone name
 # ("Europe/Vilnius") resolves through zoneinfo, a numeric
 # offset in seconds (the old form, clamped to the real-world
-# ±14 h) becomes a fixed-offset zone, anything else is UTC.
+# ±14 h) becomes a fixed-offset zone, UTC itself (UTC_NAMES)
+# and anything else is Python's own UTC.
 #
 # Used by:
 #   - EtherscanExplorer.get_transaction_days
@@ -108,6 +116,8 @@ HUB_COUNTERPARTY_THRESHOLD = 200
 
 def _zone_of(tz):
     if isinstance(tz, str) and not re.fullmatch(r'-?\d+', tz.strip()):
+        if tz.strip() in UTC_NAMES:
+            return timezone.utc
         try:
             return ZoneInfo(tz.strip())
         except Exception:

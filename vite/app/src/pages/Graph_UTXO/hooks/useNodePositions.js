@@ -5,26 +5,37 @@
 //  Blocks are COLUMNS, left to right in height order with the
 //  mempool last (today only), each exactly as wide as the
 //  boxes inside it need. A box's position is kept RELATIVE to
-//  its own column (x) plus an absolute y, so a block that
-//  widens slides every later block to the right without
+//  its own column's origin (x) plus an absolute y, so a block
+//  that changes width slides the other blocks along without
 //  touching what is inside them. A box can never be dragged
-//  into another block's space: past its column's right edge
-//  the column simply grows, and past the left edge the box
-//  stops at the edge while its column-mates shift right — the
-//  block widens either way.
+//  into another block's space — its block grows instead, in
+//  the direction it is dragged: past the right edge the later
+//  blocks slide right, past the left edge the earlier blocks
+//  slide left (the first block simply grows into the
+//  whitespace), and past the top the drawing grows upward.
+//  While a drag grows the drawing to the left or top, the
+//  scroll moves along, so the dragged box stays under the
+//  pointer and whatever was not pushed stays where it was.
 //
 //  A drag moves ONE box: the pointer is captured on it (a
 //  fast move can't slip off), and every move is resolved
-//  against a snapshot of the box's column taken at
-//  pointer-down — moving back undoes exactly what moving out
-//  did, nothing accumulates. Scrolling the canvas mid-drag is
-//  folded into the offset, so the box stays under the
-//  pointer. A press that never travels CLICK_SLOP is a click
-//  instead: it opens the transaction's dialog (so do Enter
-//  and Space on a focused box) and moves nothing. Only the positions a drag set are kept, in memory
-//  (a reload starts from the first layout again); every other
-//  box takes its first-layout spot, recomputed when the
-//  transactions change.
+//  against where the box was at pointer-down — moving back
+//  undoes exactly what moving out did, nothing accumulates.
+//  The pointer's travel is counted in screen pixels over the
+//  zoom, a scroll made meanwhile counted in — but not the
+//  scroll that follows the drawing's own growth, which would
+//  otherwise feed back into the drag. A press that never
+//  travels CLICK_SLOP is a click instead: it opens the
+//  transaction's dialog (so do Enter and Space on a focused
+//  box) and moves nothing.
+//
+//  Only the boxes a drag moved are kept — in the browser's
+//  localStorage, per network, written when a drag ends; so a
+//  reload finds the arrangement as it was left, whichever day
+//  it was made on. Every other box takes its first-layout
+//  spot, recomputed when the transactions change — a new
+//  payout arriving in the mempool finds room among boxes that
+//  were never touched.
 //
 //  Split into (root last) — plain layout functions with no
 //  React in them, then the hook:
@@ -35,19 +46,27 @@
 //    rowCenterY        — where row N's port sits in a box
 //    transactionHeight — a box's height from its rows
 //    initialPositions  — the first layout
-//    measureCanvas     — column x / widths + canvas size
-//    dragPositions     — one drag move, block rules applied
+//    measureCanvas     — column edges, origins + canvas extent
+//    withMoved         — dropped positions + one move's
+//    loadDropped       — a network's saved positions
+//    saveDropped       — the positions back to storage
 //    useNodePositions  — state + pointer wiring (default
 //                        export)
 // -----------------------------------------------------------
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import { LAYOUT_CONFIG, MEMPOOL_COLUMN, NODE_CONFIG } from '../constants';
 
 
 // How far (px) a press may travel and still count as a click
 const CLICK_SLOP = 4;
+
+// localStorage: the dropped positions of one network live
+// under this prefix + the network's key — at most MAX_SAVED
+// boxes, the most recently moved
+const STORAGE_PREFIX = 'utxo-graph-positions:';
+const MAX_SAVED = 2000;
 
 
 
@@ -168,7 +187,7 @@ export function transactionHeight(tx) {
 // -----------------------------------------------------------
 //
 //   initialPositions(columns, transactions)
-//     → txid → { x (within its column), y }
+//     → txid → { x (from its column's origin), y }
 //
 // The first layout: each column stacks its transactions top
 // to bottom in list order. A transaction spending one in the
@@ -216,12 +235,23 @@ function initialPositions(columns, transactions) {
 // -----------------------------------------------------------
 //
 //   measureCanvas(columns, transactions, positions)
-//     → { columns: [{ ...column, x, width }], width, height }
+//     → { columns: [{ ...column, x, width, origin }], width,
+//         top, height }
 //
-// Every column as wide as its right-most box needs (never
-// narrower than one box plus padding), laid side by side —
-// so a box dragged right widens its own block and pushes the
-// later blocks along. The height reaches the lowest box.
+// Every column as wide as its boxes need, padding on both
+// sides, never narrower than one box — a box left of the
+// padding widens its column to the LEFT, one past the right
+// edge to the right — and the columns laid side by side from
+// 0: x is a column's left edge, origin where its boxes' x
+// counts from (x itself until a box went left of the
+// padding). So a block growing rightward pushes the later
+// blocks along, and one growing leftward moves its own origin
+// and everything after it right — which the drag's scroll
+// turns, on screen, into the earlier blocks sliding left.
+// Vertically the drawing reaches from its highest box to its
+// lowest: `top` is 0 until a box is raised above the first
+// layout's top row, then negative — the drawing's top edge in
+// canvas units, where UtxoFlowGraph starts drawing.
 //
 // Used by:
 //   - useNodePositions (below) — on every render
@@ -230,27 +260,31 @@ function initialPositions(columns, transactions) {
 function measureCanvas(columns, transactions, positions) {
 
   const { COLUMN_PADDING } = LAYOUT_CONFIG;
-  const widths = Object.fromEntries(columns.map((column) => [column.key, NODE_CONFIG.WIDTH + 2 * COLUMN_PADDING]));
+  const low = Object.fromEntries(columns.map((column) => [column.key, 0]));
+  const high = Object.fromEntries(columns.map((column) => [column.key, NODE_CONFIG.WIDTH + 2 * COLUMN_PADDING]));
+  let top = 0;
   let bottom = 0;
 
 
   for (const tx of transactions) {
     const key = columnKeyOf(tx);
     const { x, y } = positions[tx.txid];
-    widths[key] = Math.max(widths[key], x + NODE_CONFIG.WIDTH + COLUMN_PADDING);
+    low[key] = Math.min(low[key], x - COLUMN_PADDING);
+    high[key] = Math.max(high[key], x + NODE_CONFIG.WIDTH + COLUMN_PADDING);
+    top = Math.min(top, y - COLUMN_PADDING);
     bottom = Math.max(bottom, y + transactionHeight(tx) + COLUMN_PADDING);
   }
 
 
   let left = 0;
   const measured = columns.map((column) => {
-    const placed = { ...column, x: left, width: widths[column.key] };
+    const placed = { ...column, x: left, width: high[column.key] - low[column.key], origin: left - low[column.key] };
     left += placed.width;
     return placed;
   });
 
 
-  return { columns: measured, width: left, height: bottom };
+  return { columns: measured, width: left, top, height: bottom - top };
 }
 
 
@@ -260,39 +294,82 @@ function measureCanvas(columns, transactions, positions) {
 
 
 // -----------------------------------------------------------
-// dragPositions
+// withMoved
 // -----------------------------------------------------------
 //
-//   dragPositions(snapshot, txid, dx, dy)
-//     → txid → { x, y } for every box in the snapshot
-//
-// Where one drag leaves a column's boxes. `snapshot` holds
-// the positions of the dragged box and its column-mates when
-// the drag began, dx / dy the pointer's offset since. The
-// dragged box never goes above the drawing's top nor left of
-// its column's edge; dragged further left, it stays at the
-// edge and the others shift right by the overflow — the
-// block widens instead of the box leaving it. Rightwards
-// needs no rule: measureCanvas grows the column to fit.
+// Dropped positions with one move's applied — the moved box
+// taken out and put back LAST, so the order of the map is the
+// order boxes were last moved in, and saveDropped can keep
+// the newest.
 //
 // Used by:
-//   - useNodePositions (below) — every pointermove of a drag
+//   - useNodePositions (below) — every pointermove of a drag,
+//     over the positions from before the drag
 // -----------------------------------------------------------
 
-function dragPositions(snapshot, txid, dx, dy) {
+function withMoved(dropped, moved) {
+  const next = { ...dropped };
+  for (const txid of Object.keys(moved)) delete next[txid];
+  return Object.assign(next, moved);
+}
 
-  const { COLUMN_PADDING } = LAYOUT_CONFIG;
-  const start = snapshot[txid];
-  const wantedX = start.x + dx;
-  const overflow = Math.max(0, COLUMN_PADDING - wantedX);
 
 
-  return Object.fromEntries(Object.entries(snapshot).map(([id, position]) => [
-    id,
-    id === txid
-      ? { x: Math.max(COLUMN_PADDING, wantedX), y: Math.max(COLUMN_PADDING, start.y + dy) }
-      : { x: position.x + overflow, y: position.y },
-  ]));
+
+
+
+
+// -----------------------------------------------------------
+// loadDropped
+// -----------------------------------------------------------
+//
+// A network's saved positions, txid → { x, y }. Storage can
+// be missing, blocked (a private window) or hold anything —
+// every failure reads as nothing saved, and an entry without
+// two finite numbers is skipped.
+//
+// Used by:
+//   - useNodePositions (below) — on mount and on a network
+//     switch
+// -----------------------------------------------------------
+
+function loadDropped(network) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_PREFIX + network) ?? '{}');
+    return Object.fromEntries(Object.entries(saved).filter(([, position]) => (
+      Number.isFinite(position?.x) && Number.isFinite(position?.y)
+    )));
+  } catch {
+    return {};
+  }
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// saveDropped
+// -----------------------------------------------------------
+//
+// Writes a network's positions back, rounded to whole canvas
+// units and cut to the MAX_SAVED most recently moved. A full
+// or blocked storage keeps them for this visit only.
+//
+// Used by:
+//   - useNodePositions (below) — when a drag ends
+// -----------------------------------------------------------
+
+function saveDropped(network, dropped) {
+  const newest = Object.entries(dropped).slice(-MAX_SAVED)
+    .map(([txid, { x, y }]) => [txid, { x: Math.round(x), y: Math.round(y) }]);
+  try {
+    localStorage.setItem(STORAGE_PREFIX + network, JSON.stringify(Object.fromEntries(newest)));
+  } catch {
+    // Kept in memory; the next drag tries again
+  }
 }
 
 
@@ -306,58 +383,105 @@ function dragPositions(snapshot, txid, dx, dy) {
 // -----------------------------------------------------------
 //
 //   const { canvas, positions, draggingTxid, bindBox } =
-//     useNodePositions({ blocks, transactions, live, scale,
-//                        scrollerRef, onOpen })
+//     useNodePositions({ network, blocks, transactions, live,
+//                        scale, scrollerRef, onOpen })
 //
-//   canvas        — measured columns (x, width) + canvas size
-//   positions     — txid → { x (within its column), y }
+//   canvas        — measured columns (x, width, origin) + the
+//                   drawing's width, top edge and height
+//   positions     — txid → { x (from its column's origin), y }
 //   draggingTxid  — the box being pressed or dragged, or null
 //   bindBox(txid) — pointer + key handlers to spread on that
 //                   box
 //
-// blocks / transactions are the day's; live adds the mempool
-// column; scale is the zoom — the pointer moves in screen
-// pixels, a box in canvas units, so a drag divides by it and
-// the box stays under the pointer at any zoom (the click slop
-// stays in pixels); scrollerRef is the scrolling element
-// around the canvas; onOpen(txid, rect) runs on a click or
-// Enter / Space, with the box's screen rectangle for the
-// dialog to fly out of. Dropped positions outlive a day
-// switch (they are kept by txid), so coming back to a day
-// finds it as it was left.
+// network picks the saved positions; blocks / transactions
+// are the day's; live adds the mempool column; scale is the
+// zoom; scrollerRef is the scrolling element around the
+// canvas; onOpen(txid, rect) runs on a click or Enter / Space,
+// with the box's screen rectangle for the dialog to fly out
+// of. Dropped positions outlive a day switch and a reload
+// (they are kept by txid), so coming back to a day finds it as
+// it was left.
 //
 // Used by:
 //   - UtxoFlowGraph.jsx
 // -----------------------------------------------------------
 
-export default function useNodePositions({ blocks, transactions, live, scale, scrollerRef, onOpen }) {
+export default function useNodePositions({ network, blocks, transactions, live, scale, scrollerRef, onOpen }) {
 
   const columns = useMemo(() => buildColumns(blocks, live), [blocks, live]);
   const firstLayout = useMemo(() => initialPositions(columns, transactions), [columns, transactions]);
-  const [dropped, setDropped] = useState({});
+  const columnOf = useMemo(() => Object.fromEntries(transactions.map((tx) => [tx.txid, columnKeyOf(tx)])), [transactions]);
+  const [saved, setSaved] = useState(() => ({ network, dropped: loadDropped(network) }));
   const [draggingTxid, setDraggingTxid] = useState(null);
   const dragRef = useRef(null);
+
+
+  // Another network: its own saved positions — swapped in
+  // during render, before anything is drawn with the old ones
+  if (saved.network !== network) {
+    setSaved({ network, dropped: loadDropped(network) });
+  }
 
 
   // Every box where a drag left it, else where the first
   // layout puts it — so a transaction that arrives later (a
   // new payout in a live poll, a crawl landing) gets its
   // first-layout spot instead of having no position at all
-  const positions = { ...firstLayout, ...dropped };
-
-
-  // txid → the txids sharing its column (itself included) —
-  // a drag snapshots and moves only these
-  const columnMates = useMemo(() => {
-    const byColumn = {};
-    for (const tx of transactions) {
-      (byColumn[columnKeyOf(tx)] ??= []).push(tx.txid);
-    }
-    return Object.fromEntries(transactions.map((tx) => [tx.txid, byColumn[columnKeyOf(tx)]]));
-  }, [transactions]);
-
-
+  const positions = { ...firstLayout, ...saved.dropped };
   const canvas = measureCanvas(columns, transactions, positions);
+  const originOf = (key) => canvas.columns.find((column) => column.key === key)?.origin ?? 0;
+
+  // The dragged box's column and its origin now — null while
+  // no drag runs, or the box has left the day's data
+  const draggedColumn = (draggingTxid && columnOf[draggingTxid]) || null;
+  const draggedOrigin = draggedColumn ? originOf(draggedColumn) : null;
+
+
+  // A drag grew the drawing at its top, or moved its box's
+  // column origin (the block grew leftward): scroll by as much
+  // before paint, so the dragged box stays under the pointer
+  // and what it did not push stays where it was. The scroll
+  // this takes is kept on the drag, so the pointer math leaves
+  // it out; what the browser rounded away is carried into the
+  // next shift, so a long drag never walks the rest of the
+  // drawing off by more than a pixel. The top edge moving for
+  // any other reason — a day's data arriving — is left alone:
+  // the view then starts at the new top. So is an origin that
+  // jumped because the box itself changed column (mined in
+  // the middle of the drag)
+  const topRef = useRef(canvas.top);
+  const carryRef = useRef({ x: 0, y: 0 });
+  useLayoutEffect(() => {
+    const grownTop = topRef.current - canvas.top;
+    topRef.current = canvas.top;
+    const drag = dragRef.current;
+    const scroller = scrollerRef.current;
+    if (!drag?.moved || !scroller) return;
+
+    const follow = (axis, property, grown) => {
+      if (!grown) return;
+      const before = scroller[property];
+      const wanted = before + grown * scale + carryRef.current[axis];
+      scroller[property] = wanted;
+      carryRef.current[axis] = wanted - scroller[property];
+      drag.followed[axis] += scroller[property] - before;
+    };
+
+    if (draggedColumn === drag.column) {
+      follow('x', 'scrollLeft', draggedOrigin - drag.origin);
+    }
+    if (draggedColumn) {
+      drag.column = draggedColumn;
+      drag.origin = draggedOrigin;
+    }
+    follow('y', 'scrollTop', grownTop);
+  }, [canvas.top, draggedColumn, draggedOrigin, scale, scrollerRef]);
+
+
+  // Saved when a drag ends — never on every move of it
+  useEffect(() => {
+    if (draggingTxid === null) saveDropped(saved.network, saved.dropped);
+  }, [saved, draggingTxid]);
 
 
   const scrollOffset = () => ({
@@ -385,13 +509,18 @@ export default function useNodePositions({ blocks, transactions, live, scale, sc
       // at a time
       if (event.button !== 0 || dragRef.current) return;
       event.currentTarget.setPointerCapture(event.pointerId);
+      carryRef.current = { x: 0, y: 0 };
       dragRef.current = {
         txid,
         pointerId: event.pointerId,
-        startX: event.clientX,
-        startY: event.clientY,
+        clientX: event.clientX,
+        clientY: event.clientY,
         scroll: scrollOffset(),
-        snapshot: Object.fromEntries(columnMates[txid].map((id) => [id, positions[id]])),
+        followed: { x: 0, y: 0 },           // scroll the drawing's growth took, px
+        column: columnOf[txid],
+        origin: originOf(columnOf[txid]),
+        start: positions[txid],
+        before: saved.dropped,
         moved: false,
       };
       setDraggingTxid(txid);
@@ -400,14 +529,20 @@ export default function useNodePositions({ blocks, transactions, live, scale, sc
     onPointerMove: (event) => {
       const drag = dragRef.current;
       if (!drag || drag.pointerId !== event.pointerId) return;
-      const scroll = scrollOffset();
-      const dx = event.clientX - drag.startX + (scroll.left - drag.scroll.left);
-      const dy = event.clientY - drag.startY + (scroll.top - drag.scroll.top);
-      // Inside the slop it may still become a click — nothing
-      // moves until the press has clearly left its spot
-      if (!drag.moved && Math.hypot(dx, dy) < CLICK_SLOP) return;
+      // Inside the slop (screen pixels, whatever the zoom) it
+      // may still become a click — nothing moves until the
+      // press has clearly left its spot
+      if (!drag.moved && Math.hypot(event.clientX - drag.clientX, event.clientY - drag.clientY) < CLICK_SLOP) return;
       drag.moved = true;
-      setDropped((current) => ({ ...current, ...dragPositions(drag.snapshot, drag.txid, dx / scale, dy / scale) }));
+      // The pointer's travel plus any scroll made meanwhile,
+      // less the scroll that only followed the drawing's
+      // growth — in canvas units. Applied to the positions from
+      // BEFORE the drag, so nothing a move did outlives it
+      const scroll = scrollOffset();
+      const dx = (event.clientX - drag.clientX + scroll.left - drag.scroll.left - drag.followed.x) / scale;
+      const dy = (event.clientY - drag.clientY + scroll.top - drag.scroll.top - drag.followed.y) / scale;
+      const moved = { [drag.txid]: { x: drag.start.x + dx, y: drag.start.y + dy } };
+      setSaved((current) => ({ ...current, dropped: withMoved(drag.before, moved) }));
     },
 
     onPointerUp: endPress,

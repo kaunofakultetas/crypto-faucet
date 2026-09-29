@@ -14,9 +14,11 @@
 //  as a half-open [from, to) unix window from the student's
 //  local midnight; the backend answers from its cache at once
 //  and crawls the chain in the background, and while it says
-//  `updating` the page asks again every few seconds — today's
-//  window keeps being asked after that too, a past day does
-//  not. The names that say who controls which address are the
+//  `updating` (the day's first crawl has not landed) the page
+//  asks again every few seconds — today's window keeps being
+//  asked after that too, as the backend keeps it current by
+//  watching its addresses; a past day is not asked again. The
+//  names that say who controls which address are the
 //  backend's (shared with the EVM graph): a rename is stored
 //  there and every graph query asks again. The small
 //  formatters every part of the drawing shares live here
@@ -25,7 +27,8 @@
 //  Split into (root last) — plain functions with no React in
 //  them, then the hooks:
 //
-//    formatAmount        — satoshis → "0.1", exact
+//    groupThousands      — "1234567" → "1'234'567"
+//    formatAmount        — satoshis → "0.123'456'78", exact
 //    shortTxid           — "3f9a1c…7be2"
 //    nameOf              — a name from the book, a short
 //                          address, or what a script pays to
@@ -49,6 +52,10 @@ import axios from 'axios';
 import { NAME_MAX_LENGTH, POLL_CONFIG } from '../constants';
 
 
+// The mark between digit groups: an apostrophe, the Swiss way
+// (1'250.605'598) — and never a line break inside a number
+const DIGIT_GAP = "'";
+
 // What an output WITHOUT an address pays to, by its script type
 const SCRIPT_LABELS = {
   op_return: 'OP_RETURN duomenys',
@@ -69,26 +76,64 @@ const NO_NAMES = {};
 
 
 // -----------------------------------------------------------
+// groupThousands
+// -----------------------------------------------------------
+//
+// A whole number's digits in threes from the right, split by
+// DIGIT_GAP (1100 → "1'100") — the whole-coin part of an
+// amount, and the satoshi and vbyte counts of the fee.
+//
+// Used by:
+//   - formatAmount (below)
+//   - TransactionBox.jsx — the band's fee
+//   - TransactionModal.jsx — the fee rate's sum
+// -----------------------------------------------------------
+
+export const groupThousands = (value) => String(value).replace(/\B(?=(\d{3})+(?!\d))/g, DIGIT_GAP);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // formatAmount
 // -----------------------------------------------------------
 //
-// Satoshis → coin units with trailing zeros trimmed
-// (10000000 → "0.1"). Integer arithmetic only — dividing by
-// 1e8 in floating point can print 0.30000000000000004. An
+//   formatAmount(sat, { grouped = true } = {})
+//
+// Satoshis → coin units, every digit shown, trailing zeros
+// trimmed (10000000 → "0.1"). Grouped, the whole part goes in
+// threes from the right and the eight decimals in threes from
+// the point — millicoins, microcoins, then the last two
+// satoshi digits: 0.12345678 reads "0.123'456'78", 1250.605598
+// reads "1'250.605'598". Integer arithmetic only — dividing
+// by 1e8 in floating point can print 0.30000000000000004. An
 // amount nobody knows (an input whose earlier transaction the
-// server did not give) reads "?".
+// server did not give) reads "?". grouped: false gives the
+// bare digits, for screen readers — they may read the groups
+// as separate numbers.
 //
 // Used by:
 //   - TransactionBox.jsx — every row's amount and tooltip
 //   - TransactionModal.jsx — the cards and the fee sum
 //   - UtxoFlowGraph.jsx — the text-alternative table
+//     (ungrouped)
 // -----------------------------------------------------------
 
-export function formatAmount(sat) {
+export function formatAmount(sat, { grouped = true } = {}) {
+
   if (sat === null || sat === undefined) return '?';
-  const whole = Math.floor(sat / 100_000_000);
+  const whole = String(Math.floor(sat / 100_000_000));
   const fraction = String(sat % 100_000_000).padStart(8, '0').replace(/0+$/, '');
-  return fraction ? `${whole}.${fraction}` : String(whole);
+
+
+  if (!grouped) {
+    return fraction ? `${whole}.${fraction}` : whole;
+  }
+  const groupedWhole = groupThousands(whole);
+  return fraction ? `${groupedWhole}.${fraction.match(/.{1,3}/g).join(DIGIT_GAP)}` : groupedWhole;
 }
 
 
@@ -206,8 +251,7 @@ export function senderOf(tx, names) {
 // what was left over.
 //
 // Used by:
-//   - edgesOf (below) — a dashed edge
-//   - TransactionBox.jsx — the ↩ mark
+//   - TransactionBox.jsx — an output row's tooltip
 //   - TransactionModal.jsx — the Grąža chip
 // -----------------------------------------------------------
 
@@ -258,7 +302,7 @@ export function spendStateOf(output) {
 // -----------------------------------------------------------
 //
 //   edgesOf(transactions) → [{ id, fromTxid, vout, toTxid,
-//                              vin, address, isChange }]
+//                              vin, address }]
 //
 // One edge per input that spends an output of ANOTHER listed
 // transaction — both ends are on screen. An input spending a
@@ -277,9 +321,7 @@ function edgesOf(transactions) {
 
   for (const tx of transactions) {
     tx.inputs.forEach((input, vin) => {
-      const source = byTxid[input.txid];
-      const output = source?.outputs[input.vout];
-      if (!output) return;
+      if (!byTxid[input.txid]?.outputs[input.vout]) return;
       edges.push({
         id: `${input.txid}:${input.vout}>${tx.txid}:${vin}`,
         fromTxid: input.txid,
@@ -287,7 +329,6 @@ function edgesOf(transactions) {
         toTxid: tx.txid,
         vin,
         address: input.address,
-        isChange: isChange(source, output),
       });
     });
   }
@@ -457,13 +498,16 @@ export function useTransaction(network, txid, enabled) {
 //   loading       — no answer for this window yet
 //   error         — the last request's failure, as text, or
 //                   null (earlier data stays on screen)
-//   updating      — a crawl is filling the backend's cache
+//   updating      — the window's first crawl is still filling
+//                   the backend's cache (later ones are not
+//                   announced)
 //   missing       — window transactions the backend has met
 //                   but cannot show (not fetched yet, or
 //                   refused by its server)
 //
-// When a crawl lands (updating turns false) the day list is
-// asked again — it is read from what the crawls stored.
+// When the first crawl lands (updating turns false) the day
+// list is asked again — it is read from what the crawls
+// stored.
 //
 // Used by:
 //   - UtxoFlowGraph.jsx
@@ -476,8 +520,8 @@ export default function useTransactionGraph(network, day, today) {
   const liveGuess = day === today;
 
 
-  // Fast while a crawl fills the cache, steady on a live
-  // window, not at all on a past day once it has landed
+  // Fast while the first crawl fills the cache, steady on a
+  // live window, not at all on a past day once it has landed
   const query = useQuery({
     queryKey: ['utxo-graph', network, from, to],
     queryFn: async ({ signal }) => (await axios.get(`/api/utxo/${network}/graph`, { params: { from, to }, signal })).data,
@@ -490,8 +534,8 @@ export default function useTransactionGraph(network, day, today) {
   const updating = Boolean(data?.updating);
 
 
-  // A landed crawl may have read the faucet's history for the
-  // first time — the slider's day list comes from it
+  // The landed first crawl may have read the faucet's history
+  // for the first time — the slider's day list comes from it
   const wasUpdating = useRef(false);
   useEffect(() => {
     if (wasUpdating.current && !updating) {

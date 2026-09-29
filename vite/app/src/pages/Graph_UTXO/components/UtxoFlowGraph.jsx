@@ -6,16 +6,18 @@
 //  the mempool last. Under it, the drawing: every block as a
 //  lane, every transaction as a TransactionBox in its block's
 //  lane, and a curve from each output to the input that spent
-//  it — dashed when the output was change, burgundy when it
-//  was the faucet's coin. The transactions scroll under the
-//  pinned row, and the whitespace between the row and them is
-//  scroll area like the rest. Dragging the empty background
+//  it — burgundy when it was the faucet's coin. The
+//  transactions scroll under the pinned row, and the
+//  whitespace between the row and them is scroll area like
+//  the rest. Dragging the empty background
 //  pans, like the EVM graph (useBackgroundPan); the mouse wheel
 //  zooms around the cursor and the slider on the right around
 //  the middle of the view (useZoom, ZoomControls). The drawing
 //  is in canvas units inside ONE scaled group, floating in a
-//  margin of whitespace so it can sit anywhere in the view;
-//  the pinned row follows it sideways but keeps its size.
+//  margin of whitespace so it can sit anywhere in the view —
+//  from its top edge, which a box raised above the rest takes
+//  up with it; the pinned row follows it sideways but keeps
+//  its size.
 //  Clicking a box (or Enter / Space on a focused one) opens its
 //  TransactionModal. The data comes from useTransactionGraph
 //  (the backend), the positions, drag and click rules from
@@ -267,7 +269,7 @@ function BlockColumn({ column, index, top, height }) {
 //   - UtxoFlowGraph (below) — one per edge
 // -----------------------------------------------------------
 
-function SpendEdge({ from, to, faucetCoin, isChange }) {
+function SpendEdge({ from, to, faucetCoin }) {
 
   const bend = Math.max(40, Math.abs(to.x - from.x) / 2);
 
@@ -279,7 +281,6 @@ function SpendEdge({ from, to, faucetCoin, isChange }) {
       stroke={faucetCoin ? COLORS.BRAND : COLORS.MUTED}
       strokeOpacity={0.8}
       strokeWidth={1.75}
-      strokeDasharray={isChange ? '6 4' : undefined}
       markerEnd={`url(#${faucetCoin ? ARROWS.faucet : ARROWS.other})`}
     />
   );
@@ -300,10 +301,11 @@ function SpendEdge({ from, to, faucetCoin, isChange }) {
 //
 // What the canvas says about the day, most urgent first. With
 // no box drawn (count 0) the message is `centred` — loading,
-// an outage, a crawl still collecting, transactions the server
-// did not give, or a plainly empty day; over a drawing it is a
-// pill that leaves the boxes as they were: a crawl adding to
-// them, a failed refresh, or some transactions missing. `busy`
+// an outage, the first crawl still collecting, transactions
+// the server did not give, or a plainly empty day; over a
+// drawing it is a pill that leaves the boxes as they were: the
+// first crawl adding to them, a failed refresh, or some
+// transactions missing. `busy`
 // adds a spinner. Counts go in parentheses — no noun has to
 // agree with a number.
 //
@@ -397,7 +399,8 @@ function CanvasStatus({ status }) {
 // full txid, sender, inputs, outputs and fee per row. Inputs
 // read as the box shows them — amount and outpoint, with the
 // owner's name only when several people pay; a coinbase's
-// inputs read as new coins.
+// inputs read as new coins. Amounts go ungrouped: a screen
+// reader may read digit groups as separate numbers.
 //
 // Used by:
 //   - UtxoFlowGraph (below) — named by the SVG's
@@ -409,13 +412,13 @@ function TransactionTable({ id, transactions, names, unit }) {
   const inputsOf = (tx, sender) => (tx.coinbase ? 'naujos monetos (bloko atlygis)' : tx.inputs
     .map((input) => [
       sender.several && nameOf(input.address, names),
-      `${formatAmount(input.value)} ${unit}`,
+      `${formatAmount(input.value, { grouped: false })} ${unit}`,
       `(${shortTxid(input.txid)}:${input.vout})`,
     ].filter(Boolean).join(' '))
     .join('; '));
 
   const outputsOf = (tx) => tx.outputs
-    .map((output) => `${nameOf(output.address, names, output.script_type)} ${formatAmount(output.value)} ${unit}`)
+    .map((output) => `${nameOf(output.address, names, output.script_type)} ${formatAmount(output.value, { grouped: false })} ${unit}`)
     .join('; ');
 
 
@@ -483,6 +486,7 @@ export default function UtxoFlowGraph({ network, day, today, unit }) {
   } = useTransactionGraph(network, day, today);
   const { scale, margin, setZoom, zoomIn, zoomOut, goHome } = useZoom(scrollerRef);
   const { canvas, positions, draggingTxid, bindBox } = useNodePositions({
+    network,
     blocks,
     transactions,
     live,
@@ -501,22 +505,27 @@ export default function UtxoFlowGraph({ network, day, today, unit }) {
   }, [network, day, goHome]);
 
 
-  // A box's top-left on the canvas is its column's x plus its
-  // own x inside that column
-  const columnX = Object.fromEntries(canvas.columns.map((column) => [column.key, column.x]));
+  // A box's top-left on the canvas is its column's origin plus
+  // its own x from it (the origin sits right of the column's
+  // left edge once the block has grown leftward)
+  const columnOrigin = Object.fromEntries(canvas.columns.map((column) => [column.key, column.origin]));
   const origin = (txid) => ({
-    x: columnX[columnKeyOf(byTxid[txid])] + positions[txid].x,
+    x: columnOrigin[columnKeyOf(byTxid[txid])] + positions[txid].x,
     y: positions[txid].y,
   });
 
 
   // The drawing's SVG is the drawing at the current zoom plus
-  // the whitespace margin on every side (see useZoom). The
-  // lanes cover all of it, margins included — in canvas units
-  // they start laneTop above the drawing's top
+  // the whitespace margin on every side (see useZoom). Its top
+  // edge is canvas.top — 0, or above it once a box was raised
+  // over the rest — so the scaled group starts drawing there
+  // (drawTop px down). The lanes cover all of it, margins
+  // included — in canvas units they start laneTop above the
+  // drawing's top edge
   const svgWidth = Math.ceil(canvas.width * scale + 2 * margin.x);
   const svgHeight = Math.ceil(canvas.height * scale + 2 * margin.y);
-  const laneTop = -margin.y / scale;
+  const drawTop = margin.y - canvas.top * scale;
+  const laneTop = canvas.top - margin.y / scale;
   const laneHeight = svgHeight / scale;
 
 
@@ -552,7 +561,7 @@ export default function UtxoFlowGraph({ network, day, today, unit }) {
 
           {/* Everything below is in canvas units — placed past
               the margin, then zoomed, by this one transform */}
-          <g transform={`translate(${margin.x} ${margin.y}) scale(${scale})`}>
+          <g transform={`translate(${margin.x} ${drawTop}) scale(${scale})`}>
             {canvas.columns.map((column, index) => (
               <BlockColumn key={column.key} column={column} index={index} top={laneTop} height={laneHeight} />
             ))}
@@ -579,7 +588,6 @@ export default function UtxoFlowGraph({ network, day, today, unit }) {
                   from={{ x: from.x + NODE_CONFIG.WIDTH, y: from.y + rowCenterY(edge.vout) }}
                   to={{ x: to.x - 4, y: to.y + rowCenterY(edge.vin) }}
                   faucetCoin={Boolean(edge.address) && edge.address === faucetAddress}
-                  isChange={edge.isChange}
                 />
               );
             })}
