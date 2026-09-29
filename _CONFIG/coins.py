@@ -104,7 +104,7 @@ UTXO_NETWORK_CONFIGS = {
         'faucet': {
             'coin': 'bitcoin',
             'network': 'testnet',
-            'chunk_size': 0.01,
+            'chunk_size': 0.1,
             'electrum_server': 'ip-158-129-172-247--52002:443',
         },
         'explorer': {
