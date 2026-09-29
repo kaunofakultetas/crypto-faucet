@@ -267,7 +267,7 @@ class UtxoRequestFlowTests(unittest.TestCase):
         self.assertEqual(status, 200, data)
         second = Transaction.from_string(self.captured['raw'])
         self.assertNotIn(spent, {(vin.txid, vin.vout) for vin in second.vin})
-        self.assertEqual(second.vin[0].txid[::-1], first.txid())     # the first payout's change (vin holds wire order)
+        self.assertEqual(second.vin[0].txid, first.txid())           # the first payout's change
 
     def test_get_networks_exports_the_configured_block_explorer(self):
         # The page links the payout's txid there

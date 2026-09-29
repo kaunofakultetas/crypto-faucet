@@ -629,13 +629,16 @@ class UTXOFaucet:
 
 
         # STEP 4: build and sign. Electrum reports tx_hash in display
-        # order — the wire format wants it reversed. The dialect owns
-        # the transaction version and signs each input in place
-        # (BIP-143 witness or legacy scriptSig).
+        # order, and embit's TransactionInput wants that SAME order —
+        # it reverses the bytes into wire order itself, so reversing
+        # here as well points every input at a txid that does not
+        # exist and the node answers bad-txns-inputs-missingorspent.
+        # The dialect owns the transaction version and signs each
+        # input in place (BIP-143 witness or legacy scriptSig).
         # ===========================================================
         tx = Transaction(
             version=ctx.dialect.TX_VERSION,
-            vin=[TransactionInput(bytes.fromhex(u['tx_hash'])[::-1], u['tx_pos']) for u in selected_utxos],
+            vin=[TransactionInput(bytes.fromhex(u['tx_hash']), u['tx_pos']) for u in selected_utxos],
             vout=outputs,
             locktime=0,
         )

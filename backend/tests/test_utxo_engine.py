@@ -81,6 +81,22 @@ class UtxoEngineTests(unittest.TestCase):
         self.assertTrue(tx.txid().hex().startswith(helpers.ANCHOR_TXID_PREFIX),
                         f'txid drifted: {tx.txid().hex()}')
 
+    def test_prevout_txids_are_reversed_on_the_wire(self):
+        # Electrum lists tx_hash in display order; the serialized
+        # input must carry those 32 bytes REVERSED. The anchor's
+        # fixture hashes are palindromes ('11' * 32) and cannot tell
+        # the two orders apart — this one can. Wrong order = every
+        # input names a txid that does not exist and every claim
+        # fails at broadcast.
+        tx_hash = bytes(range(32)).hex()
+        tx, _ = self.build_payout(utxos=[{'tx_hash': tx_hash, 'tx_pos': 3, 'value': 400000}])
+
+        raw = tx.serialize()
+        # version (4) · segwit marker + flag · input count 1
+        self.assertEqual(raw[4:7], b'\x00\x01\x01')
+        self.assertEqual(raw[7:39], bytes.fromhex(tx_hash)[::-1])
+        self.assertEqual(int.from_bytes(raw[39:43], 'little'), 3)
+
     def test_build_is_deterministic(self):
         # RFC-6979 signing: two identical builds are byte-identical
         tx1, _ = self.build_payout()
@@ -355,7 +371,7 @@ class UtxoConsolidationTests(unittest.TestCase):
         captured = helpers.fake_electrum(self.faucet, 'btc4', self.dust(200) + [BIG_UTXO])
         self.claim()
         tx = self.last_tx(captured)
-        self.assertEqual(tx.vin[0].txid[::-1].hex(), BIG_UTXO['tx_hash'])
+        self.assertEqual(tx.vin[0].txid.hex(), BIG_UTXO['tx_hash'])
         self.assertEqual(tx.vout[0].value, CHUNK_SAT)
 
     def test_a_second_output_is_folded_in_even_when_the_first_one_suffices(self):

@@ -47,6 +47,9 @@ ANCHOR_KNF_ADDRESS = 'knf1qyvsy6ypssxmqmdzthzua3qwupkey90p3lcuzy4'
 # 250000 sat to the RECIPIENT key's knf address (fee rate 10,
 # 2 inputs, payout + change outputs). The txid covers version,
 # inputs, outputs and locktime — any byte drift changes it.
+# Except byte ORDER: the ANCHOR_UTXOS hashes are palindromes,
+# so a reversed prevout looks identical here —
+# test_prevout_txids_are_reversed_on_the_wire pins the order.
 ANCHOR_TXID_PREFIX = '5cad5657115dafb6'
 
 ANCHOR_UTXOS = [
@@ -846,7 +849,7 @@ class FollowingElectrum:
 
     def broadcast(self, method, params):
         tx = self._Transaction.from_string(params[0])
-        spent = {(vin.txid[::-1].hex(), vin.vout) for vin in tx.vin}
+        spent = {(vin.txid.hex(), vin.vout) for vin in tx.vin}
         self.utxos = [u for u in self.utxos if (u['tx_hash'], u['tx_pos']) not in spent]
         for pos, out in enumerate(tx.vout):
             if out.script_pubkey.data == self.faucet_script:
