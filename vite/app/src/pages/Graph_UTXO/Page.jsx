@@ -3,17 +3,17 @@
 //
 //  The UTXO chains' transaction view: blocks as columns,
 //  transactions as boxes with their inputs and outputs, each
-//  output linked to the transaction that spent it. For now a
-//  GUI MOCKUP drawn from hand-written sample data (see
-//  hooks/useTransactionGraph.js) — no graph endpoint exists
-//  yet. The network's display names still come from the
-//  existing /api/utxo/networks catalog (cache shared with the
-//  faucet page), so amounts read "tBTC4" on btc4.
+//  output linked to the transaction that spent it — the
+//  transactions around the faucet, as the backend crawls them
+//  from the network's Electrum server (see
+//  hooks/useTransactionGraph.js). The network's display names
+//  come from the /api/utxo/networks catalog (cache shared with
+//  the faucet page), so amounts read "tBTC4" on btc4.
 //
 //  On top, the title and — in the middle of the row — the day
-//  slider over the days the data has blocks on, plus today;
-//  the page opens on today, whose mempool is live. Under it,
-//  the legend, then the graph of the picked day.
+//  slider over the days the faucet has mined transactions on,
+//  plus today; the page opens on today, whose mempool is live.
+//  Under it, the legend, then the graph of the picked day.
 //
 //  Reached from the UTXO faucet page's "Transakcijų grafikas"
 //  button.
@@ -75,6 +75,10 @@ const LEGEND = [
     label: 'Neišleista išvestis (UTXO)',
     swatch: <circle cx="14" cy="7" r="5.5" fill={COLORS.COIN} stroke={COLORS.COIN_EDGE} strokeWidth="1.5" />,
   },
+  {
+    label: 'Nežinoma, ar išleista',
+    swatch: <circle cx="14" cy="7" r="5" fill="#ffffff" stroke={COLORS.MUTED} strokeWidth="1.5" strokeDasharray="2 2" />,
+  },
 ];
 
 
@@ -118,9 +122,9 @@ function Legend() {
 // -----------------------------------------------------------
 //
 // Holds today and the picked day (as the day STRING, so it
-// survives the day list growing under it), the network's
-// names, and lays out the title row, the legend and the
-// graph.
+// survives the day list growing under it), the day list, the
+// network's names, and lays out the title row, the legend and
+// the graph.
 //
 // Used by:
 //   - App.jsx — route /graph/utxo/:network
@@ -131,7 +135,7 @@ export default function GraphUtxoPage() {
   const { network } = useParams();
   const [today, setToday] = useState(() => dayOf(new Date()));
   const [selectedDay, setSelectedDay] = useState(today);
-  const days = useTransactionDays(today);
+  const days = useTransactionDays(network, today);
 
 
   // Tick over at local midnight, like the EVM graph: the list
@@ -177,7 +181,7 @@ export default function GraphUtxoPage() {
 
       <Legend />
 
-      <UtxoFlowGraph day={selectedDay} today={today} unit={info?.short_name ?? 'BTC'} />
+      <UtxoFlowGraph network={network} day={selectedDay} today={today} unit={info?.short_name ?? 'BTC'} />
     </div>
   );
 }

@@ -17,8 +17,15 @@
 //  margin of whitespace so it can sit anywhere in the view;
 //  the pinned row follows it sideways but keeps its size.
 //  Clicking a box (or Enter / Space on a focused one) opens its
-//  TransactionModal. The data comes from useTransactionGraph,
-//  the positions, drag and click rules from useNodePositions.
+//  TransactionModal. The data comes from useTransactionGraph
+//  (the backend), the positions, drag and click rules from
+//  useNodePositions.
+//
+//  The backend answers from its cache while it crawls the
+//  chain, so the canvas says what state the day is in: loading,
+//  still being collected, empty, not given by the server, or
+//  an outage — centred while nothing is drawn, as a pill under
+//  the block row over a drawing (which then stays as it was).
 //
 //  Like the EVM graph, the picture has a TEXT ALTERNATIVE: a
 //  visually hidden table lists every transaction with its
@@ -32,12 +39,16 @@
 //    BlockHeaderRow   — the pinned block-height row
 //    BlockColumn      — one block's lane in the drawing
 //    SpendEdge        — one output → input curve
+//    statusOf         — what the canvas says about the day
+//    CanvasStatus     — that, centred or as a pill
 //    TransactionTable — the visually hidden text version
 //    UtxoFlowGraph    — data + positions + drawing (default
 //                       export)
 // -----------------------------------------------------------
 
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
+
+import { CircularProgress } from '@mui/material';
 
 import { COLORS, LAYOUT_CONFIG, MEMPOOL_COLUMN, NODE_CONFIG, ZOOM_CONFIG } from '../constants';
 import useTransactionGraph, { formatAmount, nameOf, senderOf, shortTxid } from '../hooks/useTransactionGraph';
@@ -57,6 +68,14 @@ const ARROWS = { faucet: 'utxo-arrow-faucet', other: 'utxo-arrow-other' };
 // grey — shared by the lane and its header cell
 const bandOf = (column, index) =>
   (column.key === MEMPOOL_COLUMN ? COLORS.MEMPOOL_BAND : (index % 2 ? COLORS.BLOCK_BAND : '#ffffff'));
+
+// The status box's colours per tone — the EVM graph's red
+// outage notice, and its amber and neutral siblings
+const TONE_CLASSES = {
+  info: 'border-slate-200 bg-white text-slate-600',
+  warn: 'border-amber-200 bg-amber-50 text-amber-800',
+  error: 'border-red-200 bg-red-50 text-red-700',
+};
 
 
 
@@ -105,7 +124,8 @@ function ArrowMarkers() {
 // short "#height" in a smaller font on a narrower cell, and
 // only that once the time no longer fits either. The mempool
 // reads "Mempool" over "laukia patvirtinimo", losing the
-// second line first. `tooltip` always holds the full text.
+// second line first. A block whose time is not known yet shows
+// no time. `tooltip` always holds the full text.
 //
 // Used by:
 //   - BlockHeaderRow (below) — one per column
@@ -114,9 +134,9 @@ function ArrowMarkers() {
 function headerLabels(column, width) {
 
   const mempool = column.key === MEMPOOL_COLUMN;
-  const time = mempool ? '' : new Date(column.time).toLocaleTimeString('lt-LT', { hour: '2-digit', minute: '2-digit' });
+  const time = column.time ? new Date(column.time).toLocaleTimeString('lt-LT', { hour: '2-digit', minute: '2-digit' }) : '';
   const full = mempool ? 'Mempool' : `Blokas #${column.height}`;
-  const tooltip = mempool ? 'Mempool — laukia patvirtinimo' : `${full} — ${time}`;
+  const tooltip = mempool ? 'Mempool — laukia patvirtinimo' : [full, time].filter(Boolean).join(' — ');
 
 
   if (width >= 150) {
@@ -272,31 +292,130 @@ function SpendEdge({ from, to, faucetCoin, isChange }) {
 
 
 // -----------------------------------------------------------
+// statusOf
+// -----------------------------------------------------------
+//
+//   statusOf({ loading, error, updating, missing, count, live })
+//     → { centred, tone, busy, text } | null
+//
+// What the canvas says about the day, most urgent first. With
+// no box drawn (count 0) the message is `centred` — loading,
+// an outage, a crawl still collecting, transactions the server
+// did not give, or a plainly empty day; over a drawing it is a
+// pill that leaves the boxes as they were: a crawl adding to
+// them, a failed refresh, or some transactions missing. `busy`
+// adds a spinner. Counts go in parentheses — no noun has to
+// agree with a number.
+//
+// Used by:
+//   - CanvasStatus (below)
+// -----------------------------------------------------------
+
+function statusOf({ loading, error, updating, missing, count, live }) {
+
+  if (loading) {
+    return { centred: true, tone: 'info', busy: true, text: 'Kraunama…' };
+  }
+
+
+  if (count === 0) {
+    if (error) return { centred: true, tone: 'error', busy: false, text: error };
+    if (updating) return { centred: true, tone: 'info', busy: true, text: 'Renkamos transakcijos iš tinklo…' };
+    if (missing) {
+      return { centred: true, tone: 'warn', busy: false, text: `Serveris negrąžino šios dienos transakcijų (${missing}) — parodyti jų negalima` };
+    }
+    return { centred: true, tone: 'info', busy: false, text: live ? 'Šiandien čiaupo transakcijų dar nėra' : 'Šią dieną čiaupo transakcijų nėra' };
+  }
+
+
+  if (error) return { centred: false, tone: 'error', busy: false, text: 'Nepavyko atnaujinti grafiko — rodomi paskutiniai gauti duomenys' };
+  if (updating) return { centred: false, tone: 'info', busy: true, text: 'Atnaujinama…' };
+  if (missing) return { centred: false, tone: 'warn', busy: false, text: `Serveris negrąžino dalies transakcijų (${missing}) — grafike jų nėra` };
+  return null;
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// CanvasStatus
+// -----------------------------------------------------------
+//
+// statusOf's message over the canvas: a card in the middle of
+// the view, or a pill centred just under the pinned block row.
+// Never in the way — pointer events pass through to the
+// panning background — and announced politely to screen
+// readers as it changes.
+//
+// Used by:
+//   - UtxoFlowGraph (below) — over the scroller
+// -----------------------------------------------------------
+
+function CanvasStatus({ status }) {
+
+  if (!status) {
+    return null;
+  }
+
+
+  const box = (
+    <div className={`flex items-center gap-2 rounded-md border px-3 py-1 text-sm shadow-sm ${TONE_CLASSES[status.tone]}`}>
+      {status.busy && <CircularProgress size={12} color="inherit" />}
+      {status.text}
+    </div>
+  );
+
+  return status.centred ? (
+    <div role="status" className="pointer-events-none absolute inset-0 flex items-center justify-center px-4">
+      {box}
+    </div>
+  ) : (
+    <div
+      role="status"
+      className="pointer-events-none absolute left-1/2 -translate-x-1/2"
+      style={{ top: LAYOUT_CONFIG.HEADER_HEIGHT + 12 }}
+    >
+      {box}
+    </div>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // TransactionTable
 // -----------------------------------------------------------
 //
 // The same transactions as text for screen readers: block,
 // full txid, sender, inputs, outputs and fee per row. Inputs
 // read as the box shows them — amount and outpoint, with the
-// owner's name only when several people pay.
+// owner's name only when several people pay; a coinbase's
+// inputs read as new coins.
 //
 // Used by:
 //   - UtxoFlowGraph (below) — named by the SVG's
 //     aria-describedby
 // -----------------------------------------------------------
 
-function TransactionTable({ id, transactions, graph, names, unit }) {
+function TransactionTable({ id, transactions, names, unit }) {
 
-  const inputsOf = (tx, sender) => tx.inputs
+  const inputsOf = (tx, sender) => (tx.coinbase ? 'naujos monetos (bloko atlygis)' : tx.inputs
     .map((input) => [
       sender.several && nameOf(input.address, names),
       `${formatAmount(input.value)} ${unit}`,
       `(${shortTxid(input.txid)}:${input.vout})`,
     ].filter(Boolean).join(' '))
-    .join('; ');
+    .join('; '));
 
   const outputsOf = (tx) => tx.outputs
-    .map((output) => `${nameOf(output.address, names)} ${formatAmount(output.value)} ${unit}`)
+    .map((output) => `${nameOf(output.address, names, output.script_type)} ${formatAmount(output.value)} ${unit}`)
     .join('; ');
 
 
@@ -323,7 +442,7 @@ function TransactionTable({ id, transactions, graph, names, unit }) {
                 <td>{sender.label}</td>
                 <td>{inputsOf(tx, sender)}</td>
                 <td>{outputsOf(tx)}</td>
-                <td>{graph.fees[tx.txid]} sat</td>
+                <td>{tx.fee === null ? '—' : `${tx.fee} sat`}</td>
               </tr>
             );
           })}
@@ -343,25 +462,25 @@ function TransactionTable({ id, transactions, graph, names, unit }) {
 // UtxoFlowGraph (default export)
 // -----------------------------------------------------------
 //
-// day / today pick what is drawn (Page.jsx owns the slider);
-// unit is the network's short currency name ("tBTC4") shown
-// after every amount. Stays mounted across day switches, so
-// dragged boxes, renamed addresses and the zoom survive
-// them. Owns which transaction's dialog is open (and the box
-// it flies out of) and which box holds keyboard focus.
+// network is the route's; day / today pick what is drawn
+// (Page.jsx owns the slider); unit is the network's short
+// currency name ("tBTC4") shown after every amount. Stays
+// mounted across day switches, so dragged boxes and the zoom
+// survive them. Owns which transaction's dialog is open (and
+// the box it flies out of) and which box holds keyboard focus.
 //
 // Used by:
 //   - Page.jsx — under the title row and the legend
 // -----------------------------------------------------------
 
-export default function UtxoFlowGraph({ day, today, unit }) {
+export default function UtxoFlowGraph({ network, day, today, unit }) {
 
   const scrollerRef = useRef(null);
   const [opened, setOpened] = useState(null);           // { txid, rect } while a dialog is open
   const [focusedTxid, setFocusedTxid] = useState(null);
   const {
-    blocks, transactions, live, byTxid, blockTimes, names, renameAddress, faucetAddress, graph,
-  } = useTransactionGraph(day, today);
+    blocks, transactions, byTxid, edges, live, names, faucetAddress, renameAddress, loading, error, updating, missing,
+  } = useTransactionGraph(network, day, today);
   const { scale, margin, setZoom, zoomIn, zoomOut, goHome } = useZoom(scrollerRef);
   const { canvas, positions, draggingTxid, bindBox } = useNodePositions({
     blocks,
@@ -374,26 +493,21 @@ export default function UtxoFlowGraph({ day, today, unit }) {
   const { panning, panHandlers } = useBackgroundPan(scrollerRef);
 
 
-  // A new day starts from the drawing's top-left corner — a
-  // pan into the whitespace must not leave the next day off
-  // screen
+  // A new day (or network) starts from the drawing's top-left
+  // corner — a pan into the whitespace must not leave the next
+  // one off screen
   useLayoutEffect(() => {
     goHome();
-  }, [day, goHome]);
+  }, [network, day, goHome]);
 
 
-  // The day's boxes by txid. A box's top-left on the canvas
-  // is its column's x plus its own x inside that column
-  const shownById = useMemo(() => Object.fromEntries(transactions.map((tx) => [tx.txid, tx])), [transactions]);
+  // A box's top-left on the canvas is its column's x plus its
+  // own x inside that column
   const columnX = Object.fromEntries(canvas.columns.map((column) => [column.key, column.x]));
   const origin = (txid) => ({
-    x: columnX[columnKeyOf(shownById[txid])] + positions[txid].x,
+    x: columnX[columnKeyOf(byTxid[txid])] + positions[txid].x,
     y: positions[txid].y,
   });
-
-  // Only an edge between two of the day's transactions has
-  // both ends on screen
-  const edges = graph.edges.filter((edge) => shownById[edge.fromTxid] && shownById[edge.toTxid]);
 
 
   // The drawing's SVG is the drawing at the current zoom plus
@@ -464,7 +578,7 @@ export default function UtxoFlowGraph({ day, today, unit }) {
                   key={edge.id}
                   from={{ x: from.x + NODE_CONFIG.WIDTH, y: from.y + rowCenterY(edge.vout) }}
                   to={{ x: to.x - 4, y: to.y + rowCenterY(edge.vin) }}
-                  faucetCoin={edge.address === faucetAddress}
+                  faucetCoin={Boolean(edge.address) && edge.address === faucetAddress}
                   isChange={edge.isChange}
                 />
               );
@@ -479,7 +593,6 @@ export default function UtxoFlowGraph({ day, today, unit }) {
                   tx={tx}
                   x={x}
                   y={y}
-                  graph={graph}
                   names={names}
                   faucetAddress={faucetAddress}
                   unit={unit}
@@ -504,6 +617,8 @@ export default function UtxoFlowGraph({ day, today, unit }) {
         </svg>
       </div>
 
+      <CanvasStatus status={statusOf({ loading, error, updating, missing, count: transactions.length, live })} />
+
       <ZoomControls
         scale={scale}
         min={ZOOM_CONFIG.MIN_SCALE}
@@ -514,16 +629,15 @@ export default function UtxoFlowGraph({ day, today, unit }) {
         onZoomOut={zoomOut}
       />
 
-      <TransactionTable id="utxo-graph-table" transactions={transactions} graph={graph} names={names} unit={unit} />
+      <TransactionTable id="utxo-graph-table" transactions={transactions} names={names} unit={unit} />
 
       {opened && (
         <TransactionModal
+          network={network}
           txid={opened.txid}
           sourceRect={opened.rect}
           onClose={() => setOpened(null)}
           transactionsById={byTxid}
-          blockTimes={blockTimes}
-          graph={graph}
           names={names}
           renameAddress={renameAddress}
           faucetAddress={faucetAddress}

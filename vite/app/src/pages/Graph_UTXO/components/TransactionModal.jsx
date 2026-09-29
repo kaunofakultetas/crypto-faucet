@@ -10,17 +10,24 @@
 //  class gave it), the full address with a copy button, the
 //  amount, and where the coin came from or went. An input
 //  names the earlier output it spends; an output names the
-//  transaction that spent it, or carries a gold "Neišleista"
-//  while nobody has. Both are links: following them walks the
-//  chain inside the dialog, and Atgal walks back. Under the
-//  cards the fee is worked out the way the chain does it —
-//  inputs minus outputs — with its rate per virtual byte.
+//  transaction that spent it, carries a gold "Neišleista"
+//  while nobody has, a grey "Nežinoma" when nobody can say
+//  (its address's history was never read), or says it holds
+//  data, not coins (OP_RETURN). Every transaction reference is
+//  a link: following it walks the chain inside the dialog —
+//  past the day on screen too, fetched from the backend on the
+//  way — and Atgal walks back. Under the cards the fee is
+//  worked out the way the chain does it — inputs minus outputs
+//  — with its rate per virtual byte. A coinbase has no inputs
+//  and no fee: it makes the block's reward out of nothing.
 //
-//  Names are edited in place (the pencil beside a name): a
-//  rename relabels the whole graph, an empty name clears it,
-//  Enter saves and Esc drops the edit without closing the
-//  dialog. While a changed name is unsaved, a backdrop click
-//  or the × asks before throwing it away.
+//  Names are edited in place (the pencil beside a name) and
+//  stored by the backend: a rename relabels the whole graph, an
+//  empty name clears it, Enter saves and Esc drops the edit
+//  without closing the dialog; a name the backend did not take
+//  keeps the editor open with the error. While a changed name
+//  is unsaved, a backdrop click or the × asks before throwing
+//  it away.
 //
 //  Split into (root component last):
 //
@@ -28,10 +35,12 @@
 //    formatTime       — ISO time → local date and time
 //    avatarOf         — a controller's letter and colour
 //    CopyButton       — copy, with the result in the tooltip
-//    StatusChip       — mined in block N, or waiting
+//    StatusChip       — mined in block N, waiting, or unknown
 //    TxLink           — a txid that opens in the dialog
 //    ControllerName   — avatar + name, or the name editor
 //    CoinCard         — one input or output
+//    NewCoinsCard     — a coinbase's place for inputs
+//    SpendNote        — where an output went, if anywhere
 //    CoinColumn       — a titled list of cards
 //    Figure           — one labelled amount of the fee sum
 //    FeeEquation      — inputs − outputs = fee, and the rate
@@ -40,7 +49,7 @@
 
 import { useRef, useState } from 'react';
 
-import { Avatar, Button, Chip, IconButton, TextField, Tooltip } from '@mui/material';
+import { Avatar, Button, Chip, CircularProgress, IconButton, TextField, Tooltip } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 import CheckIcon from '@mui/icons-material/Check';
@@ -48,13 +57,14 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import CloseIcon from '@mui/icons-material/Close';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
 import EditOutlinedIcon from '@mui/icons-material/EditOutlined';
+import HelpOutlineIcon from '@mui/icons-material/HelpOutline';
 import ScheduleIcon from '@mui/icons-material/Schedule';
 import TollIcon from '@mui/icons-material/Toll';
 
 import UniversalModal from '@/components/UniversalModal';
 
 import { COLORS, NAME_MAX_LENGTH } from '../constants';
-import { formatAmount, outpointKey, senderOf, shortTxid } from '../hooks/useTransactionGraph';
+import { formatAmount, isChange, nameOf, senderOf, shortTxid, spendStateOf, useTransaction } from '../hooks/useTransactionGraph';
 
 
 // Avatar colours for named people — picked by a hash of the
@@ -157,19 +167,28 @@ function CopyButton({ text, label }) {
 // Whether the transaction is in a block yet: a green
 // "Patvirtinta · blokas #N" chip once it is mined, an amber
 // "Laukia patvirtinimo (mempool)" while it waits — amber like
-// the dashed frame of a waiting box on the graph.
+// the dashed frame of a waiting box on the graph — and a grey
+// "Būsena nežinoma" when no history the backend read lists it
+// any more (replaced, or dropped from the mempool).
 //
 // Used by:
 //   - TransactionModal (below) — the first line
 // -----------------------------------------------------------
 
-function StatusChip({ block }) {
+function StatusChip({ status, block }) {
 
-  if (block === null) {
+  if (status === 'confirmed') {
+    return <Chip icon={<CheckCircleIcon />} label={`Patvirtinta · blokas #${block}`} color="success" variant="outlined" size="small" />;
+  }
+  if (status === 'mempool') {
     return <Chip icon={<ScheduleIcon />} label="Laukia patvirtinimo (mempool)" color="warning" variant="outlined" size="small" />;
   }
 
-  return <Chip icon={<CheckCircleIcon />} label={`Patvirtinta · blokas #${block}`} color="success" variant="outlined" size="small" />;
+  return (
+    <Tooltip title="Nė vieno perskaityto adreso istorijoje šios transakcijos nėra — ji galėjo būti pakeista kita arba išmesta iš mempool">
+      <Chip icon={<HelpOutlineIcon />} label="Būsena nežinoma" variant="outlined" size="small" />
+    </Tooltip>
+  );
 }
 
 
@@ -182,25 +201,15 @@ function StatusChip({ block }) {
 // TxLink
 // -----------------------------------------------------------
 //
-// A transaction reference: a link that opens it in this
-// dialog when the graph shows it, plain text with a tooltip
-// when it lies outside the graph (a coin from before).
+// A transaction reference that opens it in this dialog — from
+// the day on screen at once, from the backend otherwise.
 //
 // Used by:
-//   - TransactionModal (below) — the cards' "from" and
-//     "spent in" lines
+//   - TransactionModal (below) — the input cards' "from"
+//   - SpendNote (below) — "spent in"
 // -----------------------------------------------------------
 
-function TxLink({ txid, listed, onOpen, children }) {
-
-  if (!listed) {
-    return (
-      <Tooltip title="Ši transakcija grafike nerodoma">
-        <span className="font-mono text-slate-500">{children}</span>
-      </Tooltip>
-    );
-  }
-
+function TxLink({ txid, onOpen, children }) {
   return (
     <button
       type="button"
@@ -223,23 +232,28 @@ function TxLink({ txid, listed, onOpen, children }) {
 // -----------------------------------------------------------
 //
 // Who controls the address: the avatar and the name (or
-// "Nežinomas valdytojas") with a pencil — or, while editing,
-// the name field with save / cancel. `editor` comes from
-// TransactionModal's editorFor.
+// `fallback` — "Nežinomas valdytojas", or what an address-less
+// output holds) with a pencil — or, while editing, the name
+// field with save / cancel, the backend's refusal under it.
+// `editor` comes from TransactionModal's editorFor; null for a
+// coin with no address, which nobody can name.
 //
 // Used by:
 //   - CoinCard (below)
 // -----------------------------------------------------------
 
-function ControllerName({ name, avatar, editor }) {
+function ControllerName({ name, fallback, avatar, editor }) {
 
-  if (editor.isEditing) {
+  if (editor?.isEditing) {
     return (
-      <div className="flex min-w-0 flex-1 items-center gap-1">
+      <div className="flex min-w-0 flex-1 items-start gap-1">
         <TextField
           size="small"
           autoFocus
           value={editor.draft}
+          disabled={editor.saving}
+          error={Boolean(editor.error)}
+          helperText={editor.error}
           placeholder="Kas valdo šį adresą?"
           onChange={(event) => editor.onDraft(event.target.value.slice(0, NAME_MAX_LENGTH))}
           onKeyDown={(event) => {
@@ -257,10 +271,10 @@ function ControllerName({ name, avatar, editor }) {
           slotProps={{ htmlInput: { maxLength: NAME_MAX_LENGTH, 'aria-label': 'Valdytojo vardas' } }}
           sx={{ flex: 1, minWidth: 0 }}
         />
-        <IconButton size="small" color="primary" onClick={editor.onSave} aria-label="Išsaugoti vardą">
-          <CheckIcon fontSize="small" />
+        <IconButton size="small" color="primary" onClick={editor.onSave} disabled={editor.saving} aria-label="Išsaugoti vardą">
+          {editor.saving ? <CircularProgress size={16} /> : <CheckIcon fontSize="small" />}
         </IconButton>
-        <IconButton size="small" onClick={editor.onCancel} aria-label="Atšaukti">
+        <IconButton size="small" onClick={editor.onCancel} disabled={editor.saving} aria-label="Atšaukti">
           <CloseIcon fontSize="small" />
         </IconButton>
       </div>
@@ -274,12 +288,14 @@ function ControllerName({ name, avatar, editor }) {
       </Avatar>
       {name
         ? <span className="truncate font-semibold text-slate-800">{name}</span>
-        : <span className="italic text-slate-400">Nežinomas valdytojas</span>}
-      <Tooltip title="Keisti valdytojo vardą">
-        <IconButton size="small" onClick={editor.onEdit} aria-label="Keisti valdytojo vardą">
-          <EditOutlinedIcon sx={{ fontSize: 16 }} />
-        </IconButton>
-      </Tooltip>
+        : <span className="italic text-slate-400">{fallback}</span>}
+      {editor && (
+        <Tooltip title="Keisti valdytojo vardą">
+          <IconButton size="small" onClick={editor.onEdit} aria-label="Keisti valdytojo vardą">
+            <EditOutlinedIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Tooltip>
+      )}
     </div>
   );
 }
@@ -295,16 +311,17 @@ function ControllerName({ name, avatar, editor }) {
 // -----------------------------------------------------------
 //
 // One input or output: the controller, the amount, the full
-// address with a copy button and, on the last line,
-// `children` — where the coin came from or went. The left
-// edge wears the controller's colour, so one person's coins
-// line up at a glance.
+// address with a copy button — or, for a coin with no address,
+// `note` saying why — and, on the last line, `children`: where
+// the coin came from or went. The left edge wears the
+// controller's colour, so one person's coins line up at a
+// glance.
 //
 // Used by:
 //   - TransactionModal (below) — one per input and output
 // -----------------------------------------------------------
 
-function CoinCard({ coin, name, isFaucet, unit, editor, children }) {
+function CoinCard({ coin, name, fallback, note, isFaucet, unit, editor, children }) {
 
   const avatar = avatarOf(name, isFaucet);
 
@@ -315,21 +332,105 @@ function CoinCard({ coin, name, isFaucet, unit, editor, children }) {
       style={{ borderLeft: `4px solid ${avatar.color}` }}
     >
       <div className="flex items-start justify-between gap-3">
-        <ControllerName name={name} avatar={avatar} editor={editor} />
+        <ControllerName name={name} fallback={fallback} avatar={avatar} editor={editor} />
         <div className="shrink-0 pt-1 text-right font-semibold tabular-nums text-slate-900">
           {formatAmount(coin.value)} <span className="text-xs font-normal text-slate-500">{unit}</span>
         </div>
       </div>
 
-      <div className="mt-2 flex items-center gap-1 rounded-lg bg-slate-50 py-0.5 pl-2">
-        <code className="min-w-0 flex-1 break-all font-mono text-[12px] text-slate-600">{coin.address}</code>
-        <CopyButton text={coin.address} label="Kopijuoti adresą" />
-      </div>
+      {coin.address ? (
+        <div className="mt-2 flex items-center gap-1 rounded-lg bg-slate-50 py-0.5 pl-2">
+          <code className="min-w-0 flex-1 break-all font-mono text-[12px] text-slate-600">{coin.address}</code>
+          <CopyButton text={coin.address} label="Kopijuoti adresą" />
+        </div>
+      ) : (
+        <div className="mt-2 rounded-lg bg-slate-50 px-2 py-1.5 text-xs italic text-slate-500">{note}</div>
+      )}
 
       <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500">
         {children}
       </div>
     </li>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// NewCoinsCard
+// -----------------------------------------------------------
+//
+// A coinbase's inputs column: no coin is spent — the block's
+// miner is paid with new coins, the block subsidy plus the
+// fees of the block's transactions.
+//
+// Used by:
+//   - TransactionModal (below) — instead of input cards
+// -----------------------------------------------------------
+
+function NewCoinsCard() {
+  return (
+    <li className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-3 text-sm text-slate-600">
+      <b className="text-slate-800">Naujos monetos.</b> Coinbase transakcija nieko neišleidžia: ja bloko kasėjas
+      gauna atlygį — bloko subsidiją ir bloko transakcijų mokesčius.
+    </li>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// SpendNote
+// -----------------------------------------------------------
+//
+// An output's last line, by its state (spendStateOf): the
+// transaction that spent it as a link, the gold "Neišleista
+// (UTXO)", the grey "Nežinoma, ar išleista" with the reason on
+// hover, or that OP_RETURN data holds no coin to spend.
+//
+// Used by:
+//   - TransactionModal (below) — one per output card
+// -----------------------------------------------------------
+
+function SpendNote({ output, onOpen }) {
+
+  const state = spendStateOf(output);
+
+
+  if (state === 'spent') {
+    return (
+      <>
+        Išleista transakcijoje
+        <TxLink txid={output.spent_by.txid} onOpen={onOpen}>{shortTxid(output.spent_by.txid)}</TxLink>
+      </>
+    );
+  }
+  if (state === 'unspent') {
+    return (
+      <Chip
+        icon={<TollIcon />}
+        label="Neišleista (UTXO)"
+        size="small"
+        sx={{ bgcolor: '#fef3c7', color: COLORS.COIN_EDGE, '& .MuiChip-icon': { color: COLORS.COIN } }}
+      />
+    );
+  }
+  if (state === 'data') {
+    return <Chip label="Duomenys — išleisti negalima" size="small" variant="outlined" />;
+  }
+
+  return (
+    <Tooltip title="Šio adreso istorija neskaityta: jis per toli nuo čiaupo arba tai viešas adresas su labai ilga istorija">
+      <Chip icon={<HelpOutlineIcon />} label="Nežinoma, ar išleista" size="small" variant="outlined" />
+    </Tooltip>
   );
 }
 
@@ -405,18 +506,31 @@ function Figure({ label, value, unit, strong = false }) {
 // The fee as the chain knows it — no transaction states its
 // fee; it is whatever the inputs hold beyond the outputs —
 // and, when the size is known, its rate per virtual byte,
-// the number miners sort the mempool by.
+// the number miners sort the mempool by. A coinbase pays no
+// fee, and with an input's amount unknown there is no sum to
+// show — each gets a sentence instead.
 //
 // Used by:
 //   - TransactionModal (below) — under the cards
 // -----------------------------------------------------------
 
-function FeeEquation({ tx, fee, unit }) {
+function FeeEquation({ tx, unit }) {
 
+  if (tx.coinbase || tx.fee === null) {
+    return (
+      <p className="mt-5 rounded-xl border border-slate-200 bg-slate-50 p-4 text-center text-sm text-slate-600">
+        {tx.coinbase
+          ? 'Coinbase transakcija mokesčio nemoka — ji pati yra kasėjo atlygis.'
+          : 'Mokesčio apskaičiuoti negalima: nežinoma, kiek verta bent viena įvestis.'}
+      </p>
+    );
+  }
+
+
+  const fee = tx.fee;
   const totalIn = tx.inputs.reduce((total, input) => total + input.value, 0);
   const totalOut = tx.outputs.reduce((total, output) => total + output.value, 0);
   const rate = tx.vsize ? (fee / tx.vsize).toLocaleString('lt-LT', { maximumFractionDigits: 2 }) : null;
-
 
   return (
     <div className="mt-5 rounded-xl border border-slate-200 bg-linear-to-br from-slate-50 to-white p-4">
@@ -431,7 +545,6 @@ function FeeEquation({ tx, fee, unit }) {
       {rate && (
         <p className="mt-3 text-center text-xs text-slate-500">
           Mokesčio tarifas: {fee.toLocaleString('lt-LT')} sat ÷ {tx.vsize} vB = <b className="text-slate-700">{rate} sat/vB</b>.
-          Kasėjai pirmiausia renkasi didesnio tarifo transakcijas.
         </p>
       )}
     </div>
@@ -452,59 +565,84 @@ function FeeEquation({ tx, fee, unit }) {
 // onClose, which UniversalModal calls only after the return
 // flight — so every opening starts fresh at `txid`.
 // sourceRect is the clicked box's screen rectangle, the
-// flight's origin. transactionsById and blockTimes cover
-// every day, so the links walk the chain past the day on
-// screen.
+// flight's origin. A transaction of the day on screen comes
+// from transactionsById (and follows its polling: a waiting
+// one turns confirmed in place); any other is fetched with the
+// names of its addresses, and the dialog says so while it
+// loads or when the backend has no such transaction.
 //
 // Used by:
 //   - UtxoFlowGraph.jsx — on a box's click or Enter / Space
 // -----------------------------------------------------------
 
-export default function TransactionModal({ txid, sourceRect, onClose, transactionsById, blockTimes, graph, names, renameAddress, faucetAddress, unit }) {
+export default function TransactionModal({ network, txid, sourceRect, onClose, transactionsById, names, renameAddress, faucetAddress, unit }) {
 
   const closeRef = useRef(null);
   const [trail, setTrail] = useState([txid]);
   const [editing, setEditing] = useState(null);
 
-
-  // A transaction that vanished from the data (an edited mock
-  // under hot reload) leaves nothing to show
-  const tx = transactionsById[trail[trail.length - 1]];
-  if (!tx) {
-    return null;
-  }
-
-  const sender = senderOf(tx, names);
-  const blockTime = blockTimes[tx.block] ?? null;
-  const dirty = Boolean(editing) && editing.draft.trim() !== (names[editing.address] ?? '');
+  const current = trail[trail.length - 1];
+  const known = transactionsById[current];
+  const fetched = useTransaction(network, current, !known);
+  const tx = known ?? fetched.data?.transaction ?? null;
+  const shownNames = known ? names : { ...names, ...fetched.data?.names };
+  const dirty = Boolean(editing) && editing.draft.trim() !== (shownNames[editing.address] ?? '');
 
 
   // Walking the chain: a linked transaction opens in place and
   // Atgal returns — an unsaved rename stays behind
   const openTx = (next) => {
     setEditing(null);
-    setTrail((current) => [...current, next]);
+    setTrail((trailNow) => [...trailNow, next]);
   };
 
   const back = () => {
     setEditing(null);
-    setTrail((current) => current.slice(0, -1));
+    setTrail((trailNow) => trailNow.slice(0, -1));
   };
 
 
   // One card's name editor; `key` tells apart two rows of the
-  // same address (change returns to an input's address)
+  // same address (change returns to an input's address). A
+  // save waits for the backend: the editor closes once the
+  // name is stored, and stays open with the error if not
   const editorFor = (key, address) => ({
     isEditing: editing?.key === key,
     draft: editing?.key === key ? editing.draft : '',
-    onEdit: () => setEditing({ key, address, draft: names[address] ?? '' }),
-    onDraft: (draft) => setEditing((current) => ({ ...current, draft })),
-    onSave: () => {
-      renameAddress(address, editing?.draft ?? '');
-      setEditing(null);
+    saving: editing?.key === key && editing.saving,
+    error: editing?.key === key ? editing.error : null,
+    onEdit: () => setEditing({ key, address, draft: shownNames[address] ?? '', saving: false, error: null }),
+    onDraft: (draft) => setEditing((edit) => ({ ...edit, draft, error: null })),
+    onSave: async () => {
+      const draft = editing?.draft ?? '';
+      setEditing((edit) => ({ ...edit, saving: true, error: null }));
+      const saved = await renameAddress(address, draft);
+      setEditing((edit) => {
+        if (edit?.key !== key) return edit;
+        return saved ? null : { ...edit, saving: false, error: 'Nepavyko išsaugoti — bandykite dar kartą' };
+      });
     },
     onCancel: () => setEditing(null),
   });
+
+
+  // What the body holds while the transaction is not there:
+  // on its way, or not to be had
+  let pending = null;
+  if (!tx) {
+    pending = fetched.isError ? (
+      <p className="py-10 text-center text-sm text-red-700">
+        {fetched.error?.response?.status === 404
+          ? 'Transakcija nerasta — serveris jos negrąžino.'
+          : 'Nepavyko gauti transakcijos — bandykite dar kartą vėliau.'}
+      </p>
+    ) : (
+      <div className="flex items-center justify-center gap-2 py-10 text-sm text-slate-500">
+        <CircularProgress size={16} color="inherit" />
+        Kraunama…
+      </div>
+    );
+  }
 
 
   return (
@@ -530,81 +668,76 @@ export default function TransactionModal({ txid, sourceRect, onClose, transactio
         </div>
       }
     >
-      {/* Status, the full txid, the sender */}
-      <div className="flex flex-wrap items-center gap-2">
-        <StatusChip block={tx.block} />
-        {blockTime && <span className="text-sm text-slate-500">{formatTime(blockTime)}</span>}
-      </div>
+      {pending ?? (
+        <>
+          {/* Status, the full txid, the sender */}
+          <div className="flex flex-wrap items-center gap-2">
+            <StatusChip status={tx.status} block={tx.block} />
+            {tx.time && <span className="text-sm text-slate-500">{formatTime(tx.time)}</span>}
+          </div>
 
-      <div className="mt-3 flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 py-1 pl-3 pr-1">
-        <code className="min-w-0 flex-1 break-all font-mono text-[13px] text-slate-700">{tx.txid}</code>
-        <CopyButton text={tx.txid} label="Kopijuoti transakcijos ID" />
-      </div>
+          <div className="mt-3 flex items-center gap-1 rounded-lg border border-slate-200 bg-slate-50 py-1 pl-3 pr-1">
+            <code className="min-w-0 flex-1 break-all font-mono text-[13px] text-slate-700">{tx.txid}</code>
+            <CopyButton text={tx.txid} label="Kopijuoti transakcijos ID" />
+          </div>
 
-      <p className="mt-3 text-sm text-slate-600">
-        Siuntėjas: <b className="text-slate-900">{sender.label}</b>
-        {sender.several && ' — įvestis pasirašė skirtingi žmonės; taip atrodo PayJoin ar CoinJoin.'}
-      </p>
+          {!tx.coinbase && (
+            <p className="mt-3 text-sm text-slate-600">
+              Siuntėjas: <b className="text-slate-900">{senderOf(tx, shownNames).label}</b>
+              {senderOf(tx, shownNames).several && ' — įvestis pasirašė skirtingi žmonės; taip atrodo PayJoin ar CoinJoin.'}
+            </p>
+          )}
 
-      {/* The money: the inputs on the left flow into the
-          outputs on the right */}
-      <div className="mt-5 grid items-start gap-4 md:grid-cols-[1fr_auto_1fr]">
-        <CoinColumn title="Įvestys" count={tx.inputs.length}>
-          {tx.inputs.map((input, vin) => (
-            <CoinCard
-              key={`in-${vin}`}
-              coin={input}
-              name={names[input.address] ?? null}
-              isFaucet={input.address === faucetAddress}
-              unit={unit}
-              editor={editorFor(`in-${vin}`, input.address)}
-            >
-              Iš išvesties
-              <TxLink txid={input.txid} listed={Boolean(transactionsById[input.txid])} onOpen={openTx}>
-                {`${shortTxid(input.txid)}:${input.vout}`}
-              </TxLink>
-            </CoinCard>
-          ))}
-        </CoinColumn>
+          {/* The money: the inputs on the left flow into the
+              outputs on the right */}
+          <div className="mt-5 grid items-start gap-4 md:grid-cols-[1fr_auto_1fr]">
+            <CoinColumn title="Įvestys" count={tx.inputs.length}>
+              {tx.coinbase && <NewCoinsCard />}
+              {tx.inputs.map((input, vin) => (
+                <CoinCard
+                  key={`in-${vin}`}
+                  coin={input}
+                  name={input.address ? shownNames[input.address] ?? null : null}
+                  fallback={input.address ? 'Nežinomas valdytojas' : 'Nežinomas adresas'}
+                  note="Ankstesnės transakcijos serveris negrąžino — nei adresas, nei suma nežinomi"
+                  isFaucet={Boolean(input.address) && input.address === faucetAddress}
+                  unit={unit}
+                  editor={input.address ? editorFor(`in-${vin}`, input.address) : null}
+                >
+                  Iš išvesties
+                  <TxLink txid={input.txid} onOpen={openTx}>{`${shortTxid(input.txid)}:${input.vout}`}</TxLink>
+                </CoinCard>
+              ))}
+            </CoinColumn>
 
-        <div className="hidden self-center text-slate-300 md:block" aria-hidden="true">
-          <ArrowForwardIcon fontSize="large" />
-        </div>
+            <div className="hidden self-center text-slate-300 md:block" aria-hidden="true">
+              <ArrowForwardIcon fontSize="large" />
+            </div>
 
-        <CoinColumn title="Išvestys" count={tx.outputs.length}>
-          {tx.outputs.map((output, vout) => {
-            const key = outpointKey(tx.txid, vout);
-            const spender = graph.spent.get(key);
-            return (
-              <CoinCard
-                key={`out-${vout}`}
-                coin={output}
-                name={names[output.address] ?? null}
-                isFaucet={output.address === faucetAddress}
-                unit={unit}
-                editor={editorFor(`out-${vout}`, output.address)}
-              >
-                {graph.change.has(key) && <Chip label="↩ Grąža" size="small" variant="outlined" />}
-                {spender ? (
-                  <>
-                    Išleista transakcijoje
-                    <TxLink txid={spender.txid} listed onOpen={openTx}>{shortTxid(spender.txid)}</TxLink>
-                  </>
-                ) : (
-                  <Chip
-                    icon={<TollIcon />}
-                    label="Neišleista (UTXO)"
-                    size="small"
-                    sx={{ bgcolor: '#fef3c7', color: COLORS.COIN_EDGE, '& .MuiChip-icon': { color: COLORS.COIN } }}
-                  />
-                )}
-              </CoinCard>
-            );
-          })}
-        </CoinColumn>
-      </div>
+            <CoinColumn title="Išvestys" count={tx.outputs.length}>
+              {tx.outputs.map((output, vout) => (
+                <CoinCard
+                  key={`out-${vout}`}
+                  coin={output}
+                  name={output.address ? shownNames[output.address] ?? null : null}
+                  fallback={output.address ? 'Nežinomas valdytojas' : nameOf(null, shownNames, output.script_type)}
+                  note={output.script_type === 'op_return'
+                    ? 'Adreso nėra — ši išvestis saugo duomenis, ne monetas'
+                    : 'Adreso nėra — išvestis užrakinta scenarijumi, kuris adresu neužrašomas'}
+                  isFaucet={Boolean(output.address) && output.address === faucetAddress}
+                  unit={unit}
+                  editor={output.address ? editorFor(`out-${vout}`, output.address) : null}
+                >
+                  {isChange(tx, output) && <Chip label="↩ Grąža" size="small" variant="outlined" />}
+                  <SpendNote output={output} onOpen={openTx} />
+                </CoinCard>
+              ))}
+            </CoinColumn>
+          </div>
 
-      <FeeEquation tx={tx} fee={graph.fees[tx.txid]} unit={unit} />
+          <FeeEquation tx={tx} unit={unit} />
+        </>
+      )}
     </UniversalModal>
   );
 }

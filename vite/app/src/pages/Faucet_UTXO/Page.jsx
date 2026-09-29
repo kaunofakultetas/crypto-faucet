@@ -7,7 +7,7 @@
 //  GET /api/utxo/<network>/request-btc, and shows the faucet's
 //  own address (text + QR) so leftover coins can be returned,
 //  with a button into the network's transaction graph
-//  (/graph/utxo/:network — a GUI mockup for now).
+//  (/graph/utxo/:network).
 //
 //  The balance repolls silently every 5 s; the network's
 //  display names come from /api/utxo/networks (BTC/Bitcoin

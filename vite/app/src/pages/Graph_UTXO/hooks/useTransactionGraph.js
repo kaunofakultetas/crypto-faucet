@@ -1,65 +1,66 @@
 // -----------------------------------------------------------
 //  [*] Graph_UTXO — useTransactionGraph
 //
-//  The data side of the UTXO graph: where the transactions
-//  come from, which of them the picked day shows, and what
-//  they MEAN. For now the source is the hand-written sample
-//  in mockTransactions.js — the GUI mockup — and swapping it
-//  for backend fetches touches only this file. The meaning
-//  is derived in one place from the plain list: which
-//  outputs a listed transaction spends (the graph's edges),
-//  which ones nobody has spent (the loose coins), every fee
-//  (inputs minus outputs — a UTXO transaction never states
-//  its fee), which outputs are change (paid back to one of
-//  the transaction's own input addresses) and who the sender
-//  is. The names that say who controls which address live
-//  here as state: a rename from the transaction dialog
-//  relabels the whole graph (in memory for now — the backend
-//  will store them like the EVM graph's). The small
+//  The data side of the UTXO graph: the backend's four graph
+//  endpoints behind TanStack Query, and what the answers MEAN.
+//  The backend has already resolved the chain — every input's
+//  address and amount (through the output it spends), every
+//  output's spender, every fee (inputs minus outputs: a UTXO
+//  transaction never states its fee) — so what is left here is
+//  reading it: which listed transaction feeds which (the
+//  graph's edges), which outputs are change (paid back to one
+//  of the transaction's own input addresses), what state an
+//  output is in, and who the sender is. The picked day travels
+//  as a half-open [from, to) unix window from the student's
+//  local midnight; the backend answers from its cache at once
+//  and crawls the chain in the background, and while it says
+//  `updating` the page asks again every few seconds — today's
+//  window keeps being asked after that too, a past day does
+//  not. The names that say who controls which address are the
+//  backend's (shared with the EVM graph): a rename is stored
+//  there and every graph query asks again. The small
 //  formatters every part of the drawing shares live here
 //  too.
 //
 //  Split into (root last) — plain functions with no React in
 //  them, then the hooks:
 //
-//    outpointKey         — "txid:vout"
 //    formatAmount        — satoshis → "0.1", exact
 //    shortTxid           — "3f9a1c…7be2"
-//    nameOf              — a name from the book, else a short
-//                          address
-//    senderOf            — who pays: one sender, or several
-//                          parties
-//    deriveGraph         — edges, spent, change, fees
+//    nameOf              — a name from the book, a short
+//                          address, or what a script pays to
+//    senderOf            — who pays: one sender, several
+//                          parties, or a block's reward
+//    isChange            — an output back to an input address
+//    spendStateOf        — spent, unspent, unknown or data
+//    edgesOf             — the day's output → input links
 //    dayOf               — a Date → its local 'YYYY-MM-DD'
+//    rangeOfDay          — 'YYYY-MM-DD' → local-day unix window
 //    useTransactionDays  — the days the slider offers
+//    useTransaction      — one transaction, for the dialog
 //    useTransactionGraph — the day's data + derived model
 //                          (default export)
 // -----------------------------------------------------------
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import axios from 'axios';
 
-import { NAME_MAX_LENGTH } from '../constants';
-import { MOCK_BLOCKS, MOCK_FAUCET_ADDRESS, MOCK_NAMES, MOCK_TRANSACTIONS } from '../mockTransactions';
-
-
-
+import { NAME_MAX_LENGTH, POLL_CONFIG } from '../constants';
 
 
+// What an output WITHOUT an address pays to, by its script type
+const SCRIPT_LABELS = {
+  op_return: 'OP_RETURN duomenys',
+  p2pk: 'Viešasis raktas (P2PK)',
+  nonstandard: 'Nestandartinis scenarijus',
+};
 
-
-// -----------------------------------------------------------
-// outpointKey
-// -----------------------------------------------------------
-//
-// "txid:vout" — the one name an output has on the chain.
-//
-// Used by:
-//   - deriveGraph (below)
-//   - TransactionBox.jsx — looking up spent / change per row
-//   - TransactionModal.jsx — each output's spender and change
-// -----------------------------------------------------------
-
-export const outpointKey = (txid, vout) => `${txid}:${vout}`;
+// Stable empties while no answer has come — fresh [] / {} on
+// every render would rebuild the layout for nothing
+const NO_BLOCKS = [];
+const NO_TRANSACTIONS = [];
+const NO_NAMES = {};
 
 
 
@@ -73,7 +74,9 @@ export const outpointKey = (txid, vout) => `${txid}:${vout}`;
 //
 // Satoshis → coin units with trailing zeros trimmed
 // (10000000 → "0.1"). Integer arithmetic only — dividing by
-// 1e8 in floating point can print 0.30000000000000004.
+// 1e8 in floating point can print 0.30000000000000004. An
+// amount nobody knows (an input whose earlier transaction the
+// server did not give) reads "?".
 //
 // Used by:
 //   - TransactionBox.jsx — every row's amount and tooltip
@@ -82,6 +85,7 @@ export const outpointKey = (txid, vout) => `${txid}:${vout}`;
 // -----------------------------------------------------------
 
 export function formatAmount(sat) {
+  if (sat === null || sat === undefined) return '?';
   const whole = Math.floor(sat / 100_000_000);
   const fraction = String(sat % 100_000_000).padStart(8, '0').replace(/0+$/, '');
   return fraction ? `${whole}.${fraction}` : String(whole);
@@ -120,15 +124,25 @@ export const shortTxid = (txid) => `${txid.slice(0, 6)}…${txid.slice(-4)}`;
 // nameOf
 // -----------------------------------------------------------
 //
+//   nameOf(address, names, scriptType?)
+//
 // The address's name from the book, else the address cut to
-// its first 8 and last 4 characters.
+// its first 8 and last 4 characters. An output with no
+// address (null) is named by what its script is — OP_RETURN
+// data, a bare public key — and an input whose address is not
+// known reads "Nežinomas adresas".
 //
 // Used by:
+//   - senderOf (below)
 //   - TransactionBox.jsx — every row's label
+//   - TransactionModal.jsx — a card without an address
 //   - UtxoFlowGraph.jsx — the text-alternative table
 // -----------------------------------------------------------
 
-export const nameOf = (address, names) => names[address] ?? `${address.slice(0, 8)}…${address.slice(-4)}`;
+export function nameOf(address, names, scriptType) {
+  if (!address) return SCRIPT_LABELS[scriptType] ?? 'Nežinomas adresas';
+  return names[address] ?? `${address.slice(0, 8)}…${address.slice(-4)}`;
+}
 
 
 
@@ -146,10 +160,11 @@ export const nameOf = (address, names) => names[address] ?? `${address.slice(0, 
 // input, but it spends from many addresses of its own and the
 // chain cannot tell which addresses share a wallet — so, as
 // chain analysis assumes, all inputs count as ONE sender:
-// the one name among them, else the first input's short
+// the one name among them, else the first known input's short
 // address. Only inputs carrying two DIFFERENT names prove
 // different people put coins in (a CoinJoin, a PayJoin):
-// then `several` is true and the label says so.
+// then `several` is true and the label says so. A coinbase
+// has no sender — it is the block's reward, new coins.
 //
 // Used by:
 //   - TransactionBox.jsx — the band and the input rows
@@ -159,13 +174,21 @@ export const nameOf = (address, names) => names[address] ?? `${address.slice(0, 
 
 export function senderOf(tx, names) {
 
-  const named = new Set(tx.inputs.map((input) => names[input.address]).filter(Boolean));
+  if (tx.coinbase) {
+    return { label: 'Bloko atlygis (coinbase)', several: false };
+  }
 
+
+  const known = tx.inputs.filter((input) => input.address);
+  const named = new Set(known.map((input) => names[input.address]).filter(Boolean));
 
   if (named.size > 1) {
     return { label: 'Kelios pusės', several: true };
   }
-  return { label: named.size === 1 ? [...named][0] : nameOf(tx.inputs[0].address, names), several: false };
+  if (named.size === 1) {
+    return { label: [...named][0], several: false };
+  }
+  return { label: known.length ? nameOf(known[0].address, names) : 'Nežinomas siuntėjas', several: false };
 }
 
 
@@ -175,72 +198,102 @@ export function senderOf(tx, names) {
 
 
 // -----------------------------------------------------------
-// deriveGraph
+// isChange
 // -----------------------------------------------------------
 //
-//   const { edges, spent, change, fees } = deriveGraph(transactions)
-//
-//   edges  — one per input whose source transaction is listed:
-//            { id, fromTxid, vout, toTxid, vin, address,
-//              value, isChange }
-//   spent  — Map outpointKey → { txid, vin }: the listed
-//            input that spends that output
-//   change — Set of outpointKeys paid back to an input address
-//   fees   — txid → fee in satoshis
-//
-// An input whose source transaction is NOT listed (a coin
-// from before the graph's window) gets no edge — its box
-// still shows it as an input row.
+// Whether an output is CHANGE: paid back to one of the
+// addresses the transaction spends from — the sender keeping
+// what was left over.
 //
 // Used by:
-//   - useTransactionGraph (below) — once, over every
-//     transaction
+//   - edgesOf (below) — a dashed edge
+//   - TransactionBox.jsx — the ↩ mark
+//   - TransactionModal.jsx — the Grąža chip
 // -----------------------------------------------------------
 
-function deriveGraph(transactions) {
+export function isChange(tx, output) {
+  return Boolean(output.address) && tx.inputs.some((input) => input.address === output.address);
+}
 
-  const listed = new Set(transactions.map((tx) => tx.txid));
-  const spent = new Map();
-  const change = new Set();
-  const fees = {};
+
+
+
+
+
+
+// -----------------------------------------------------------
+// spendStateOf
+// -----------------------------------------------------------
+//
+// An output's state, from the backend's spent_by and
+// spent_known:
+//
+//   'spent'   — a transaction some history lists spends it
+//   'data'    — OP_RETURN: data, no coin to spend
+//   'unspent' — nobody has spent it, and that is certain (its
+//               address's history was read)
+//   'unknown' — nobody seen spending it, but its address's
+//               history was never read (a public hub, or too
+//               far from the faucet) — so nobody can say
+//
+// Used by:
+//   - TransactionBox.jsx — the coin, ring or port on the row
+//   - TransactionModal.jsx — the card's last line
+// -----------------------------------------------------------
+
+export function spendStateOf(output) {
+  if (output.spent_by) return 'spent';
+  if (output.script_type === 'op_return') return 'data';
+  return output.spent_known ? 'unspent' : 'unknown';
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// edgesOf
+// -----------------------------------------------------------
+//
+//   edgesOf(transactions) → [{ id, fromTxid, vout, toTxid,
+//                              vin, address, isChange }]
+//
+// One edge per input that spends an output of ANOTHER listed
+// transaction — both ends are on screen. An input spending a
+// coin from before the day gets no edge; its box still shows
+// it as an input row.
+//
+// Used by:
+//   - useTransactionGraph (below) — once per answer
+// -----------------------------------------------------------
+
+function edgesOf(transactions) {
+
+  const byTxid = Object.fromEntries(transactions.map((tx) => [tx.txid, tx]));
   const edges = [];
 
 
   for (const tx of transactions) {
-    const inputAddresses = new Set(tx.inputs.map((input) => input.address));
-    const totalIn = tx.inputs.reduce((total, input) => total + input.value, 0);
-    const totalOut = tx.outputs.reduce((total, output) => total + output.value, 0);
-    fees[tx.txid] = totalIn - totalOut;
-
-    tx.outputs.forEach((output, vout) => {
-      if (inputAddresses.has(output.address)) change.add(outpointKey(tx.txid, vout));
-    });
-  }
-
-
-  // A second pass: an edge asks whether its SOURCE output is
-  // change, so every transaction's change must be known first
-  for (const tx of transactions) {
     tx.inputs.forEach((input, vin) => {
-      const key = outpointKey(input.txid, input.vout);
-      spent.set(key, { txid: tx.txid, vin });
-      if (listed.has(input.txid)) {
-        edges.push({
-          id: `${key}>${tx.txid}:${vin}`,
-          fromTxid: input.txid,
-          vout: input.vout,
-          toTxid: tx.txid,
-          vin,
-          address: input.address,
-          value: input.value,
-          isChange: change.has(key),
-        });
-      }
+      const source = byTxid[input.txid];
+      const output = source?.outputs[input.vout];
+      if (!output) return;
+      edges.push({
+        id: `${input.txid}:${input.vout}>${tx.txid}:${vin}`,
+        fromTxid: input.txid,
+        vout: input.vout,
+        toTxid: tx.txid,
+        vin,
+        address: input.address,
+        isChange: isChange(source, output),
+      });
     });
   }
 
 
-  return { edges, spent, change, fees };
+  return edges;
 }
 
 
@@ -257,7 +310,6 @@ function deriveGraph(transactions) {
 // the day slider picks, in the viewer's own timezone.
 //
 // Used by:
-//   - useTransactionDays / useTransactionGraph (below)
 //   - Page.jsx — today, and its tick over at midnight
 // -----------------------------------------------------------
 
@@ -274,26 +326,104 @@ export function dayOf(date) {
 
 
 // -----------------------------------------------------------
+// rangeOfDay
+// -----------------------------------------------------------
+//
+// 'YYYY-MM-DD' → that day's half-open unix window
+// [00:00, next 00:00) in the student's local timezone — the
+// EVM graph's rule. The Date(y, m, d) constructor handles
+// month bounds and DST.
+//
+// Used by:
+//   - useTransactionGraph (below) — the graph query's window
+// -----------------------------------------------------------
+
+function rangeOfDay(dayString) {
+  const [year, month, day] = dayString.split('-').map(Number);
+  const start = new Date(year, month - 1, day);
+  const end = new Date(year, month - 1, day + 1);
+
+  return {
+    from: Math.floor(start.getTime() / 1000),
+    to: Math.floor(end.getTime() / 1000),
+  };
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // useTransactionDays
 // -----------------------------------------------------------
 //
-//   const days = useTransactionDays(today)
+//   const days = useTransactionDays(network, today)
 //
-// The days the slider offers, ascending: every local day a
-// block falls on, plus today — always offered, its mempool is
-// live even before today's first block. (The EVM graph asks
-// its backend for the same list; so will this one.)
+// The days the slider offers, ascending: every local day the
+// faucet has a mined transaction on (GET /api/utxo/<network>/
+// transaction-days, bucketed in the browser's IANA zone — each
+// block time under its OWN date's offset, so the list matches
+// rangeOfDay in every season), plus today — always offered,
+// its mempool is live even before today's first block. The
+// zone is part of the query key, so a list built under one
+// zone is never served under another. useTransactionGraph
+// refreshes the list when a crawl lands.
 //
 // Used by:
 //   - Page.jsx — the day slider's options
 // -----------------------------------------------------------
 
-export function useTransactionDays(today) {
+export function useTransactionDays(network, today) {
+
+  const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const { data } = useQuery({
+    queryKey: ['utxo-tx-days', network, timeZone],
+    queryFn: async () => (await axios.get(`/api/utxo/${network}/transaction-days`, { params: { tz: timeZone } })).data,
+    staleTime: 60 * 1000,
+  });
+
+
   return useMemo(() => {
-    const used = new Set(MOCK_BLOCKS.map((block) => dayOf(new Date(block.time))));
+    const used = new Set((data?.days ?? []).map((entry) => entry.day));
     used.add(today);
     return [...used].sort();
-  }, [today]);
+  }, [data, today]);
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// useTransaction
+// -----------------------------------------------------------
+//
+//   const { data, isPending, isError, error } =
+//     useTransaction(network, txid, enabled)
+//
+// One transaction in the graph's shape, with the names of its
+// addresses (GET /api/utxo/<network>/transaction/<txid> —
+// fetched from the chain when the backend lacks it). For the
+// dialog's links that walk past the day on screen; `enabled`
+// is false for a transaction the day already holds. A 404 is
+// an answer, not a hiccup — never retried.
+//
+// Used by:
+//   - TransactionModal.jsx — the transaction on show
+// -----------------------------------------------------------
+
+export function useTransaction(network, txid, enabled) {
+  return useQuery({
+    queryKey: ['utxo-tx', network, txid],
+    queryFn: async ({ signal }) => (await axios.get(`/api/utxo/${network}/transaction/${txid}`, { signal })).data,
+    enabled,
+    staleTime: 30 * 1000,
+    retry: false,
+  });
 }
 
 
@@ -306,83 +436,108 @@ export function useTransactionDays(today) {
 // useTransactionGraph (default export)
 // -----------------------------------------------------------
 //
-//   const { blocks, transactions, live, byTxid, blockTimes,
-//           names, renameAddress, faucetAddress, graph } =
-//     useTransactionGraph(day, today)
+//   const { blocks, transactions, byTxid, edges, live, names,
+//           faucetAddress, renameAddress, loading, error,
+//           updating, missing } =
+//     useTransactionGraph(network, day, today)
 //
 //   blocks        — the day's blocks [{ height, time }],
 //                   ascending
-//   transactions  — the day's transactions [{ txid, block |
-//                   null, vsize, inputs, outputs }], the
-//                   mempool's included while the day is today
-//   live          — the day is today (the mempool is shown)
-//   byTxid        — EVERY transaction by txid, all days — the
-//                   dialog's links walk across days
-//   blockTimes    — height → time, every block
+//   transactions  — the day's transactions, parents before
+//                   children, the mempool's while live
+//   byTxid        — the same by txid
+//   edges         — edgesOf(transactions)
+//   live          — the window reaches into the last hour: the
+//                   mempool is shown (the backend decides, the
+//                   EVM rule — so for an hour after midnight
+//                   yesterday is live too)
 //   names         — address → who controls it
-//   renameAddress(address, name) — '' clears the name
+//   renameAddress(address, name) → Promise<saved?> — '' clears
 //   faucetAddress — the faucet's own address
-//   graph         — deriveGraph's { edges, spent, change, fees }
-//                   over every transaction: whether an output
-//                   was spent is a fact of the chain, not of
-//                   the day on screen
+//   loading       — no answer for this window yet
+//   error         — the last request's failure, as text, or
+//                   null (earlier data stays on screen)
+//   updating      — a crawl is filling the backend's cache
+//   missing       — window transactions the backend has met
+//                   but cannot show (not fetched yet, or
+//                   refused by its server)
 //
-// The day decides WHAT is drawn; the chain facts — graph,
-// byTxid, blockTimes — always cover every day. The names
-// start from the sample's and change only through
-// renameAddress.
+// When a crawl lands (updating turns false) the day list is
+// asked again — it is read from what the crawls stored.
 //
 // Used by:
 //   - UtxoFlowGraph.jsx
 // -----------------------------------------------------------
 
-export default function useTransactionGraph(day, today) {
+export default function useTransactionGraph(network, day, today) {
 
-  // The mockup's source is the module's sample — a backend
-  // fetch replaces it
-  const [names, setNames] = useState(MOCK_NAMES);
-
-
-  const graph = useMemo(() => deriveGraph(MOCK_TRANSACTIONS), []);
-  const byTxid = useMemo(() => Object.fromEntries(MOCK_TRANSACTIONS.map((tx) => [tx.txid, tx])), []);
-  const blockTimes = useMemo(() => Object.fromEntries(MOCK_BLOCKS.map((block) => [block.height, block.time])), []);
+  const queryClient = useQueryClient();
+  const { from, to } = useMemo(() => rangeOfDay(day), [day]);
+  const liveGuess = day === today;
 
 
-  // The picked day: its blocks, their transactions, and the
-  // mempool when the day is today
-  const { blocks, transactions } = useMemo(() => {
-    const dayBlocks = MOCK_BLOCKS.filter((block) => dayOf(new Date(block.time)) === day);
-    const heights = new Set(dayBlocks.map((block) => block.height));
-    const dayTransactions = MOCK_TRANSACTIONS.filter((tx) => (tx.block === null ? day === today : heights.has(tx.block)));
-    return { blocks: dayBlocks, transactions: dayTransactions };
-  }, [day, today]);
+  // Fast while a crawl fills the cache, steady on a live
+  // window, not at all on a past day once it has landed
+  const query = useQuery({
+    queryKey: ['utxo-graph', network, from, to],
+    queryFn: async ({ signal }) => (await axios.get(`/api/utxo/${network}/graph`, { params: { from, to }, signal })).data,
+    refetchInterval: (current) => {
+      if (current.state.data?.updating) return POLL_CONFIG.UPDATING_MS;
+      return (current.state.data?.live ?? liveGuess) ? POLL_CONFIG.LIVE_MS : false;
+    },
+  });
+  const { data } = query;
+  const updating = Boolean(data?.updating);
 
 
-  // One rename relabels every box and row of that address;
-  // an empty name clears the label
-  const renameAddress = useCallback((address, name) => {
+  // A landed crawl may have read the faucet's history for the
+  // first time — the slider's day list comes from it
+  const wasUpdating = useRef(false);
+  useEffect(() => {
+    if (wasUpdating.current && !updating) {
+      queryClient.invalidateQueries({ queryKey: ['utxo-tx-days', network] });
+    }
+    wasUpdating.current = updating;
+  }, [updating, network, queryClient]);
+
+
+  const transactions = data?.transactions ?? NO_TRANSACTIONS;
+  const byTxid = useMemo(() => Object.fromEntries(transactions.map((tx) => [tx.txid, tx])), [transactions]);
+  const edges = useMemo(() => edgesOf(transactions), [transactions]);
+
+
+  // Stored by the backend first; once it agreed, every graph
+  // and transaction query of the network asks again — awaited,
+  // so the dialog closes its editor on the new label, and
+  // learns when the name was NOT saved
+  const renameAddress = useCallback(async (address, name) => {
     const trimmed = name.trim().slice(0, NAME_MAX_LENGTH);
-    setNames((current) => {
-      const next = { ...current };
-      if (trimmed) {
-        next[address] = trimmed;
-      } else {
-        delete next[address];
-      }
-      return next;
-    });
-  }, []);
+    try {
+      await axios.get(`/api/utxo/${network}/set-address-name`, { params: { address, name: trimmed } });
+    } catch (err) {
+      console.error('Rename failed:', err);
+      return false;
+    }
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['utxo-graph', network] }),
+      queryClient.invalidateQueries({ queryKey: ['utxo-tx', network] }),
+    ]);
+    return true;
+  }, [network, queryClient]);
 
 
   return {
-    blocks,
+    blocks: data?.blocks ?? NO_BLOCKS,
     transactions,
-    live: day === today,
     byTxid,
-    blockTimes,
-    names,
+    edges,
+    live: data?.live ?? liveGuess,
+    names: data?.names ?? NO_NAMES,
+    faucetAddress: data?.faucet_address ?? null,
     renameAddress,
-    faucetAddress: MOCK_FAUCET_ADDRESS,
-    graph,
+    loading: query.isPending,
+    error: query.isError ? (query.error?.response?.data?.error ?? 'Nepavyko gauti transakcijų') : null,
+    updating,
+    missing: data?.missing ?? 0,
   };
 }

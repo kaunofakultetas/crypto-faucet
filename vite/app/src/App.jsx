@@ -9,8 +9,8 @@
 //                 /faucet/svm/:network, /faucet/move/:network,
 //                 /faucet/utxo/:network
 //    - graph    — /graph/:network (EVM transaction flow),
-//                 /graph/utxo/:network (UTXO transactions —
-//                 a GUI mockup on sample data for now)
+//                 /graph/utxo/:network (UTXO transactions
+//                 by block)
 //    - teaching — /sha256 (simulator), /presentations
 //    - dapps    — /dapps-server launcher
 //  "/" redirects into the first faucet family that has

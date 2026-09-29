@@ -340,8 +340,8 @@ export default function useNodePositions({ blocks, transactions, live, scale, sc
 
 
   // Every box where a drag left it, else where the first
-  // layout puts it — so a transaction that arrives later (an
-  // edited mock under hot reload, live data one day) gets its
+  // layout puts it — so a transaction that arrives later (a
+  // new payout in a live poll, a crawl landing) gets its
   // first-layout spot instead of having no position at all
   const positions = { ...firstLayout, ...dropped };
 

@@ -3,9 +3,9 @@
 //
 //  Every fixed number and colour of the UTXO transaction
 //  graph in one place: canvas and box geometry (px), the zoom
-//  range and the palette — brand burgundy for everything the
-//  faucet owns, slate for everyone else, gold for coins nobody
-//  has spent.
+//  range, how often the data is asked for again, and the
+//  palette — brand burgundy for everything the faucet owns,
+//  slate for everyone else, gold for coins nobody has spent.
 //
 //  Used by:
 //    - useNodePositions.js, useTransactionGraph.js, useZoom.js
@@ -98,6 +98,32 @@ export const ZOOM_CONFIG = {
   SLIDER_STEP: 0.01,
   WHEEL_SPEED: 0.0015,   // exponential: one mouse-wheel notch (~100 px) ≈ 14 %
   SLIDER_HEIGHT: 180,    // the vertical slider, px
+};
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// POLL_CONFIG
+// -----------------------------------------------------------
+//
+// How often the day's graph is asked for again, in ms: fast
+// while the backend says a crawl is filling its cache
+// (`updating`), so its transactions land as they come; steady
+// on a live window (today — new payouts, blocks mined); a past
+// day, once its crawl has landed, is history and not asked
+// again.
+//
+// Used by:
+//   - useTransactionGraph.js — the graph query's refetchInterval
+// -----------------------------------------------------------
+
+export const POLL_CONFIG = {
+  UPDATING_MS: 3_000,
+  LIVE_MS: 15_000,
 };
 
 
