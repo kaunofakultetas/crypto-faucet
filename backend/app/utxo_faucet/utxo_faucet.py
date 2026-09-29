@@ -142,6 +142,35 @@ class InsufficientFunds(ValueError):
 
 
 ############################################################
+# MempoolChainTooLong
+############################################################
+#
+# The NODE's refusal of a payout that would extend the
+# faucet's chain of unconfirmed transactions past its relay
+# policy limit (Bitcoin / Litecoin Core: 25 by default).
+# Every payout spends the previous one's change, so a burst
+# of claims between two blocks builds exactly such a chain.
+# Raised only on the node's own "too-long-mempool-chain"
+# answer — the faucet keeps no chain limit of its own, the
+# node is the one that knows. The payout path turns it into
+# a "wait for the next block" 503.
+#
+# Used by:
+#   - UTXOFaucet._create_and_broadcast_transaction — raised
+#   - UTXOFaucet.request_crypto — caught
+############################################################
+
+class MempoolChainTooLong(RuntimeError):
+    pass
+
+
+
+
+
+
+
+
+############################################################
 # NetworkContext
 ############################################################
 #
@@ -651,9 +680,17 @@ class UTXOFaucet:
         # remember what was spent and the change that now exists —
         # the next claim (seconds behind, before the server has
         # noticed) must neither re-select these outpoints nor go
-        # without the change.
+        # without the change. A node refusing the payout because
+        # the faucet's unconfirmed chain is already at its limit
+        # is told apart (MempoolChainTooLong); nothing is
+        # remembered then — the transaction never happened.
         # ==========================================================
-        tx_id = ctx.electrum.request("blockchain.transaction.broadcast", [tx.serialize().hex()])
+        try:
+            tx_id = ctx.electrum.request("blockchain.transaction.broadcast", [tx.serialize().hex()])
+        except RuntimeError as e:
+            if 'too-long-mempool-chain' in str(e):
+                raise MempoolChainTooLong(str(e)) from e
+            raise
 
         now = int(time.time())
         spent = self._recently_spent.setdefault(ctx.network_key, {})
@@ -906,8 +943,10 @@ class UTXOFaucet:
             # CONFIRMED balance only — a conservative floor. The
             # selection itself spends unconfirmed change too; that is
             # what keeps a burst of claims flowing, up to the node's
-            # ~25-deep unconfirmed-chain limit per block (accepted —
-            # the next block clears it). The cached balance is fine
+            # own unconfirmed-chain limit per block (~25). Accepted:
+            # the next block clears it, and the node's refusal
+            # reaches the student as a "wait for the next block"
+            # 503 (MempoolChainTooLong). The cached balance is fine
             # here: the UTXO selection inside the payout checks for
             # real. From here on every failure — balance shortage,
             # Electrum trouble, a failed broadcast — releases the
@@ -943,6 +982,14 @@ class UTXOFaucet:
                 # in hand) is "empty" for the student's purposes
                 self.cooldowns.release(cooldown_key)
                 return {"error": "Čiaupas nebeturi kriptovaliutos. Praneškite dėstytojui."}, 503
+            except MempoolChainTooLong:
+                # The node will not stack another unconfirmed payout on
+                # the chain — the next block confirms it and frees room.
+                # Expected under load, so one log line, no traceback.
+                self.cooldowns.release(cooldown_key)
+                logging.warning(f"{network_key} payout to {to_address} refused by the node: too-long-mempool-chain")
+                return {"error": "Tinkle laukia per daug nepatvirtintų čiaupo transakcijų. "
+                                 "Palaukite, kol bus iškastas naujas blokas, ir bandykite dar kartą."}, 503
             except Exception:
                 self.cooldowns.release(cooldown_key)
                 raise

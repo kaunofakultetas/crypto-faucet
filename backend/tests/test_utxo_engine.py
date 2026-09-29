@@ -407,6 +407,16 @@ class UtxoConsolidationTests(unittest.TestCase):
 
         self.assertEqual(len(server.utxos), 1)
 
+    def test_the_faucet_sets_no_chain_limit_of_its_own(self):
+        # 40 payouts back to back, each spending the previous one's
+        # change — far past a node's usual 25. The faucet refuses
+        # none of them itself: only the node may say no.
+        helpers.FollowingElectrum(self.faucet, 'btc4', [{'tx_hash': 'aa' * 32, 'tx_pos': 0, 'value': 100_000_000}])
+
+        for student in self.students(40):
+            data, status = self.claim(address=student)
+            self.assertEqual(status, 200, data)
+
     def test_dust_is_cleaned_up_over_successive_payouts(self):
         # 30 dust outputs, 30 students: every payout sweeps a few
         # along, so the address is clean well before the last claim

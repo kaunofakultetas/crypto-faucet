@@ -63,6 +63,13 @@ class UtxoRequestFlowTests(unittest.TestCase):
     # Enough to cover the 0.01 BTC chunk plus fees
     UTXOS = [{'tx_hash': 'aa' * 32, 'tx_pos': 0, 'value': 2_000_000}]
 
+    # A node's broadcast rejections, as the Electrum client raises
+    # them (ElectrumX relays the node's reason inside the message)
+    CHAIN_TOO_LONG = ("Electrum error: {'code': 1, 'message': 'the transaction was rejected by network rules.\\n\\n"
+                      "too-long-mempool-chain, too many unconfirmed ancestors [limit: 25]\\n[0200]'}")
+    MISSING_INPUTS = ("Electrum error: {'code': 1, 'message': 'the transaction was rejected by network rules.\\n\\n"
+                      "bad-txns-inputs-missingorspent\\n[0200]'}")
+
     def setUp(self):
         self.faucet = helpers.make_utxo_faucet()
         self.captured = helpers.fake_electrum(self.faucet, 'btc4', self.UTXOS)
@@ -126,6 +133,30 @@ class UtxoRequestFlowTests(unittest.TestCase):
         data, status = self.faucet.request_crypto('btc4', self.recipient)
 
         self.assertEqual(status, 200)
+
+    def test_a_node_refusing_a_too_long_chain_asks_to_wait_for_a_block(self):
+        # The node's own too-long-mempool-chain answer — the faucet
+        # counts nothing itself — is a 503 telling the student to
+        # wait for the next block. The slot is released and the
+        # refused payout marks no outputs as spent.
+        self.client.request = lambda method, params: (_ for _ in ()).throw(RuntimeError(self.CHAIN_TOO_LONG))
+
+        data, status = self.faucet.request_crypto('btc4', self.recipient)
+
+        self.assertEqual(status, 503)
+        self.assertIn('naujas blokas', data['error'])
+        self.assertFalse(self.claimed())
+        self.assertFalse(self.faucet._recently_spent.get('btc4'))
+
+    def test_other_node_rejections_keep_the_generic_error(self):
+        # Only that one reason means "wait for a block"
+        self.client.request = lambda method, params: (_ for _ in ()).throw(RuntimeError(self.MISSING_INPUTS))
+
+        data, status = self.faucet.request_crypto('btc4', self.recipient)
+
+        self.assertEqual(status, 500)
+        self.assertNotIn('naujas blokas', data['error'])
+        self.assertFalse(self.claimed())
 
     def test_empty_faucet_is_503_and_releases_the_cooldown(self):
         self.client.get_balance = lambda scripthash: {'confirmed': 0.0, 'unconfirmed': 0.0, 'total': 0.0}
