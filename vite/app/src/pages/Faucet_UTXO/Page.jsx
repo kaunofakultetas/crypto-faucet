@@ -5,7 +5,9 @@
 //  friends, testnets): shows what the faucet will send and its
 //  live balance, takes an address and requests coins via
 //  GET /api/utxo/<network>/request-btc, and shows the faucet's
-//  own address (text + QR) so leftover coins can be returned.
+//  own address (text + QR) so leftover coins can be returned,
+//  with a button into the network's transaction graph
+//  (/graph/utxo/:network — a GUI mockup for now).
 //
 //  The balance repolls silently every 5 s; the network's
 //  display names come from /api/utxo/networks (BTC/Bitcoin
@@ -19,18 +21,20 @@
 //    DEFAULT_NET_META   — BTC fallback until the names load
 //    useFaucetInfo      — names + faucet info + polling
 //    BalanceRows        — "we'll send" + balance lines
-//    ReturnAddressCard  — return address + QR (or skeleton)
+//    ReturnAddressCard  — return address + QR + the graph
+//                         button (or skeleton)
 //    FaucetUTXO         — form state + request (default
 //                         export)
 // -----------------------------------------------------------
 
 import { useEffect, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
 import QRCode from 'react-qr-code';
 
 import { Box, Paper, TextField, Button, Alert, Stack, Typography, Divider, Skeleton } from '@mui/material';
+import HubIcon from '@mui/icons-material/Hub';
 
 import AssetIcon from '@/components/AssetIcon';
 import ErrorCard from '@/components/ErrorCard';
@@ -173,15 +177,16 @@ function BalanceRows({ faucetInfo, currencyShort }) {
 // -----------------------------------------------------------
 //
 // The bottom card: the faucet's own address as text + QR so
-// students can send leftover coins back. Skeleton during the
-// first load, nothing at all when the faucet info never
-// arrived.
+// students can send leftover coins back, and the button into
+// the network's transaction graph — the same spot as the EVM
+// page's graph button. Skeleton during the first load,
+// nothing at all when the faucet info never arrived.
 //
 // Used by:
 //   - FaucetUTXO (below)
 // -----------------------------------------------------------
 
-function ReturnAddressCard({ initialLoad, loadingInfo, faucetInfo, currencyShort }) {
+function ReturnAddressCard({ network, initialLoad, loadingInfo, faucetInfo, currencyShort }) {
 
   if (initialLoad && loadingInfo) {
     return (
@@ -206,6 +211,15 @@ function ReturnAddressCard({ initialLoad, loadingInfo, faucetInfo, currencyShort
           <Typography sx={{ mt: 1.5, wordBreak: 'break-all', fontFamily: 'monospace', fontSize: '0.875rem' }}>
             {faucetInfo.address}
           </Typography>
+          <Button
+            variant="contained"
+            component={Link}
+            to={`/graph/utxo/${network}`}
+            startIcon={<HubIcon />}
+            sx={{ mt: 2, padding: '10px 16px' }}
+          >
+            Transakcijų grafikas
+          </Button>
         </Box>
         {faucetInfo.address && (
           <QRCode value={faucetInfo.address} size={128} />
@@ -401,6 +415,7 @@ export default function FaucetUTXO() {
       </Paper>
 
       <ReturnAddressCard
+        network={network}
         initialLoad={initialLoad}
         loadingInfo={loadingInfo}
         faucetInfo={faucetInfo}

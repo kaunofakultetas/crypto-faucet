@@ -8,7 +8,9 @@
 //                 token across every chain it lives on),
 //                 /faucet/svm/:network, /faucet/move/:network,
 //                 /faucet/utxo/:network
-//    - graph    — /graph/:network (transaction flow)
+//    - graph    — /graph/:network (EVM transaction flow),
+//                 /graph/utxo/:network (UTXO transactions —
+//                 a GUI mockup on sample data for now)
 //    - teaching — /sha256 (simulator), /presentations
 //    - dapps    — /dapps-server launcher
 //  "/" redirects into the first faucet family that has
@@ -56,6 +58,7 @@ import FaucetSVM from '@/pages/Faucet_SVM/Page';
 import FaucetMOVE from '@/pages/Faucet_MOVE/Page';
 import FaucetUTXO from '@/pages/Faucet_UTXO/Page';
 import GraphPage from '@/pages/Graph/Page';
+import GraphUtxoPage from '@/pages/Graph_UTXO/Page';
 import BlockchainSimulatorPage from '@/pages/BlockchainSimulator/Page';
 import DappsServerPage from '@/pages/DappsServer/Page';
 import PresentationsPage from '@/pages/Presentations/Page';
@@ -158,7 +161,9 @@ function CatalogUnavailable({ onRetry }) {
 // One document.title per route — a client-routed SPA never
 // changes it on its own, so every tab, bookmark and history
 // entry would read the same "VU KNF Faucet'as". Matched by
-// path prefix; an unknown path keeps the bare site name.
+// path prefix, FIRST match wins — a longer prefix must come
+// before a shorter one it extends (/graph/utxo before
+// /graph); an unknown path keeps the bare site name.
 //
 // Used by:
 //   - PageArea (below)
@@ -172,6 +177,7 @@ const ROUTE_TITLES = [
   ['/faucet/svm', 'SVM čiaupas'],
   ['/faucet/move', 'Move čiaupas'],
   ['/faucet/utxo', 'UTXO čiaupas'],
+  ['/graph/utxo', 'UTXO transakcijos'],
   ['/graph', 'Transakcijų srautas'],
   ['/sha256', 'Blokų grandinės simuliatorius'],
   ['/presentations', 'Prezentacijos'],
@@ -249,6 +255,7 @@ function PageArea() {
         <Route path="graph">
           <Route index element={<Navigate to="/" replace />} />
           <Route path=":network" element={<GraphPage />} />
+          <Route path="utxo/:network" element={<GraphUtxoPage />} />
         </Route>
 
         {/* Teaching pages */}

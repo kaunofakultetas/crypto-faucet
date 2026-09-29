@@ -109,18 +109,23 @@ export default function CryptoFlowGraph({ faucetAddress, network, dateRange, liv
           style={{ height: '100%', width: '100%', border: '1px solid #ddd' }}
         />
 
-        {/* The same transfers as text — what the canvas draws */}
-        <table id="graph-table" className="sr-only">
-          <caption>Pervedimai {day} dieną</caption>
-          <thead>
-            <tr><th>Iš</th><th>Į</th><th>Suma ir transakcijų skaičius</th></tr>
-          </thead>
-          <tbody>
-            {rows.map((row) => (
-              <tr key={row.id}><td>{row.from}</td><td>{row.to}</td><td>{row.label}</td></tr>
-            ))}
-          </tbody>
-        </table>
+        {/* The same transfers as text — what the canvas draws.
+            Hidden by a wrapper div, never on the table itself: a
+            table ignores sr-only's 1px size and, invisible, would
+            stretch the page sideways on a narrow screen */}
+        <div className="sr-only">
+          <table id="graph-table">
+            <caption>Pervedimai {day} dieną</caption>
+            <thead>
+              <tr><th>Iš</th><th>Į</th><th>Suma ir transakcijų skaičius</th></tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => (
+                <tr key={row.id}><td>{row.from}</td><td>{row.to}</td><td>{row.label}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
 
         {/* Outage notice — the last fetch failed; the canvas keeps
             showing what was fetched before it */}
