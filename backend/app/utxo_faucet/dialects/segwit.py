@@ -178,6 +178,39 @@ class SegwitDialect:
 
 
     ############################################################
+    # address_of
+    ############################################################
+    #
+    # The reverse of recipient_script: an output's scriptPubKey
+    # as this network's address. A witness program (version
+    # opcode + one push of 2..40 bytes) is bech32-encoded under
+    # the HRP — bech32m from version 1 (taproot) on, embit picks
+    # the variant; an encoding that would not decode back (a v0
+    # program of the wrong length) comes out None. Anything else
+    # goes to the legacy codec when the coin has one (p2pkh /
+    # p2sh). None for a script with no address form: OP_RETURN
+    # data, bare pubkeys, multisig, non-standard.
+    #
+    # Used by:
+    #   - explorer.py — every output the transaction graph shows
+    ############################################################
+
+    def address_of(self, script: bytes):
+        if 4 <= len(script) <= 42:
+            opcode, push = script[0], script[1]
+            if (opcode == 0 or 0x51 <= opcode <= 0x60) and push == len(script) - 2:
+                witver = opcode - 0x50 if opcode else 0
+                return embit_bech32.encode(self.hrp, witver, script[2:])
+
+        if self._legacy_recipients is not None:
+            return self._legacy_recipients.address_of(script)
+
+        return None
+
+
+
+
+    ############################################################
     # sign_input
     ############################################################
     #

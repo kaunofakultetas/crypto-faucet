@@ -2,16 +2,16 @@
 #  [*] Database initialization
 #
 #  The idempotent SQLite schema: every feature's tables
-#  (blockchain simulator, faucet transaction graph)
-#  created IF NOT EXISTS on every boot, plus the
+#  (blockchain simulator, the EVM and the UTXO transaction
+#  graphs) created IF NOT EXISTS on every boot, plus the
 #  pre-mined demo chain the simulator page starts from.
 #  Nothing here migrates or drops — a fresh volume gets the
 #  full schema, an existing one is left untouched. Policy: a
 #  schema change means deleting _DATA/backend/database.db and
-#  letting this rebuild it (the graph tables are an Etherscan
-#  cache, the demo chain is re-seeded) — never a hand-patch
-#  through /dbgate. [id] is a real rowid alias (INTEGER
-#  PRIMARY KEY), so every row gets one.
+#  letting this rebuild it (the graph tables are Etherscan /
+#  ElectrumX caches, the demo chain is re-seeded) — never a
+#  hand-patch through /dbgate. [id] is a real rowid alias
+#  (INTEGER PRIMARY KEY), so every row gets one.
 #
 #  Used by:
 #    - main.py — init_db() in the __main__ block, STEP 1
@@ -114,6 +114,105 @@ def init_db_tables():
             CREATE INDEX IF NOT EXISTS idx_graph_transactions_network_timestamp ON Graph_Transactions(network, timestamp)
         ''')
         #####################################################################
+
+
+
+        ######################## UTXO transaction graph tables ########################
+        # An ElectrumX cache for the UTXO graph (app/utxo_faucet/
+        # explorer.py). Addresses keep their exact spelling — base58
+        # is case-sensitive, bech32 is lowercase already. Names live
+        # in Graph_Addresses above, shared with the EVM graph.
+
+        # Every address the crawl has read: when its history was last
+        # read, how long it was, and whether it is a public hub (a
+        # history too long to follow)
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS [GraphUtxo_Addresses] (
+                [network] TEXT NOT NULL,
+                [address] TEXT NOT NULL,
+                [last_refresh] INTEGER NULL,
+                [history_size] INTEGER NULL,
+                [is_hub] INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY ([network], [address])
+            );
+        ''')
+
+        # Each address' history as the server last listed it — one
+        # row per (address, transaction) with the height (> 0 mined,
+        # 0 / -1 in the mempool). A transaction's status comes from
+        # these rows; one no history lists any more was dropped
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS [GraphUtxo_History] (
+                [network] TEXT NOT NULL,
+                [address] TEXT NOT NULL,
+                [txid] TEXT NOT NULL,
+                [height] INTEGER NOT NULL,
+                PRIMARY KEY ([network], [address], [txid])
+            );
+        ''')
+        conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_graphutxo_history_txid ON GraphUtxo_History(network, txid)
+        ''')
+
+        # Block times by height, from the block headers
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS [GraphUtxo_Blocks] (
+                [network] TEXT NOT NULL,
+                [height] INTEGER NOT NULL,
+                [time] INTEGER NOT NULL,
+                PRIMARY KEY ([network], [height])
+            );
+        ''')
+        conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_graphutxo_blocks_time ON GraphUtxo_Blocks(network, time)
+        ''')
+
+        # Decoded transactions — immutable once fetched: size in
+        # virtual bytes and whether it mints coins (coinbase)
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS [GraphUtxo_Transactions] (
+                [network] TEXT NOT NULL,
+                [txid] TEXT NOT NULL,
+                [vsize] INTEGER NOT NULL,
+                [is_coinbase] INTEGER NOT NULL DEFAULT 0,
+                [fetched_at] INTEGER NOT NULL,
+                PRIMARY KEY ([network], [txid])
+            );
+        ''')
+
+        # Their outputs, amounts in integer satoshis; address NULL
+        # when the script has no address form (OP_RETURN, bare pubkey)
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS [GraphUtxo_Outputs] (
+                [network] TEXT NOT NULL,
+                [txid] TEXT NOT NULL,
+                [vout] INTEGER NOT NULL,
+                [address] TEXT NULL,
+                [script_type] TEXT NOT NULL,
+                [value] INTEGER NOT NULL,
+                PRIMARY KEY ([network], [txid], [vout])
+            );
+        ''')
+        conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_graphutxo_outputs_address ON GraphUtxo_Outputs(network, address)
+        ''')
+
+        # Their inputs: the output each one spends (a coinbase has
+        # none stored)
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS [GraphUtxo_Inputs] (
+                [network] TEXT NOT NULL,
+                [txid] TEXT NOT NULL,
+                [vin] INTEGER NOT NULL,
+                [prev_txid] TEXT NOT NULL,
+                [prev_vout] INTEGER NOT NULL,
+                PRIMARY KEY ([network], [txid], [vin])
+            );
+        ''')
+        conn.execute('''
+            CREATE INDEX IF NOT EXISTS idx_graphutxo_inputs_prev ON GraphUtxo_Inputs(network, prev_txid, prev_vout)
+        ''')
+        ###############################################################################
 
 
 

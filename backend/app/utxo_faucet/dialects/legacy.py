@@ -177,6 +177,32 @@ class LegacyDialect:
 
 
     ############################################################
+    # address_of
+    ############################################################
+    #
+    # The reverse of recipient_script: a classic p2pkh script
+    # (OP_DUP OP_HASH160 <20> OP_EQUALVERIFY OP_CHECKSIG) or — when
+    # this network has a p2sh prefix — a p2sh one (OP_HASH160
+    # <20> OP_EQUAL) as a base58check address; None for any
+    # other script.
+    #
+    # Used by:
+    #   - explorer.py — every output the transaction graph shows
+    #   - segwit.py — SegwitDialect.address_of, for the non-
+    #     witness scripts of SegWit coins with base58 prefixes
+    ############################################################
+
+    def address_of(self, script: bytes):
+        if len(script) == 25 and script[:3] == b'\x76\xa9\x14' and script[23:] == b'\x88\xac':
+            return embit_base58.encode_check(bytes([self.p2pkh_prefix]) + script[3:23])
+        if self.p2sh_prefix is not None and len(script) == 23 and script[:2] == b'\xa9\x14' and script[22:] == b'\x87':
+            return embit_base58.encode_check(bytes([self.p2sh_prefix]) + script[2:22])
+        return None
+
+
+
+
+    ############################################################
     # sign_input
     ############################################################
     #

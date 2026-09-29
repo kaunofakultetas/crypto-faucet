@@ -31,6 +31,7 @@ import unittest
 import threading
 import contextlib
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 from unittest.mock import patch
 
 import requests
@@ -783,7 +784,8 @@ class ExplorerClassificationTests(ExplorerTestCase):
 #
 # The day pipeline end to end: rows are bucketed in the
 # browser's IANA zone with each date's own offset (a winter
-# evening viewed in summer stays on its own day), a numeric
+# evening viewed in summer stays on its own day), UTC is
+# Python's own whatever the tz database says, a numeric
 # offset is still accepted, and a node's "last seen" is
 # scoped to the window on screen, not to all history.
 ############################################################
@@ -816,6 +818,17 @@ class ExplorerWindowTests(ExplorerTestCase):
         self.one_transaction_at(2026, 1, 15, 23, 30)
 
         days, _ = self.explorer.get_transaction_days('testchain', 'Mars/Olympus_Mons', FAUCET)
+
+        self.assertEqual(days['days'][0]['day'], '2026-01-15')
+
+    def test_a_utc_browser_gets_utc_days(self):
+        # In the container Etc/UTC holds the host's zone (the
+        # mounted /etc/localtime lands on it) — played here by a
+        # tz database that answers Vilnius for anything
+        self.one_transaction_at(2026, 1, 15, 23, 30)
+
+        with patch('app.evm_faucet.explorer.ZoneInfo', lambda name: ZoneInfo('Europe/Vilnius')):
+            days, _ = self.explorer.get_transaction_days('testchain', 'UTC', FAUCET)
 
         self.assertEqual(days['days'][0]['day'], '2026-01-15')
 

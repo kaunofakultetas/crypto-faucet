@@ -106,6 +106,8 @@ DEFAULT_NETWORK = 'btc4'
 #
 # Used by:
 #   - UTXOFaucet — warmup and per-request identity
+#   - explorer.py — the scripthash of every address the
+#     transaction graph reads
 ############################################################
 
 def _electrum_scripthash(script) -> str:
@@ -449,6 +451,50 @@ class UTXOFaucet:
 
         script = self._dialects[network_key].faucet_script(self.faucet_key.get_public_key())
         return _electrum_scripthash(script)
+
+
+
+
+
+
+    ############################################################
+    # network_dialect
+    ############################################################
+    #
+    # The network's address dialect — how an address becomes a
+    # script and back. None for a network not configured.
+    #
+    # Used by:
+    #   - explorer.py — decoding outputs, scripthashes of the
+    #     addresses it crawls, validating addresses it names
+    ############################################################
+
+    def network_dialect(self, network_key: str):
+        return self._dialects.get(network_key)
+
+
+
+
+
+
+    ############################################################
+    # faucet_address_for
+    ############################################################
+    #
+    # The faucet's own address on one network — the root the
+    # transaction graph grows from. None when the network is not
+    # configured or no faucet key is.
+    #
+    # Used by:
+    #   - explorer.py — the crawl's and the graph's root
+    ############################################################
+
+    def faucet_address_for(self, network_key: str):
+        dialect = self._dialects.get(network_key)
+        if not self.faucet_key or dialect is None:
+            return None
+
+        return dialect.faucet_address(self.faucet_key.get_public_key())
 
 
 
