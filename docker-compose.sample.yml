@@ -14,14 +14,14 @@ services:
       ######################################################################
     volumes:
       - ./endpoint/Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./_VIDEOS:/var/www/videos:ro
+      - ./presentations:/var/www/presentations:ro
     ports:
       - 80:80
     networks:
       - external
       - isolated
     restart: unless-stopped
-  
+
 
   faucet-exit:
     container_name: faucet-exit
@@ -54,7 +54,7 @@ services:
     user: 1000:1000
     read_only: true
     environment:
-      VITE_SYSTEM_NAME: "KNF Testnet<br/>Kriptovaliutų Faucet'as"
+      VITE_SYSTEM_NAME: "VU KNF<br/>Kriptovaliutų Faucet'as"
     networks:
       - isolated
     restart: unless-stopped
@@ -102,14 +102,14 @@ services:
 
   faucet-backend:
     container_name: faucet-backend
-    
+
     # Docker hub
     image: vuknf/faucet-backend:latest
-    
+
     # # Self-built
     # image: faucet-backend
     # build: ./backend
-    
+
     user: 1000:1000
     read_only: true
     environment:
@@ -150,6 +150,7 @@ services:
     command:
       - --no-resolv
       - --no-hosts
+      - --local=/#/
       - --address=/#/172.18.102.30
     networks:
       isolated:
@@ -166,7 +167,7 @@ services:
 
 
 
-  
+
   # ------------------------------------------------------------
   #                   Crypto Faucet Notes
   # ------------------------------------------------------------
