@@ -46,4 +46,13 @@ export default [
       ],
     },
   },
+  // Test files run in node (vitest) — process, __dirname and
+  // co are real there — and fast refresh never loads a test
+  // file, so its support modules may export helpers next to
+  // components
+  {
+    files: ['tests/**/*.{js,jsx}'],
+    languageOptions: { globals: { ...globals.browser, ...globals.node } },
+    rules: { 'react-refresh/only-export-components': 'off' },
+  },
 ]

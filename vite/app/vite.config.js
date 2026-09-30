@@ -11,6 +11,11 @@
 //    - dev server on 0.0.0.0:80 so the Docker dev container
 //      (faucet-vite, Dockerfile.dev) is reachable through the
 //      Caddy endpoint
+//    - the vitest block: jsdom, the tests/ tree, the shared
+//      setup file (jest-dom matchers, the msw backend double,
+//      browser API polyfills) and the coverage scope. Tests
+//      run inside Docker only — see ../runTests.sh and
+//      tests/README.md
 // -----------------------------------------------------------
 
 import { defineConfig } from 'vite';
@@ -35,5 +40,21 @@ export default defineConfig({
     host: '0.0.0.0',
     port: 80,
     allowedHosts: true,
+  },
+  test: {
+    environment: 'jsdom',
+    include: ['tests/**/*.test.{js,jsx}'],
+    setupFiles: ['tests/support/setup.js'],
+    // MUI renders slowly under jsdom, and the contract
+    // matrices mount a page many times per file
+    testTimeout: 20000,
+    hookTimeout: 20000,
+    css: false,
+    coverage: {
+      provider: 'v8',
+      include: ['src/**/*.{js,jsx}'],
+      exclude: ['src/main.jsx'],
+      reportsDirectory: 'coverage',
+    },
   },
 });
