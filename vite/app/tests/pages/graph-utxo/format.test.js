@@ -7,11 +7,13 @@
 //  groupThousands; formatAmount (every digit shown, trailing
 //  zeros trimmed, apostrophe groups on both sides of the
 //  point, exact integer arithmetic, "?" for an amount nobody
-//  knows, bare digits for screen readers); shortTxid; nameOf
-//  (a name from the book, a short address, what an
-//  address-less script pays to, "Nežinomas adresas");
-//  senderOf (one sender, several parties, a block's reward,
-//  nobody known); isChange; spendStateOf; dayOf — and the box
+//  knows, bare digits for screen readers); shortTxid ("?" for
+//  anything but a string); nameOf (a name from the book, a
+//  short address, what an address-less script pays to,
+//  "Nežinomas adresas", only text taken as a name or an
+//  address); senderOf (one sender, several parties, a block's
+//  reward, nobody known, only text counted as a name);
+//  isChange; spendStateOf; dayOf — and the box
 //  geometry useNodePositions.js exports (columnKeyOf, rowTop,
 //  rowCenterY, transactionHeight). The fixture day's own
 //  transactions are the cases wherever they have one.
@@ -154,6 +156,11 @@ describe('shortTxid', () => {
     expect(shortTxid(T.T1)).toBe('a1a1a1…a1a1');
     expect(shortTxid(`3f9a1c${'0'.repeat(54)}7be2`)).toBe('3f9a1c…7be2');
   });
+
+
+  it('reads "?" for anything that is not a string, instead of throwing', () => {
+    for (const odd of [null, undefined, 12345, {}, ['a1'.repeat(32)]]) expect(shortTxid(odd)).toBe('?');
+  });
 });
 
 
@@ -191,6 +198,20 @@ describe('nameOf', () => {
     expect(nameOf(null, names)).toBe('Nežinomas adresas');
     expect(nameOf(null, names, 'p2wpkh')).toBe('Nežinomas adresas');
     expect(nameOf('', names)).toBe('Nežinomas adresas');
+  });
+
+
+  it('takes only text as a name or an address — anything else in the book falls back to the short address', () => {
+    expect(nameOf(f.JONAS, { [f.JONAS]: 42 })).toBe('tb1qxc2w…xek8');
+    expect(nameOf(f.JONAS, { [f.JONAS]: { vardas: 'Jonas' } })).toBe('tb1qxc2w…xek8');
+    expect(nameOf(f.JONAS, { [f.JONAS]: '' })).toBe('tb1qxc2w…xek8');
+    expect(nameOf(12345, names)).toBe('Nežinomas adresas');
+    expect(nameOf('constructor', {})).toBe('construc…ctor');
+  });
+
+
+  it('labels an address-less output only by a script type it knows — never by what a plain object inherits', () => {
+    for (const odd of ['constructor', '__proto__', 'toString', 42]) expect(nameOf(null, names, odd)).toBe('Nežinomas adresas');
   });
 });
 
@@ -249,6 +270,13 @@ describe('senderOf', () => {
   it("a coinbase has no sender — it is the block's reward", () => {
     const tx = transaction({ txid: T.COINBASE, coinbase: true, fee: null, outputs: [coin(f.FAUCET_UTXO, 5000000000)] });
     expect(senderOf(tx, names)).toEqual({ label: 'Bloko atlygis (coinbase)', several: false });
+  });
+
+
+  it('counts only text in the book as a name — a name of another type proves nobody', () => {
+    const tx = transaction({ txid: T.T1, inputs: [spend(T.T0, 0, f.JONAS, 5), spend(T.T0, 1, f.EGLE, 5)] });
+    expect(senderOf(tx, { [f.JONAS]: 42, [f.EGLE]: { vardas: 'Eglė' } })).toEqual({ label: 'tb1qxc2w…xek8', several: false });
+    expect(senderOf(tx, { [f.JONAS]: 'Jonas', [f.EGLE]: ['Eglė'] })).toEqual({ label: 'Jonas', several: false });
   });
 });
 

@@ -34,6 +34,10 @@ def tearDownModule():
 
 
 
+
+
+
+
 ############################################################
 # SvmChainRegistryTests
 ############################################################
@@ -60,6 +64,10 @@ class SvmChainRegistryTests(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:
             chain_params('solana', 'regtest')
         self.assertIn('devnet', str(caught.exception))
+
+
+
+
 
 
 
@@ -114,6 +122,10 @@ class SvmIdentityTests(unittest.TestCase):
 
 
 
+
+
+
+
 ############################################################
 # SvmSignatureTests
 ############################################################
@@ -150,6 +162,10 @@ class SvmSignatureTests(unittest.TestCase):
 
 
 
+
+
+
+
 ############################################################
 # SvmNetworksPayloadTests
 ############################################################
@@ -179,6 +195,10 @@ class SvmNetworksPayloadTests(unittest.TestCase):
         self.assertNotIn('rpc_url"', payload)
         self.assertNotIn('TEST_RPC_SECRET', payload)
         self.assertNotIn('sekretas-iš-env', payload)
+
+
+
+
 
 
 

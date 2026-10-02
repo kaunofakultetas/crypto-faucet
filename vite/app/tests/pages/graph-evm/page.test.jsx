@@ -9,7 +9,7 @@
 //  čiaupo adreso" when it fails (an unknown network too),
 //  "Adresas nerastas" for an answer without one, and the
 //  one-line notice for a network without an explorer section
-//  (has_explorer: false, whatever the other answers do) — the
+//  (has_explorer false, whatever the other answers do) — the
 //  visually hidden page heading with the network's full name,
 //  the native currency of the edge labels from
 //  /api/evm/networks (the ETH placeholder when the list is

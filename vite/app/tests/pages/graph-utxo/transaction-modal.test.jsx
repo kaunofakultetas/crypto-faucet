@@ -10,8 +10,9 @@
 //  "Nepavyko nukopijuoti" without a clipboard — and the
 //  "Siuntėjas" line, several people named as a PayJoin /
 //  CoinJoin, none for a coinbase); the input and output cards
-//  (who controls the address — a name, "Nežinomas valdytojas",
-//  the letter avatar — the amount, the address with its copy
+//  (who controls the address — a name, "Nežinomas valdytojas"
+//  also for a name that is not text, the letter avatar — the
+//  amount, the address with its copy
 //  button, or why a coin has no address; the outpoint an input
 //  spends, the "Grąža" chip, where an output went: a link, the
 //  gold "Neišleista (UTXO)", "Nežinoma, ar išleista" with its
@@ -21,10 +22,11 @@
 //  a coinbase and for an unknown input; walking the chain
 //  (links inside the day, a transaction past the day fetched
 //  with its names, a 404's "Transakcija nerasta — serveris
-//  jos negrąžino.", any other failure, an answer holding no
-//  transaction — pinned: "Kraunama…" for ever — Atgal back
-//  through every step, a waiting transaction turning
-//  confirmed in place, a fresh start on every opening);
+//  jos negrąžino.", any other failure — an answer holding no
+//  transaction included, never "Kraunama…" for ever — a
+//  malformed one showing what it can, Atgal back through
+//  every step, a waiting transaction turning confirmed in
+//  place, a fresh start on every opening);
 //  naming an address
 //  (the pencil, Enter or the check saving through the backend
 //  and the graph asking again, trimming and the 64-character
@@ -68,15 +70,15 @@ beforeEach(() => {
 // -----------------------------------------------------------
 //
 // renderDialog mounts the dialog on its own for a made-up
-// transaction the day holds (or, known: false, one it has to
-// fetch). cardsIn lists one column's cards; countOf reads the
-// number its title carries. localDateTime is a time as the
-// viewer's clock shows it ("2026-09-29 10:18" in the UTC
-// container). namingBackend keeps an address book the way the
-// backend does: set-address-name writes it (an empty name
-// deletes), the graph and the transaction endpoint read it —
-// and it captures all three. closeButtons are the header's ×
-// and the footer's button, both named "Uždaryti".
+// transaction the day holds (or, with known turned off, one
+// it has to fetch). cardsIn lists one column's cards; countOf
+// reads the number its title carries. localDateTime is a time
+// as the viewer's clock shows it ("2026-09-29 10:18" in the
+// UTC container). namingBackend keeps an address book the
+// way the backend does: set-address-name writes it (an empty
+// name deletes), the graph and the transaction endpoint read
+// it — and it captures all three. closeButtons are the
+// header's × and the footer's button, both named "Uždaryti".
 // -----------------------------------------------------------
 
 function renderDialog(tx, { names = f.utxoNames, known = true, renameAddress = vi.fn(async () => true), onClose = vi.fn() } = {}) {
@@ -373,6 +375,16 @@ describe('Input and output cards', () => {
   });
 
 
+  it('takes only text as a name: one of another type leaves the card unnamed under a "?", and its editor empty', async () => {
+    const { user } = renderDialog(dayTransactions()[0], { names: { ...f.utxoNames, [f.JONAS]: 42 } });
+    const dialog = await findDialog();
+    const [card] = cardsIn(dialog, 'Įvestys');
+    expect(within(card).getByText('Nežinomas valdytojas')).toBeInTheDocument();
+    expect(within(card).getByText('?')).toBeInTheDocument();
+    expect(await startEditing(user, card)).toHaveValue('');
+  });
+
+
   it('says what an address-less output holds instead of an address — no copy button, no pencil', async () => {
     const { user } = renderGraph();
     const dialog = await openTransaction(user, T.T5);
@@ -601,14 +613,53 @@ describe('Walking the chain', () => {
   });
 
 
-  it.fails('says the transaction cannot be shown when a 200 answer holds none — PINNED KNOWN BUG: an answer without a transaction (an empty body, {}) leaves the dialog on "Kraunama…" forever', async () => {
+  it('says the transaction could not be had when a 200 answer holds none', async () => {
     given.json('get', TRANSACTION, {});
     renderDialog(lostTx(), { known: false });
     const dialog = await findDialog();
     expect(await within(dialog).findByText(
-      /^(Transakcija nerasta — serveris jos negrąžino\.|Nepavyko gauti transakcijos — bandykite dar kartą vėliau\.)$/, {}, { timeout: 1000 },
+      'Nepavyko gauti transakcijos — bandykite dar kartą vėliau.', {}, { timeout: 1000 },
     )).toBeInTheDocument();
     expect(within(dialog).queryByText('Kraunama…')).toBeNull();
+  });
+
+
+  it('says so for every other answer without a transaction — an empty body, null, a list, one without a real txid', async () => {
+    const answers = [
+      () => given.empty('get', TRANSACTION),
+      () => given.json('get', TRANSACTION, null),
+      () => given.json('get', TRANSACTION, [f.utxoTransaction(T.T0)]),
+      () => given.json('get', TRANSACTION, { transaction: null, names: f.utxoNames }),
+      () => given.json('get', TRANSACTION, { transaction: { ...f.utxoTransaction(T.T0).transaction, txid: 12345 }, names: {} }),
+    ];
+    for (const answer of answers) {
+      answer();
+      const { unmount } = renderDialog(lostTx(), { known: false });
+      const dialog = await findDialog();
+      expect(await within(dialog).findByText('Nepavyko gauti transakcijos — bandykite dar kartą vėliau.')).toBeInTheDocument();
+      expect(within(dialog).queryByText('Kraunama…')).toBeNull();
+      unmount();
+    }
+  });
+
+
+  it("shows what a fetched transaction holds when parts of it are malformed — an input naming no outpoint left out, an output of the wrong type kept as one nobody knows", async () => {
+    const { transaction: t0 } = f.utxoTransaction(T.T0);
+    given.json('get', TRANSACTION, {
+      transaction: { ...t0, inputs: [...t0.inputs, { txid: 'ne transakcija', vout: 1 }], outputs: [...t0.outputs, 'išvestis'] },
+      names: { [f.JONAS]: 7, [f.FAUCET_UTXO]: "Faucet'as" },
+    });
+    renderDialog({ txid: T.T0 }, { known: false, names: {} });
+    const dialog = await findDialog();
+    await within(dialog).findByText('Patvirtinta · blokas #154300');
+
+    expect(countOf(dialog, 'Įvestys')).toBe('1');
+    expect(countOf(dialog, 'Išvestys')).toBe('3');
+    const [toJonas, , unknown] = cardsIn(dialog, 'Išvestys');
+    expect(within(toJonas).getByText('Nežinomas valdytojas')).toBeInTheDocument();
+    expect(within(unknown).getByText('Nežinomas adresas')).toBeInTheDocument();
+    expect(unknown).toHaveTextContent('? tBTC4');
+    expect(within(unknown).getByText('Nežinoma, ar išleista')).toBeInTheDocument();
   });
 
 

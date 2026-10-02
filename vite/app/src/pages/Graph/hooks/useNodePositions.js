@@ -6,14 +6,16 @@
 //  and reloaded whenever the scope changes — every viewed day
 //  is a different graph, so every (network, day) pair keeps
 //  its own arrangement. Only X survives — Y always comes from
-//  the hierarchical layout. setLevelNextX deals X slots left
-//  to right per hierarchy level so new nodes never stack;
-//  noteX tells the dealer where a restored or dragged node
-//  already sits, so a newcomer after a reload lands to the
-//  RIGHT of everything on its level instead of on top of it.
-//  Old scopes are pruned on save (the KEEP_SCOPES newest
-//  days survive), so a browser profile never fills its quota
-//  with days nobody will open again.
+//  the node's level row. setLevelNextX deals X slots left to
+//  right per level so new nodes never stack; noteX tells the
+//  dealer where a restored or dragged node already sits, so a
+//  newcomer after a reload lands to the RIGHT of everything
+//  on its level instead of on top of it.
+//
+//  Old scopes are pruned on save, so a browser profile never
+//  fills its quota with days nobody will open again: never
+//  more than KEEP_SCOPES arrangements stay, the one being
+//  saved always among them.
 // -----------------------------------------------------------
 
 import { useEffect, useRef } from 'react';
@@ -35,20 +37,27 @@ const KEEP_SCOPES = 30;
 // pruneOldScopes
 // -----------------------------------------------------------
 //
-// Drops the oldest saved arrangements past KEEP_SCOPES. The
-// key is '<prefix><network>:<YYYY-MM-DD>', so its last ten
-// characters order the scopes by day across networks.
+// Makes room for the arrangement about to be saved under
+// `keepKey`: of the OTHER saved arrangements only the newest
+// KEEP_SCOPES − 1 stay, so together with the one being saved
+// there are never more than KEEP_SCOPES. Counting the saved
+// one before it had its key used to leave one too many. The
+// scope being saved is never the one dropped — a student
+// arranging an old day keeps that arrangement, and the
+// oldest of the others goes instead. Every key ends in its
+// day's date, so the last ten characters order the scopes by
+// day across networks.
 //
 // Used by:
 //   - useNodePositions (below) — before every save
 // -----------------------------------------------------------
 
-const pruneOldScopes = () => {
+const pruneOldScopes = (keepKey) => {
   const prefix = STORAGE_KEYS.NODE_POSITIONS_PREFIX;
-  const keys = Object.keys(localStorage)
-    .filter((key) => key.startsWith(prefix))
+  const others = Object.keys(localStorage)
+    .filter((key) => key.startsWith(prefix) && key !== keepKey)
     .sort((a, b) => a.slice(-10).localeCompare(b.slice(-10)));
-  keys.slice(0, Math.max(0, keys.length - KEEP_SCOPES)).forEach((key) => localStorage.removeItem(key));
+  others.slice(0, Math.max(0, others.length - (KEEP_SCOPES - 1))).forEach((key) => localStorage.removeItem(key));
 };
 
 
@@ -61,11 +70,12 @@ const pruneOldScopes = () => {
 // useNodePositions (default export)
 // -----------------------------------------------------------
 //
-//   const { positionsRef, save, setLevelNextX, noteX } =
-//     useNodePositions(`${network}:${day}`)
-//
-// save() answers whether the write landed — a full quota is
-// the one failure worth knowing about.
+// One (network, day) scope's arrangement: the address → x Map
+// itself (a ref, reloaded in place when the scope changes),
+// its save, the slot dealer setLevelNextX and noteX, which
+// tells the dealer where a node already sits. The save
+// answers whether the write landed — a full quota is the one
+// failure worth knowing about.
 //
 // Used by:
 //   - useTransactionGraph.js — one instance per graph
@@ -90,7 +100,7 @@ export default function useNodePositions(scopeKey) {
     });
 
     try {
-      pruneOldScopes();
+      pruneOldScopes(storageKey);
       localStorage.setItem(storageKey, JSON.stringify(obj));
       return true;
     } catch (error) {
@@ -122,8 +132,9 @@ export default function useNodePositions(scopeKey) {
   }, [storageKey]);
 
 
-  // Where a node already sits — restored from storage or just
-  // merged — so the dealer never hands that slot out again
+  // Where a node already sits — restored from storage or
+  // dropped by a drag — so the dealer never hands that slot
+  // out again
   const noteX = (level, x) => {
     const lastX = levelsRef.current.get(level) || 0;
     if (x > lastX) levelsRef.current.set(level, x);

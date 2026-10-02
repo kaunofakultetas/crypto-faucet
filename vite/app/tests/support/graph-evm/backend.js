@@ -7,45 +7,40 @@
 //  endpoint. A fixed body cannot show what the graph is about
 //  (a transfer appearing live, a name that survives the next
 //  sweep, a hop discovered from the one before), so the graph
-//  tests run against a model of the backend's two tables:
+//  tests run against a model of the backend's two tables: the
+//  transfers, each with its sender, receiver, value and time
+//  (unix seconds), and the addresses, each with its name and
+//  its contract and hub flags.
 //
-//    transfers — { from, to, value, at } (at: unix seconds)
-//    addresses — address → { name, contract, hub }
-//
-//  answered the way backend/app/evm_faucet/explorer.py's
-//  get_stored_transactions answers: the transfers inside
-//  [from, to) that touch the asked address, ONE flow per
-//  (from, to) pair with the summed value and the count, both
+//  The model answers the way backend/app/evm_faucet/
+//  explorer.py's get_stored_transactions does: the transfers
+//  inside the asked window (its start included, its end not)
+//  that touch the asked address, ONE flow per sender and
+//  receiver pair with the summed value and the count, both
 //  sides' names and contract / hub flags (null for an address
 //  the backend never classified — its LEFT JOIN) and each
 //  side's last-seen time inside the window. set-address-name
 //  upserts the name like set_address_name does (trimmed, cut
 //  at 64).
 //
-//  installGraphBackend({ transfers, addresses }) → the model:
-//
-//    .transfers / .addresses — mutable: a test adds a transfer
-//                              or a name, the next request
-//                              answers from it
-//    .requests               — every stored-transactions
-//                              request: { network, address,
-//                              from, to, at } (at: Date.now()
-//                              on the test's clock)
-//    .renames                — every rename: { address, name }
-//    .outage                 — true: every stored-transactions
-//                              request answers 500 { error };
-//                              'html': the proxy's 502 page;
-//                              'drop': the connection drops
-//    .renameOutage           — the same for set-address-name
-//    .hold() → release()     — requests wait until release();
-//                              .inFlight / .maxInFlight count
-//                              the ones waiting
-//    .asked(address)         — the requests for one address
-//    .answerOnce(address, body)
-//                            — the next request about that
-//                              address gets `body` (any JSON,
-//                              a malformed one included)
-//                              instead of the model's answer
+//  installGraphBackend seeds the model with the transfers and
+//  addresses a test passes and hands it back to steer and to
+//  read. Both tables stay open to change: a test adds a
+//  transfer or a name, and the next request answers from it.
+//  The model keeps every stored-transactions request (its
+//  network, address, window, and the moment it arrived, in
+//  milliseconds on the test's clock) and every rename (the
+//  address and the name). Its outage switch makes every
+//  stored-transactions request fail — true answers the
+//  backend's 500 with its error body, 'html' the proxy's 502
+//  page, 'drop' a dropped connection — and renameOutage does
+//  the same for set-address-name. hold makes the requests wait
+//  until the release function it returns is called, with
+//  inFlight and maxInFlight counting the ones waiting; asked
+//  lists the requests about one address; answerOnce gives the
+//  next request about an address the test's own body — any
+//  JSON, a malformed one included — instead of the model's
+//  answer.
 //
 //  Used by:
 //    - tests/pages/graph-evm/*.test.jsx

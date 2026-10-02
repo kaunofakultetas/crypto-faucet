@@ -24,8 +24,10 @@ import { Box, Button } from '@mui/material';
 
 // Everything the SPA persists — cleared by the "clear cache"
 // button, since any of it could be the stale payload that
-// keeps throwing
-const CACHE_KEY_PREFIXES = ['catalog:', 'lastPick:', 'favFaucetPicks', 'graphNodePositions:'];
+// keeps throwing. A new localStorage key belongs here too:
+// tests/core/structural.test.js compares this list with every
+// key the code writes
+const CACHE_KEY_PREFIXES = ['catalog:', 'lastPick:', 'favFaucetPicks', 'graphNodePositions:', 'utxo-graph-positions:'];
 
 const clearCachedData = () => {
   try {
@@ -45,7 +47,10 @@ const clearCachedData = () => {
 // ErrorBoundary (default export)
 // -----------------------------------------------------------
 //
-//   <ErrorBoundary resetKey={location.pathname}>…</ErrorBoundary>
+// Guards one region of the shell: a throw below it is logged
+// and replaced by the card; a change of the region's reset
+// key — the page area passes the route — forgets the error,
+// so moving to another page recovers without a reload.
 //
 // Used by:
 //   - App.jsx — the page shell

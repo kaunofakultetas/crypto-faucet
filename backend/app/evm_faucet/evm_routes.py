@@ -220,8 +220,3 @@ def set_address_name():
     name = request.args.get('name')
     data, status = evm_explorer.set_address_name(address, name)
     return jsonify(data), status
-
-
-
-
-

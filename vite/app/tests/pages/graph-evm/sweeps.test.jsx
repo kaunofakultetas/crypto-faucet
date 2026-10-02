@@ -51,8 +51,8 @@ afterEach(() => endGraphSlate());
 // asked about an address — one entry per sweep that reached
 // it. gaps: the distances between consecutive entries.
 // viewPastDay: switch to 2026-09-29 through the dropdown and
-// wait for its graph. hop(n): the n-th address of a chain of
-// wallets, each paying the next.
+// wait for its graph. hop: the address at a given place in a
+// chain of wallets, each paying the next.
 // -----------------------------------------------------------
 
 const sweepTimes = (backend, address) => backend.asked(address).map((request) => request.at);

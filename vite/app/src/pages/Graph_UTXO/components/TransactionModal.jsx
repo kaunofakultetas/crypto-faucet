@@ -32,7 +32,7 @@
 //  Split into (root component last):
 //
 //    PERSON_COLORS    — avatar colours for named people
-//    formatTime       — ISO time → local date and time
+//    formatTime       — a time in the viewer's own clock
 //    avatarOf         — a controller's letter and colour
 //    CopyButton       — copy, with the result in the tooltip
 //    StatusChip       — mined in block N, waiting, or unknown
@@ -44,6 +44,7 @@
 //    CoinColumn       — a titled list of cards
 //    Figure           — one labelled amount of the fee sum
 //    FeeEquation      — inputs − outputs = fee, and the rate
+//    FetchState       — on its way, or why it cannot be shown
 //    TransactionModal — the dialog (default export)
 // -----------------------------------------------------------
 
@@ -73,7 +74,8 @@ import {
 // NAME, so every address of one person wears the same colour
 const PERSON_COLORS = ['#0284c7', '#059669', '#7c3aed', '#ea580c', '#db2777', '#0d9488', '#4f46e5', '#65a30d'];
 
-// ISO time → the viewer's local date and time
+// The backend's ISO times, shown as the viewer's local date
+// and time
 const formatTime = (iso) => new Date(iso).toLocaleString('lt-LT', { dateStyle: 'short', timeStyle: 'short' });
 
 
@@ -89,6 +91,8 @@ const formatTime = (iso) => new Date(iso).toLocaleString('lt-LT', { dateStyle: '
 // A controller's avatar: the name's first letter on a colour
 // — the faucet in the brand burgundy, a named person in a
 // colour hashed from the name, an unnamed address a grey "?".
+// Anything but a string counts as no name, so a broken
+// address book can cost a letter, never the dialog.
 //
 // Used by:
 //   - CoinCard (below) — the avatar and the card's left edge
@@ -96,7 +100,7 @@ const formatTime = (iso) => new Date(iso).toLocaleString('lt-LT', { dateStyle: '
 
 function avatarOf(name, isFaucet) {
 
-  if (!name) {
+  if (typeof name !== 'string' || !name) {
     return { letter: '?', color: isFaucet ? COLORS.BRAND : COLORS.BORDER };
   }
 
@@ -560,6 +564,48 @@ function FeeEquation({ tx, unit }) {
 
 
 // -----------------------------------------------------------
+// FetchState
+// -----------------------------------------------------------
+//
+// The body while the transaction on show is not at hand:
+// "Kraunama…" with a spinner only while it is on its way.
+// Once the fetch is over without a transaction — refused,
+// failed, or answered with none — the dialog says it cannot
+// be shown, telling a 404's "not found" apart. Waiting is
+// never what is left over, so no answer, however broken, can
+// keep the dialog loading for ever.
+//
+// Used by:
+//   - TransactionModal (below) — instead of the transaction
+// -----------------------------------------------------------
+
+function FetchState({ fetched }) {
+
+  if (fetched.isPending) {
+    return (
+      <div className="flex items-center justify-center gap-2 py-10 text-sm text-slate-500">
+        <CircularProgress size={16} color="inherit" />
+        Kraunama…
+      </div>
+    );
+  }
+
+  return (
+    <p className="py-10 text-center text-sm text-red-700">
+      {fetched.error?.response?.status === 404
+        ? 'Transakcija nerasta — serveris jos negrąžino.'
+        : 'Nepavyko gauti transakcijos — bandykite dar kartą vėliau.'}
+    </p>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // TransactionModal (default export)
 // -----------------------------------------------------------
 //
@@ -571,7 +617,7 @@ function FeeEquation({ tx, unit }) {
 // from transactionsById (and follows its polling: a waiting
 // one turns confirmed in place); any other is fetched with the
 // names of its addresses, and the dialog says so while it
-// loads or when the backend has no such transaction.
+// loads or when it cannot be had (FetchState).
 //
 // Used by:
 //   - UtxoFlowGraph.jsx — on a box's click or Enter / Space
@@ -588,7 +634,15 @@ export default function TransactionModal({ network, txid, sourceRect, onClose, t
   const fetched = useTransaction(network, current, !known);
   const tx = known ?? fetched.data?.transaction ?? null;
   const shownNames = known ? names : { ...names, ...fetched.data?.names };
-  const dirty = Boolean(editing) && editing.draft.trim() !== (shownNames[editing.address] ?? '');
+
+  // An address's name, or null — the cards, the avatars and
+  // the name editor read names only through here, and only
+  // text counts, as everywhere in the drawing (nameOf)
+  const nameAt = (address) => {
+    const name = address ? shownNames[address] : null;
+    return typeof name === 'string' && name ? name : null;
+  };
+  const dirty = Boolean(editing) && editing.draft.trim() !== (nameAt(editing.address) ?? '');
 
 
   // Walking the chain: a linked transaction opens in place and
@@ -613,7 +667,7 @@ export default function TransactionModal({ network, txid, sourceRect, onClose, t
     draft: editing?.key === key ? editing.draft : '',
     saving: editing?.key === key && editing.saving,
     error: editing?.key === key ? editing.error : null,
-    onEdit: () => setEditing({ key, address, draft: shownNames[address] ?? '', saving: false, error: null }),
+    onEdit: () => setEditing({ key, address, draft: nameAt(address) ?? '', saving: false, error: null }),
     onDraft: (draft) => setEditing((edit) => ({ ...edit, draft, error: null })),
     onSave: async () => {
       const draft = editing?.draft ?? '';
@@ -626,25 +680,6 @@ export default function TransactionModal({ network, txid, sourceRect, onClose, t
     },
     onCancel: () => setEditing(null),
   });
-
-
-  // What the body holds while the transaction is not there:
-  // on its way, or not to be had
-  let pending = null;
-  if (!tx) {
-    pending = fetched.isError ? (
-      <p className="py-10 text-center text-sm text-red-700">
-        {fetched.error?.response?.status === 404
-          ? 'Transakcija nerasta — serveris jos negrąžino.'
-          : 'Nepavyko gauti transakcijos — bandykite dar kartą vėliau.'}
-      </p>
-    ) : (
-      <div className="flex items-center justify-center gap-2 py-10 text-sm text-slate-500">
-        <CircularProgress size={16} color="inherit" />
-        Kraunama…
-      </div>
-    );
-  }
 
 
   return (
@@ -670,7 +705,7 @@ export default function TransactionModal({ network, txid, sourceRect, onClose, t
         </div>
       }
     >
-      {pending ?? (
+      {!tx ? <FetchState fetched={fetched} /> : (
         <>
           {/* Status, the full txid, the sender */}
           <div className="flex flex-wrap items-center gap-2">
@@ -699,7 +734,7 @@ export default function TransactionModal({ network, txid, sourceRect, onClose, t
                 <CoinCard
                   key={`in-${vin}`}
                   coin={input}
-                  name={input.address ? shownNames[input.address] ?? null : null}
+                  name={nameAt(input.address)}
                   fallback={input.address ? 'Nežinomas valdytojas' : 'Nežinomas adresas'}
                   note="Ankstesnės transakcijos serveris negrąžino — nei adresas, nei suma nežinomi"
                   isFaucet={Boolean(input.address) && input.address === faucetAddress}
@@ -721,7 +756,7 @@ export default function TransactionModal({ network, txid, sourceRect, onClose, t
                 <CoinCard
                   key={`out-${vout}`}
                   coin={output}
-                  name={output.address ? shownNames[output.address] ?? null : null}
+                  name={nameAt(output.address)}
                   fallback={output.address ? 'Nežinomas valdytojas' : nameOf(null, shownNames, output.script_type)}
                   note={output.script_type === 'op_return'
                     ? 'Adreso nėra — ši išvestis saugo duomenis, ne monetas'

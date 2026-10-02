@@ -3,14 +3,14 @@
 //
 //  The floating zoom panel (ZoomControls) and every way to
 //  zoom, all funnelled through one clamp to 0.2 … 2.0: the
-//  vertical slider starting at the graph's own scale (1 while
-//  the canvas cannot say), "Priartinti" / "Nutolinti" stepping
-//  by 0.1 and moving the camera there with the view position
-//  kept and no animation, the limits, the slider's own keys
-//  and drags, and the mouse wheel — vis's 'zoom' event, which
-//  moves the slider and, past a limit, pushes the camera back
-//  to it. The camera commands are what the vis-network double
-//  records (moveTo).
+//  vertical slider "Mastelis" starting at the graph's own
+//  scale (1 while the canvas cannot say), "Priartinti" /
+//  "Nutolinti" stepping by 0.1 and moving the camera there
+//  with the view position kept and no animation, the limits,
+//  the slider's own keys and drags, and the mouse wheel —
+//  vis's 'zoom' event, which moves the slider and, past a
+//  limit, pushes the camera back to it. The camera commands
+//  are what the vis-network double records (moveTo).
 // -----------------------------------------------------------
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -127,9 +127,10 @@ describe('The zoom panel', () => {
   });
 
 
-  it.fails('names the zoom slider for assistive technology — PINNED KNOWN BUG: the vertical zoom slider has no accessible name (only the two buttons are labelled)', async () => {
+  it('names the zoom slider "Mastelis" for assistive technology, like its two buttons', async () => {
     await drawnGraph();
-    expect(zoomSlider()).toHaveAccessibleName();
+    expect(zoomSlider()).toHaveAccessibleName('Mastelis');
+    expect(screen.getByRole('slider', { name: 'Mastelis' })).toBe(zoomSlider());
   });
 });
 

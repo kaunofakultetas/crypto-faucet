@@ -50,11 +50,11 @@ beforeEach(() => {
 // Helpers
 // -----------------------------------------------------------
 //
-// zoom() is what the slider reads. canvasPointAt(cx, cy) is
-// the point of the drawing (canvas units) under a spot of the
-// view — the inverse of support's onScreen — so a zoom can be
-// checked to keep its anchor in place. pressTimes clicks a
-// zoom button n times. lane() is the first block's background
+// zoom is what the slider reads. canvasPointAt is the point
+// of the drawing (canvas units) under a spot of the view — the
+// inverse of support's onScreen — so a zoom can be checked to
+// keep its anchor in place. pressTimes clicks a zoom button a
+// given number of times. lane is the first block's background
 // band: empty canvas to grab. WithNetworkSwitch is the page
 // beside a button that moves the router to another network.
 // -----------------------------------------------------------

@@ -16,8 +16,8 @@
 //    backendIdle   — waits until every GET everyGet counted
 //                    has been answered and rendered
 //
-//  Both go through server.use, so setup.js' handler reset
-//  drops them after the test.
+//  watchRequests and everyGet go through server.use, so
+//  setup.js' handler reset drops them after the test.
 //
 //  Used by:
 //    - contract/route-sweep.test.jsx — the failure modes
@@ -39,9 +39,11 @@ import { settle } from '../backend/contract';
 // watchRequests
 // -----------------------------------------------------------
 //
-//   const seen = watchRequests()          — every /api request
-//   const seen = watchRequests('/api/evm/*')
-//   seen → ['GET /api/faucet/catalog', …] (path, no query)
+// Records every request under a path pattern — every /api
+// request unless the test narrows it — as its method and its
+// path without the query, in the order they arrive, and
+// returns that list. The recording handler answers nothing,
+// so each request falls through to the handler that does.
 //
 // Used by:
 //   - core/app.test.jsx, pages/not-found.test.jsx
@@ -65,11 +67,11 @@ export function watchRequests(pattern = '/api/*') {
 // everyGet
 // -----------------------------------------------------------
 //
-//   const gets = everyGet(() => HttpResponse.error())
-//   gets → { count, answered, paths: [...] }
-//
-// `respond(request)` may be async; a response that never
-// comes (a hang) simply never counts as answered.
+// Answers every /api GET with the response the test's
+// function builds for the request, and returns a running
+// tally: how many GETs were made, how many were answered and
+// the path of each. The function may be async; a response
+// that never comes (a hang) simply never counts as answered.
 //
 // Used by:
 //   - contract/route-sweep.test.jsx

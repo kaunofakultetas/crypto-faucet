@@ -7,19 +7,25 @@
 //  one module, not the whole barrel — the mining loop needs
 //  a synchronous hash, which rules out crypto.subtle); the
 //  only backend call is loading the pre-mined example chain
-//  (GET /api/get-example-blockchain).
+//  (GET /api/get-example-blockchain). Even that chain is not
+//  taken on trust: it is re-linked and re-hashed on arrival,
+//  like a chain the student typed, so a block edited in the
+//  database after it was mined shows as broken, and so does
+//  every block after it.
 //
 //  The hash preimage is load-bearing: calculateHash hashes
-//  `previousHash\nnonce\ndata` (real newlines) and the
-//  "Kopijuoti bloko tekstą" button copies that exact string,
-//  so students can reproduce any block hash in the external
-//  SHA256 online tool. The backend's example blocks were
-//  mined against the same format.
+//  the previous hash, the nonce and the transactions joined
+//  by real newlines, and the "Kopijuoti bloko tekstą" button
+//  copies that exact text, so students can reproduce any
+//  block hash in the external SHA256 online tool. The
+//  backend's example blocks were mined against the same
+//  format.
 //
 //  Mining runs in animation-frame slices: the tab keeps
-//  painting, the pickaxe counts the hashes tried and turns
-//  into a stop button — the wait at difficulty 5 is still
-//  the lesson, a frozen "page unresponsive" tab is not.
+//  painting, the pickaxe counts the hashes tried — the noun
+//  agreeing with the count the Lithuanian way — and turns
+//  into a stop button. The wait at difficulty 5 is still the
+//  lesson, a frozen "page unresponsive" tab is not.
 //
 //  Styling note: Tailwind utilities on a RoundedBox or a MUI
 //  Button lose to the emotion rules on the same element
@@ -28,10 +34,11 @@
 //
 //  Split into (root component last):
 //
+//    TRIES                       — the tries counter's noun
 //    LITHUANIAN_NAMES            — cast for the transactions
 //    randomName                  — random cast member
-//    generateCoinbaseTransaction — "1) Nauja kriptovaliuta..."
-//    generateRandomTransaction   — "2) A ---> B (nBTC)" line
+//    generateCoinbaseTransaction — a block's reward line
+//    generateRandomTransaction   — a random payment line
 //    calculateHash               — SHA-256 over the preimage
 //    createGenesisBlock          — block #0 (Satoshi coinbase)
 //    createFirstBlock            — block #1 chained onto #0
@@ -58,9 +65,12 @@ import sha256 from 'crypto-js/sha256';
 import { GiMining } from "react-icons/gi";
 import AddCircleOutlinedIcon from '@mui/icons-material/AddCircleOutlined';
 
+import { pluralForm } from '@/utils/plural';
 
 
-
+// The pickaxe's count noun in its Lithuanian forms, for the
+// plural categories utils/plural.js sorts a count into
+const TRIES = { one: 'bandymas', few: 'bandymai', other: 'bandymų' };
 
 
 // Cast of characters for the generated transactions — sender
@@ -162,21 +172,17 @@ const createFirstBlock = (genesisBlock) => {
 // useBlockchain
 // -----------------------------------------------------------
 //
-//   const {
-//     blocks,                — the chain, oldest first
-//     difficulty,            — required leading hash zeros
-//     setDifficulty,         — 1-5 from the selector
-//     isValidHash,           — does a hash meet difficulty?
-//     modifyBlockField,      — (index, 'data'|'nonce', event)
-//     mineBlock,             — (index) brute-force the nonce
-//     mining,                — { index, tried } while a search
-//                              runs, null when idle
-//     stopMining,            — abandon the running search
-//     addBlock,              — append an unmined block
-//     loadExampleBlockchain, — replace chain from the backend
-//     exampleLoading,        — that request is in flight
-//     exampleError,          — it failed (chain untouched)
-//   } = useBlockchain()
+// The chain and everything that changes it. The page gets the
+// blocks, oldest first; the difficulty — how many leading
+// zeros a valid hash needs, one to five from the selector —
+// with its setter and the check of a hash against it; the
+// edit of a block's nonce or transactions, which re-hashes
+// that block and every later one; the mining of one block,
+// with the running search's block and tries (nothing while
+// idle) and its stop; adding an unmined block; and loading
+// the example chain, with that request's progress and its
+// failure — a failed load leaves the student's chain as it
+// was.
 //
 // Used by:
 //   - BlockchainSimulator (below)
@@ -317,7 +323,12 @@ function useBlockchain() {
   // current chain stays untouched while the control panel
   // shows the error. The answer is checked before it replaces
   // anything — an emptied table (dbgate) or a wrong shape is a
-  // failure, not a chain of nothing.
+  // failure, not a chain of nothing. A chain that passes is
+  // still not shown as stored: it is re-linked and re-hashed
+  // from the genesis on, the same ripple an edit runs, so a
+  // block whose text was changed in dbgate after it was mined
+  // — and every block after it — shows as broken instead of
+  // keeping its old, valid-looking hash.
   const exampleChain = useMutation({
     mutationFn: async () => {
       const { data } = await axios.get('/api/get-example-blockchain');
@@ -327,7 +338,7 @@ function useBlockchain() {
       if (!wellFormed) throw new Error('Malformed example chain');
       return data;
     },
-    onSuccess: (data) => setBlocks(data),
+    onSuccess: (data) => setBlocks(recalculateFromIndex(data, 0)),
   });
 
 
@@ -615,7 +626,7 @@ function BlockCard({ block, index, isValid, mining, miningElsewhere, onNonceChan
             sx={{ textTransform: 'none' }}
           >
             {mining !== null
-              ? `Stabdyti · ${mining.toLocaleString('lt-LT')} bandymų`
+              ? `Stabdyti · ${mining.toLocaleString('lt-LT')} ${pluralForm(mining, TRIES)}`
               : <GiMining size={35} aria-hidden="true" />}
           </Button>
         </div>

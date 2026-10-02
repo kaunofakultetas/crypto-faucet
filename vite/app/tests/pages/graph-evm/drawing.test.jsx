@@ -10,11 +10,14 @@
 //  and column slot, the labels (name, shortened address,
 //  "Atnaujinta: prieš …" in every unit, ISO and unix times, a
 //  clock running behind), one edge per sender→receiver pair
-//  labelled with the summed value, the currency and the count,
+//  labelled with the summed value, the currency and the count
+//  (a value sent as text read as the number it spells, one
+//  that is no number at all printed as a question mark),
 //  mixed-case addresses folded onto one node, names and the
 //  contract flag taken fresh from every answer — and the text
 //  alternative: the canvas named with the day and the transfer
-//  count, the visually hidden table listing every drawn
+//  count, its noun agreeing with the number the Lithuanian
+//  way, the visually hidden table listing every drawn
 //  transfer. Then the graph's life: a network switch or an
 //  unmount tears the Network down and asks nothing more.
 // -----------------------------------------------------------
@@ -50,12 +53,16 @@ afterEach(() => endGraphSlate());
 // Helpers
 // -----------------------------------------------------------
 //
-// flow() builds one row of the stored-transactions answer
+// flow builds one row of the stored-transactions answer
 // directly (for the tests about exact timestamps and flags —
-// the backend model computes those itself); answerFlows()
+// the backend model computes those itself); answerFlows
 // serves the same rows for every address the graph asks
-// about. edgeId is the graph's own id for a pair.
+// about. edgeId is the graph's own id for a pair; payee turns
+// a number into a wallet address of its own, for as many
+// distinct wallets as a test needs.
 // -----------------------------------------------------------
+
+const payee = (n) => `0x${n.toString(16).padStart(40, '0')}`;
 
 const flow = (from, to, {
   value = 0.2, count = 1, fromName = null, toName = null, fromAt = at(10), toAt = at(10),
@@ -417,6 +424,27 @@ describe('Edges', () => {
   });
 
 
+  it('a value or a count that is no number at all prints as "?" — the transfer is still drawn', async () => {
+    answerFlows(
+      flow(ADDR.FAUCET, ADDR.JONAS, { value: 'daug', toName: 'Jonas' }),
+      flow(ADDR.JONAS, ADDR.FAUCET, { value: null, count: null, fromName: 'Jonas' }),
+    );
+    renderGraph();
+    const network = await bootedNetwork({ transfers: 2 });
+    await waitFor(() => expect(network.edge(edgeId(ADDR.FAUCET, ADDR.JONAS)).label).toBe('? SepETH\n(1 tx)'));
+    expect(network.edge(edgeId(ADDR.JONAS, ADDR.FAUCET)).label).toBe('? SepETH\n(? tx)');
+    await waitFor(() => expect(transferRows()).toContainEqual([short(ADDR.FAUCET), 'Jonas', '? SepETH (1 tx)']));
+  });
+
+
+  it('a value sent as text is read as the number it spells', async () => {
+    answerFlows(flow(ADDR.FAUCET, ADDR.JONAS, { value: '1.23456789', count: '3', toName: 'Jonas' }));
+    renderGraph();
+    const network = await bootedNetwork({ transfers: 1 });
+    await waitFor(() => expect(network.edge(edgeId(ADDR.FAUCET, ADDR.JONAS)).label).toBe('1.2346 SepETH\n(3 txs)'));
+  });
+
+
   it('an edge whose sum grows is relabelled in place — still one edge', async () => {
     const backend = installGraphBackend({ transfers: DAY_TRANSFERS, addresses: NAMES });
     renderGraph();
@@ -476,12 +504,27 @@ describe('The text alternative', () => {
   });
 
 
-  it('is empty — "0 pervedimai" — while the day\'s first answer is on its way', async () => {
+  it.each([
+    [1, '1 pervedimas'],
+    [2, '2 pervedimai'],
+    [10, '10 pervedimų'],
+    [11, '11 pervedimų'],
+    [21, '21 pervedimas'],
+  ])('counts %i drawn transfers in agreement with the number — "%s"', async (count, text) => {
+    answerFlows(...Array.from({ length: count }, (_, i) => flow(ADDR.FAUCET, payee(i + 1))));
+    renderGraph();
+    await bootedNetwork();
+    await waitFor(() => expect(canvas()).toHaveAccessibleName(`Transakcijų srauto grafikas, ${TODAY}: ${text}`));
+    expect(transferRows()).toHaveLength(count);
+  });
+
+
+  it('is empty — "0 pervedimų" — while the day\'s first answer is on its way', async () => {
     given.hang('get', '/api/evm/:network/get-stored-transactions');
     renderGraph();
     await waitFor(() => expect(canvas()).toBeInTheDocument());
     await settle(100);
-    expect(canvas()).toHaveAccessibleName(`Transakcijų srauto grafikas, ${TODAY}: 0 pervedimai`);
+    expect(canvas()).toHaveAccessibleName(`Transakcijų srauto grafikas, ${TODAY}: 0 pervedimų`);
     expect(transferRows()).toEqual([]);
     expect(networks).toHaveLength(0);
   });

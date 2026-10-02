@@ -7,11 +7,14 @@
 //  graphNodePositions:<network>:<day> — so each network AND
 //  each viewed day keeps its own arrangement, restored when it
 //  is opened again (the faucet's too). Newcomers are dealt
-//  slots to the right of what already stands on their level; a
-//  canvas pan saves as well; a broken or partly broken saved
-//  entry means a clean slate, a full storage only a console
-//  warning; old days are pruned so the storage never fills up
-//  — the newest 30 survive, whatever network they belong to,
+//  slots to the right of what already stands on their level —
+//  a restored node listed after them and a node dragged past
+//  the end of the row included; a canvas pan saves as well; a
+//  broken or partly broken saved entry means a clean slate, a
+//  full storage only a console warning; old days are pruned so
+//  the storage never fills up — never more than 30 survive,
+//  the day being saved always among them and the newest of the
+//  others filling the rest, whatever network they belong to,
 //  and nothing else in localStorage is touched.
 // -----------------------------------------------------------
 
@@ -42,9 +45,9 @@ afterEach(() => endGraphSlate());
 // Helpers
 // -----------------------------------------------------------
 //
-// saved(network, day) reads one stored arrangement; store()
-// writes one before the page opens; scopeKeys lists every
-// saved arrangement's key. The graph is always the day's
+// saved reads the stored arrangement of one network and day;
+// store writes one before the page opens; scopeKeys lists
+// every saved arrangement's key. The graph is always the day's
 // three-transfer scene unless a test says otherwise.
 // -----------------------------------------------------------
 
@@ -87,7 +90,8 @@ async function switchDay(user, label) {
 // Dragging
 // -----------------------------------------------------------
 //
-// A drop moves the node sideways and saves the arrangement.
+// A drop moves the node sideways, saves the arrangement and
+// keeps the next newcomer of the level off the dropped node.
 // -----------------------------------------------------------
 
 describe('Dragging a node', () => {
@@ -125,6 +129,18 @@ describe('Dragging a node', () => {
     await graph.drag(ADDR.JONAS, 600);
     expect(position(graph, ADDR.JONAS)).toEqual({ x: 600, y: 275 });
     expect(warned).toHaveBeenCalledWith('Failed to save node positions to localStorage:', expect.any(DOMException));
+  });
+
+
+  it('a newcomer is dealt a slot right of a node dragged past the end of its level, never on top of it', async () => {
+    const { backend, graph } = await drawnGraph();
+    // Eglė dropped exactly where her level's next slot would be
+    await graph.drag(ADDR.EGLE, 450);
+    backend.transfers.push({ from: ADDR.FAUCET, to: ADDR.PETRAS, value: 0.2, at: at(12, 0) });
+    await advance(1_000);
+    await waitFor(() => expect(graph.node(ADDR.PETRAS)).not.toBeNull());
+    expect(position(graph, ADDR.PETRAS)).toEqual({ x: 600, y: 275 });
+    expect(position(graph, ADDR.EGLE)).toEqual({ x: 450, y: 275 });
   });
 });
 
@@ -194,7 +210,7 @@ describe('Restoring an arrangement', () => {
   });
 
 
-  it.fails('a newcomer listed before a restored node on its level never lands on top of it — PINNED KNOWN BUG: the slot dealer learns a restored x only when that node is merged, so a newcomer merged first is dealt the same x and the two are drawn on top of each other', async () => {
+  it('a newcomer listed before a restored node on its level never lands on top of it — the newcomers are dealt slots right of it', async () => {
     // Saved when Jonas was the only one paid: he sits in the
     // first slot of his level
     store('sepolia', TODAY, { [ADDR.FAUCET]: 0, [ADDR.JONAS]: 150 });
@@ -205,6 +221,9 @@ describe('Restoring an arrangement', () => {
     });
     expect(position(graph, ADDR.JONAS)).toEqual({ x: 150, y: 275 });
     expect(position(graph, ADDR.PETRAS).x).not.toBe(position(graph, ADDR.JONAS).x);
+    // In the order they were sighted: Petras, then Eglė
+    expect(position(graph, ADDR.PETRAS)).toEqual({ x: 300, y: 275 });
+    expect(position(graph, ADDR.EGLE)).toEqual({ x: 450, y: 275 });
   });
 
 
@@ -237,7 +256,9 @@ describe('Restoring an arrangement', () => {
 // -----------------------------------------------------------
 //
 // Saving prunes the oldest saved days — by date, whatever the
-// network — and leaves every other localStorage entry alone.
+// network — so that never more than 30 stay, the day being
+// saved among them, and leaves every other localStorage entry
+// alone.
 // -----------------------------------------------------------
 
 describe('Pruning old days', () => {
@@ -256,19 +277,38 @@ describe('Pruning old days', () => {
     await graph.drag(ADDR.JONAS, 420);
 
     const kept = scopeKeys();
-    // The five oldest are gone, the newest old days and today stay
-    for (const { network, day } of OLD_DAYS.slice(0, 5)) expect(kept).not.toContain(keyOf(network, day));
-    for (const { network, day } of OLD_DAYS.slice(5)) expect(kept).toContain(keyOf(network, day));
+    // The six oldest make room: the 29 newest old days and today stay
+    for (const { network, day } of OLD_DAYS.slice(0, 6)) expect(kept).not.toContain(keyOf(network, day));
+    for (const { network, day } of OLD_DAYS.slice(6)) expect(kept).toContain(keyOf(network, day));
     expect(kept).toContain(keyOf('sepolia', TODAY));
+    expect(kept).toHaveLength(30);
     expect(localStorage.getItem('evmLastNetwork')).toBe('sepolia');
   });
 
 
-  it.fails('never keeps more than 30 days — PINNED KNOWN BUG: the prune runs before the day being saved has its key, so saving a new day next to 30 saved ones leaves 31', async () => {
+  it('never keeps more than 30 days — saving a new day next to 30 saved ones drops the oldest of them', async () => {
     OLD_DAYS.slice(0, 30).forEach(({ network, day }) => store(network, day, { [ADDR.FAUCET]: 0 }));
     const { graph } = await drawnGraph();
     await graph.drag(ADDR.JONAS, 420);
     expect(scopeKeys()).toHaveLength(30);
     expect(scopeKeys()).toContain(keyOf('sepolia', TODAY));
+    expect(scopeKeys()).not.toContain(keyOf(OLD_DAYS[0].network, OLD_DAYS[0].day));
+  });
+
+
+  it('saving an old day keeps that day — the oldest of the others makes room for it', async () => {
+    // Thirty arrangements of days newer than 2026-09-25: five
+    // days on six networks
+    const newer = ['2026-09-26', '2026-09-27', '2026-09-28', '2026-09-29', '2026-09-30']
+      .flatMap((day) => ['sepolia', 'hoodi', 'holesky', 'base', 'optimism', 'arbitrum'].map((network) => ({ network, day })));
+    newer.forEach(({ network, day }) => store(network, day, { [ADDR.FAUCET]: 0 }));
+    const { user } = await drawnGraph();
+
+    await switchDay(user, '2026-09-25');
+    const past = await bootedNetwork({ transfers: 0 });
+    await past.drag(ADDR.FAUCET, -80);
+    expect(saved('sepolia', '2026-09-25')).toEqual({ [ADDR.FAUCET]: -80 });
+    expect(scopeKeys()).toHaveLength(30);
+    expect(scopeKeys()).not.toContain(keyOf('sepolia', '2026-09-26'));
   });
 });

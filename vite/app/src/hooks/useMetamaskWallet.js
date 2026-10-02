@@ -8,20 +8,27 @@
 //  single source of truth:
 //  0 install → 1 connect → 2 switch network → 3 ready.
 //
-//  Every read goes straight through provider.request — the
-//  four RPC calls this hook needs (eth_accounts, eth_chainId,
-//  eth_getBalance, personal_sign) are answered by MetaMask
-//  itself, so no wallet library is bundled for them. Hex
-//  answers are decoded here: chain ids to numbers, the
-//  balance to a BigInt of wei.
+//  The page talks to ONE provider at a time: the module picks
+//  it, every conversation asks the module for it when it
+//  starts, and the hook moves its listeners and reads over
+//  the moment the pick changes. Connecting, switching, signing
+//  and the account on screen can never belong to two
+//  different MetaMask builds — the signature request used to
+//  go to a build that had never been connected and refused.
+//
+//  Every call goes straight through provider.request —
+//  MetaMask answers the account, chain, balance, signature
+//  and chain-switch requests itself, so no wallet library is
+//  bundled for them. Hex answers are decoded here: chain ids
+//  to numbers, the balance to a BigInt of wei.
 //
 //  Split into (root last) — the MetaMask conversations are
 //  plain functions, the hook wires their results into state:
 //
-//    WALLET_REFRESH_MS   — balance repoll cadence
+//    WALLET_REFRESH_MS   — balance and chain repoll cadence
 //    utf8ToHex           — personal_sign's message encoding
 //    getMetamaskProvider — MetaMask's provider, nobody else's
-//    onMetamaskProvider  — called back when it announces late
+//    onMetamaskProvider  — called back whenever the pick changes
 //    connectMetamask     — the connect conversation
 //    requestChainHop     — the switch/add-chain conversation
 //    signClaimMessage    — the ownership-proof conversation
@@ -38,8 +45,18 @@ import { useQuery } from '@tanstack/react-query';
 
 
 // How often the user's balance repolls — fast, so students
-// see it tick up right after a claim
+// see it tick up right after a claim; a page with no chain
+// to expect re-reads only the chain on the same cadence
 const WALLET_REFRESH_MS = 1000;
+
+// The module's pick — the provider every conversation uses —
+// and its rdns, so the stable build can outrank the one
+// already picked
+let cachedProvider = null;
+let cachedRdns = null;
+
+// The hooks following the pick, told whenever it changes
+const waiters = new Set();
 
 // The claim message as personal_sign wants it: the UTF-8
 // bytes, hex-encoded. Sent as a plain string MetaMask would
@@ -55,7 +72,7 @@ const utf8ToHex = (text) =>
 
 
 // -----------------------------------------------------------
-// getMetamaskProvider / onMetamaskProvider
+// getMetamaskProvider
 // -----------------------------------------------------------
 //
 // THE MetaMask provider — never bare window.ethereum, which
@@ -65,29 +82,26 @@ const utf8ToHex = (text) =>
 // Phantom's popup. EIP-6963 discovery settles it — installed
 // wallets announce themselves on request, and rdns
 // io.metamask* is an identity, not a flag anyone can fake in
-// the same way. null = treat MetaMask as not installed rather
-// than talk to a stranger.
+// the same way. No provider means MetaMask is treated as not
+// installed rather than talking to a stranger.
 //
 // Discovery is EVENT-DRIVEN and lives for the whole page: the
 // announce listener stays registered (wallets also announce
 // on their own, and some answer a request from a later tick
 // — a listener removed right after the request misses them),
-// the request is re-issued once the page has loaded, and a
-// hook that found nothing at mount is called back the moment
-// a provider shows up (onMetamaskProvider). The first
-// announcement wins, except that the stable io.metamask
+// and the request is re-issued once the page has loaded. The
+// first announcement wins, except that the stable io.metamask
 // build outranks flask / mmi — with two builds installed the
-// student gets the one they mean.
+// student gets the one they mean, even when it announces
+// last. Every change of the pick is passed on to the hooks
+// following it (onMetamaskProvider, below).
 //
 // Used by:
-//   - connectMetamask / requestChainHop (below)
+//   - connectMetamask / requestChainHop / signClaimMessage
+//     (below)
 //   - useMetamaskWallet (below) — the detection effect
 //   - pages/Faucet_ERC20/Page.jsx — wallet_watchAsset
 // -----------------------------------------------------------
-
-let cachedProvider = null;
-let cachedRdns = null;
-const waiters = new Set();
 
 if (typeof window !== 'undefined') {
   window.addEventListener('eip6963:announceProvider', (event) => {
@@ -105,6 +119,27 @@ if (typeof window !== 'undefined') {
 }
 
 export const getMetamaskProvider = () => cachedProvider;
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// onMetamaskProvider
+// -----------------------------------------------------------
+//
+// Lets a mounted hook follow the module's pick: the listener
+// is handed the new provider every time the pick changes — a
+// first announcement that comes late, or the stable build
+// taking over from flask — until the function handed back
+// stops it. A hook listens for as long as it is mounted, so a
+// page never goes on talking to a build the module has left.
+//
+// Used by:
+//   - useMetamaskWallet (below) — the detection effect
+// -----------------------------------------------------------
 
 export const onMetamaskProvider = (notify) => {
   waiters.add(notify);
@@ -225,16 +260,19 @@ async function requestChainHop(networkInfo) {
 // -----------------------------------------------------------
 //
 // The ownership-proof conversation: a fresh nonce inside the
-// fixed message, signed in MetaMask via personal_sign. The
-// wording must match the EVM backend's verification byte for
-// byte — this is the only place it is written, so the EVM
-// and ERC-20 pages can never drift apart.
+// fixed message, signed in MetaMask via personal_sign — by
+// the provider the module has picked, the same one the
+// account came from. The wording must match the EVM
+// backend's verification byte for byte — this is the only
+// place it is written, so the EVM and ERC-20 pages can never
+// drift apart.
 //
 // Used by:
 //   - useMetamaskWallet (below) — signMessage()
 // -----------------------------------------------------------
 
-async function signClaimMessage(provider, account) {
+async function signClaimMessage(account) {
+  const provider = getMetamaskProvider();
   if (!provider || !account) {
     throw new Error('MetaMask piniginė neprijungta.');
   }
@@ -259,19 +297,22 @@ async function signClaimMessage(provider, account) {
 // useMetamaskWallet (default export)
 // -----------------------------------------------------------
 //
-//   const { installed, account, chainId, balance,
-//           balanceFailed, step, connect, switchNetwork,
-//           signMessage } = useMetamaskWallet(expectedChainId)
+// Everything a page shows and does with MetaMask: whether it
+// is installed, the connected account, the chain the wallet
+// sits on, the account's balance there (a BigInt of wei, null
+// while unknown) with a flag for a balance read that failed,
+// the step of the ladder, and the three actions — connect,
+// switchNetwork and signMessage — which all reject with a
+// ready-to-display message.
 //
-// expectedChainId is the faucet network's chain id; the
-// balance (a BigInt of wei, null while unknown) is only
-// fetched while the wallet is actually on it, so a
+// The page passes the chain its faucet pays on. The balance
+// is only fetched while the wallet actually sits there, so a
 // wrong-chain wallet shows "not connected" instead of a
-// number from somewhere else. Pass nothing on pages that are
-// chain-agnostic (the ERC-20 faucet spans many chains at
-// once) — then a connected wallet is already step 3 and no
-// balance is polled. connect/switchNetwork/signMessage all
-// reject with a ready-to-display message.
+// number from somewhere else. A page that spans many chains
+// (the ERC-20 faucet) passes none: a connected wallet is
+// then ready on any chain and no balance is polled, but the
+// chain itself is still re-read on the same cadence, so a
+// lost first read or a silent switch is repaired there too.
 //
 // Used by:
 //   - both faucet pages (see the file header)
@@ -280,62 +321,69 @@ async function signClaimMessage(provider, account) {
 export default function useMetamaskWallet(expectedChainId) {
 
   const [provider, setProvider] = useState(null);
-  const [installed, setInstalled] = useState(false);
   const [account, setAccount] = useState(null);
   const [chainId, setChainId] = useState(null);
+  const installed = provider !== null;
 
 
   // Detect MetaMask — its OWN provider, so another wallet
-  // squatting on window.ethereum is never mistaken for it. A
-  // provider that announces AFTER mount (a cold browser start,
-  // an extension that just updated) is wired the moment it
-  // arrives, so the install step can't stick on a wallet that
-  // is really there. The listeners keep account/chain in step
-  // with what the student does inside the extension; the two
+  // squatting on window.ethereum is never mistaken for it —
+  // and follow the module's pick for as long as the page is
+  // up. A provider that announces AFTER mount (a cold browser
+  // start, an extension that just updated) is wired the moment
+  // it arrives, and the stable build replaces a flask build
+  // wired before it. A replacement starts from scratch: the
+  // account and chain on screen belonged to the build left
+  // behind, and that build's answers still in flight are
+  // dropped. The listeners keep account/chain in step with
+  // what the student does inside the extension; the two
   // bootstrap reads can reject while the extension port is
-  // briefly down — the balance tick below writes the chain
-  // back, so nothing stays wrong for long.
+  // briefly down — the ticks below write the chain back, so
+  // nothing stays wrong for long.
   useEffect(() => {
-    let alive = true;
-    let detach = () => {};
+    let wired = null;
+    let unwire = () => {};
 
-    const wire = (provider) => {
-      setInstalled(true);
-      setProvider(provider);
+    const wire = (next) => {
+      if (next === wired) return;
+      unwire();
+      wired = next;
 
-      const handleAccountsChanged = (acc) => setAccount(acc[0] ?? null);
-      const handleChainChanged = (id) => setChainId(parseInt(id, 16));
+      setProvider(next);
+      setAccount(null);
+      setChainId(null);
 
-      provider.on('accountsChanged', handleAccountsChanged);
-      provider.on('chainChanged', handleChainChanged);
+      const handleAccountsChanged = (acc) => {
+        if (wired === next) setAccount(acc[0] ?? null);
+      };
+      const handleChainChanged = (id) => {
+        if (wired === next) setChainId(parseInt(id, 16));
+      };
 
-      provider.request({ method: 'eth_accounts' })
-        .then((acc) => { if (alive) handleAccountsChanged(acc); })
+      next.on('accountsChanged', handleAccountsChanged);
+      next.on('chainChanged', handleChainChanged);
+
+      next.request({ method: 'eth_accounts' })
+        .then(handleAccountsChanged)
         .catch((e) => console.warn('[metamask] eth_accounts failed', e));
-      provider.request({ method: 'eth_chainId' })
-        .then((id) => { if (alive) handleChainChanged(id); })
+      next.request({ method: 'eth_chainId' })
+        .then(handleChainChanged)
         .catch((e) => console.warn('[metamask] eth_chainId failed', e));
 
-      detach = () => {
-        provider.removeListener('accountsChanged', handleAccountsChanged);
-        provider.removeListener('chainChanged', handleChainChanged);
+      unwire = () => {
+        next.removeListener('accountsChanged', handleAccountsChanged);
+        next.removeListener('chainChanged', handleChainChanged);
       };
     };
 
-    const provider = getMetamaskProvider();
-    if (provider) {
-      wire(provider);
-    } else {
-      const forget = onMetamaskProvider((late) => {
-        forget();
-        if (alive) wire(late);
-      });
-      detach = forget;
-    }
+    const stopFollowing = onMetamaskProvider(wire);
+    const found = getMetamaskProvider();
+    if (found) wire(found);
 
     return () => {
-      alive = false;
-      detach();
+      stopFollowing();
+      unwire();
+      wired = null;
     };
   }, []);
 
@@ -365,8 +413,37 @@ export default function useMetamaskWallet(expectedChainId) {
   });
 
 
+  // The same repair without a chain to expect: no balance to
+  // poll, so nothing re-read the chain, and a first read lost
+  // while the extension port was down — or a switch inside
+  // MetaMask that emitted no chainChanged — stayed wrong for
+  // good (the ERC-20 page kept asking to switch to the chain
+  // the wallet was already on). The chain alone is re-read on
+  // the balance's cadence; the first re-read waits a full
+  // tick, and a failed one simply waits for the next.
+  useEffect(() => {
+    if (!provider || !account || expectedChainId) return undefined;
+
+    let stopped = false;
+    const tick = setInterval(() => {
+      provider.request({ method: 'eth_chainId' })
+        .then((id) => {
+          if (!stopped) setChainId(parseInt(id, 16));
+        })
+        .catch(() => {});
+    }, WALLET_REFRESH_MS);
+
+    return () => {
+      stopped = true;
+      clearInterval(tick);
+    };
+  }, [provider, account, expectedChainId]);
+
+
   // The actions are the MetaMask conversations at the top of
-  // the file — the wrappers translate their results into state
+  // the file — each asks the module for the provider when it
+  // starts, the one the detection effect follows — and the
+  // wrappers translate their results into state
   const connect = () => connectMetamask().then((acc) => {
     if (acc) setAccount(acc);
   });
@@ -382,7 +459,7 @@ export default function useMetamaskWallet(expectedChainId) {
     setChainId(Number(networkInfo.chain_id));
   };
 
-  const signMessage = () => signClaimMessage(provider, account);
+  const signMessage = () => signClaimMessage(account);
 
 
   // 0 install → 1 connect → 2 switch network → 3 ready. With

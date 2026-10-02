@@ -11,28 +11,37 @@
 //  unless the backend still calls it live, the hour after
 //  midnight — and on through an outage until it recovers);
 //  the day list asked again exactly when a first crawl lands
-//  (leaving a day mid-crawl counting as landed — pinned), with
-//  the picked day surviving the list growing under it;
-//  and what the canvas says about the day — "Kraunama…", the
-//  first crawl collecting, "Atnaujinama…", an empty day (today
-//  or past), transactions the server did not give (centred or
-//  as a pill), the backend's own error or the fallback one
+//  — judged per window: leaving a day mid-crawl is no landing,
+//  coming back to it once its crawl landed is — with the
+//  picked day surviving the list growing under it; what the
+//  canvas says about the day — "Kraunama…", the first crawl
+//  collecting, "Atnaujinama…", an empty day (today or past),
+//  transactions the server did not give (centred or as a
+//  pill), the backend's own error or the fallback one
 //  centred, a failed refresh as a pill over the kept drawing,
 //  their order of urgency, and nothing at all once the day is
-//  drawn and complete.
+//  drawn and complete; and a malformed answer cleaned before
+//  it is drawn — every transaction without a real txid or a
+//  place to be drawn left out, each once, a waiting one off a
+//  past day, a forgotten block given its column, inputs that
+//  name no outpoint dropped while outputs keep their places,
+//  only text taken as a name or an address, the flags
+//  believed only when plainly true, a body of nulls or
+//  swapped types an empty day.
 // -----------------------------------------------------------
 
 import { describe, it, expect, beforeEach } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import { given } from '../../support/backend/server';
 import { mediaQueryMatches } from '../../support/setup';
-import { settle } from '../../support/backend/contract';
+import { nullLeaves, settle, swapTypes } from '../../support/backend/contract';
 import * as f from '../../support/backend/fixtures';
 import {
   GRAPH, DAYS, TODAY, YESTERDAY, pinToday, useFakeClock, advance, renderGraph, answerGraph, askedFor, graphFor, windowOf,
-  findBox, queryBox, allBoxes,
+  findBox, getBox, queryBox, allBoxes, bandOf, rowsOf, headerCells,
 } from '../../support/graph-utxo/graph';
-import { T } from '../../support/graph-utxo/transactions';
+import { T, X, spend, coin, transaction, dayTransactions } from '../../support/graph-utxo/transactions';
+import { COLORS } from '@/pages/Graph_UTXO/constants';
 
 
 beforeEach(() => {
@@ -50,9 +59,9 @@ beforeEach(() => {
 // Helpers
 // -----------------------------------------------------------
 //
-// status() is the canvas' message (role="status"), if any.
-// showYesterday steps the slider back once and waits for the
-// past day to be asked for. answerPastDay answers the fixture
+// status is the canvas' message — its status region — if
+// any. showYesterday presses the previous-day stepper
+// ("Ankstesnė diena") once. answerPastDay answers the fixture
 // day's window from `steps` (one per request, the last
 // repeating) and every other window as the default handler
 // does. daysAsked captures the day-list requests.
@@ -303,7 +312,7 @@ describe('The day list follows the crawl', () => {
   });
 
 
-  it.fails('does not ask for the day list on leaving a day whose first crawl has not landed — PINNED KNOWN BUG: switching away from a day still being crawled counts as the crawl landing, so the list is asked again at once, before any crawl landed', async () => {
+  it('does not ask for the day list on leaving a day whose first crawl has not landed', async () => {
     useFakeClock();
     const days = daysAsked();
     given.capture('get', GRAPH, ({ query }) => graphFor(query, query.get('from') === windowOf(YESTERDAY).from ? {} : { updating: true }));
@@ -316,6 +325,28 @@ describe('The day list follows the crawl', () => {
     await findBox(T.T1);
     await settle(100);
     expect(days).toHaveLength(1);
+  });
+
+
+  it('asks for the day list once a day left mid-crawl is shown again with its crawl landed', async () => {
+    useFakeClock();
+    const days = daysAsked();
+    let landed = false;
+    given.capture('get', GRAPH, ({ query }) => graphFor(query, query.get('from') === windowOf(TODAY).from && !landed ? { updating: true } : {}));
+    const { user } = renderGraph();
+    await findBox(T.T5);
+    await waitFor(() => expect(days).toHaveLength(1));
+
+    await showYesterday(user);
+    await waitFor(() => expect(queryBox(T.T5)).toBeNull());
+    await settle(100);
+    expect(days).toHaveLength(1);
+
+    // Today's crawl lands while the page shows yesterday
+    landed = true;
+    await user.click(screen.getByRole('button', { name: 'Kita diena' }));
+    await findBox(T.T5);
+    await waitFor(() => expect(days).toHaveLength(2));
   });
 
 
@@ -350,7 +381,7 @@ describe('The day list follows the crawl', () => {
 // -----------------------------------------------------------
 //
 // Centred while nothing is drawn, a pill over a drawing;
-// announced politely (role="status"); a spinner while busy.
+// announced politely, as a status; a spinner while busy.
 // -----------------------------------------------------------
 
 describe('What the canvas says', () => {
@@ -472,5 +503,130 @@ describe('What the canvas says', () => {
     await settle();
     expect(status()).toBeNull();
     expect(queryBox(T.T1)).not.toBeNull();
+  });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// Malformed answers
+// -----------------------------------------------------------
+//
+// The data hook cleans every graph answer before the drawing
+// reads it: what cannot be drawn is left out, a field of the
+// wrong type reads as not known, and the rest is drawn as
+// usual. day holds the fixture day's transactions by name.
+// -----------------------------------------------------------
+
+describe('Malformed answers', () => {
+
+  const day = () => Object.fromEntries(dayTransactions().map((tx) => [Object.keys(T).find((k) => T[k] === tx.txid), tx]));
+
+
+  it('draws an empty day from a body whose every leaf is null, or of the swapped type', async () => {
+    for (const broken of [nullLeaves(f.utxoGraph({ live: true })), swapTypes(f.utxoGraph({ live: true }))]) {
+      given.json('get', GRAPH, broken);
+      const { unmount } = renderGraph();
+      await expectStatus('Šiandien čiaupo transakcijų dar nėra');
+      expect(allBoxes()).toHaveLength(0);
+      unmount();
+    }
+  });
+
+
+  it('draws the transactions it can and leaves out every one without a real txid, drawing a repeated txid once', async () => {
+    const { T1, T2, T3, T4, T5 } = day();
+    answerGraph({
+      transactions: [
+        T1,
+        { ...T2, txid: null },
+        { ...T3, txid: 12345 },
+        { ...T4, txid: 'ne transakcija' },
+        { ...T4, txid: '' },
+        'transakcija', null, 42, [],
+        T5,
+        { ...T1, fee: 1 },
+      ],
+    });
+    renderGraph();
+    await findBox(T.T5);
+    expect(allBoxes()).toHaveLength(2);
+    expect(bandOf(getBox(T.T1)).fee).toBe("mokestis 1'100 sat");
+  });
+
+
+  it('leaves out a transaction with no place to be drawn in, and gives one in a block the list forgot that block\'s column', async () => {
+    const { T1, T2, T3, T4 } = day();
+    const { block: _block, ...homeless } = T4;
+    answerGraph({ blocks: [f.utxoBlocks[0]], transactions: [T1, { ...T2, block: '154391' }, T3, homeless] });
+    renderGraph();
+    await findBox(T.T3);
+    expect(allBoxes()).toHaveLength(2);
+    expect(queryBox(T.T1)).not.toBeNull();
+    expect(headerCells().map((cell) => cell.title)).toEqual(['Blokas #154390', 'Blokas #154395', 'Mempool']);
+  });
+
+
+  it('leaves a waiting transaction out of a past day, which has no mempool to put it in', async () => {
+    answerPastDay({ transactions: dayTransactions() });
+    const { user } = renderGraph();
+    await findBox(T.T5);
+    await showYesterday(user);
+    await waitFor(() => expect(headerCells().map((cell) => cell.title)).toEqual(['Blokas #154390', 'Blokas #154391', 'Blokas #154395']));
+    await findBox(T.T4);
+    expect(queryBox(T.T5)).toBeNull();
+  });
+
+
+  it('drops an input that names no outpoint, and keeps an output of the wrong type in its place as one nobody knows', async () => {
+    const odd = transaction({
+      txid: X.JOIN,
+      block: 154391,
+      inputs: [spend(T.T0, 0, f.JONAS, 1000000), { txid: null, vout: 0 }, 'įvestis', spend(T.T1, 'nulis', f.JONAS, 5)],
+      outputs: [coin(f.EGLE, 500000), 'išvestis', coin(f.JONAS, 400000, { spentBy: { txid: 12345, vin: 0 } })],
+    });
+    const bare = transaction({ txid: X.MINED, block: 154391, inputs: 'nėra', outputs: { 0: coin(f.EGLE, 1) } });
+    answerGraph({ transactions: [odd, bare] });
+    renderGraph();
+    await waitFor(() => expect(rowsOf(getBox(X.JOIN)).outputs[0].secondary).toBe('0.005 tBTC4'));
+
+    const { inputs, outputs } = rowsOf(getBox(X.JOIN));
+    expect(inputs.map((row) => row.secondary)).toEqual(['a0a0a0…a0a0:0']);
+    expect(outputs.map(({ primary, secondary, mark }) => [primary, secondary, mark])).toEqual([
+      ['Eglė', '0.005 tBTC4', 'coin'],
+      ['Nežinomas adresas', '? tBTC4', 'ring'],
+      ['Jonas', '0.004 tBTC4', 'coin'],
+    ]);
+    expect(rowsOf(getBox(X.MINED))).toEqual({ inputs: [], outputs: [] });
+  });
+
+
+  it('takes only text as a name or as the faucet\'s address', async () => {
+    answerGraph({ names: { [f.JONAS]: 42, [f.EGLE]: { vardas: 'Eglė' }, [f.FAUCET_UTXO]: "Faucet'as" }, faucet_address: 12345 });
+    renderGraph();
+    const t1 = await findBox(T.T1);
+    expect(bandOf(t1).sender).toBe('tb1qxc2w…xek8');
+    expect(bandOf(getBox(T.T3)).sender).toBe('tb1q3gq3…n05n');
+    expect(bandOf(getBox(T.T2))).toMatchObject({ sender: "Faucet'as", color: COLORS.INK });
+  });
+
+
+  it('shows markup in a name as plain text', async () => {
+    const name = '<img src=x onerror=alert(1)> Jonas';
+    answerGraph({ names: { ...f.utxoNames, [f.JONAS]: name } });
+    renderGraph();
+    expect(bandOf(await findBox(T.T1)).sender).toBe(name);
+    expect(document.querySelector('img[src="x"]')).toBeNull();
+  });
+
+
+  it('believes the crawl is running, and transactions are missing, only when the answer says so plainly', async () => {
+    answerGraph({ transactions: [], updating: 'true', missing: '3', live: 'false' });
+    renderGraph();
+    await expectStatus('Šiandien čiaupo transakcijų dar nėra');
   });
 });

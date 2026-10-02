@@ -27,6 +27,10 @@ from tests import helpers
 
 
 
+
+
+
+
 ############################################################
 # UtxoEngineTests
 ############################################################
@@ -205,6 +209,10 @@ class UtxoEngineTests(unittest.TestCase):
 
 
 
+
+
+
+
 ############################################################
 # UtxoLegacyDialectTests
 ############################################################
@@ -302,6 +310,9 @@ class UtxoLegacyDialectTests(unittest.TestCase):
         faucet = helpers.make_utxo_faucet()
         ctx = faucet._setup_wallet_for_network('knf')
         self.assertFalse(faucet._validate_address(ctx, helpers.ANCHOR_DOGE_RECIPIENT))
+
+
+
 
 
 

@@ -7,19 +7,23 @@
 //  the page answers the app-ready announcement, one that
 //  loads after dispatches register-wallet), the filter that
 //  keeps only wallets able to connect AND sign a Sui personal
-//  message, several wallets and the first one used, a
-//  foreign announcement that throws, unregistering; the
-//  session restored without a popup (the wallet's own account
-//  list, then the silent connect — approved, empty, refused,
-//  answered too late); the 'change' event (another account, a
-//  disconnect, a chains-only update) and its unsubscription;
-//  connect() with every refusal message, the account picked
-//  out of a multichain list and the chains it advertises;
-//  signMessage() — the backend's exact message, the nonce,
-//  the ACCOUNT OBJECT handed to the wallet, the signature
-//  passed on as the wallet serialized it, refusals; and
-//  selectWallet(). There is no step 2: a Sui address is the
-//  same on every network, so the step goes 0 → 1 → 3.
+//  message, several wallets and the first one used (handed
+//  out as the object in use, so two of one name stay apart),
+//  a foreign announcement that throws, unregistering (the
+//  account leaving with its wallet, the next wallet still
+//  announced taking over); the session restored without a
+//  popup (the wallet's own account list, then the silent
+//  connect — approved, empty, refused, answered too late);
+//  the 'change' event (another account, a disconnect, a
+//  chains-only update) and its unsubscription; connect with
+//  every refusal message, the account picked out of a
+//  multichain list and the chains it advertises; signMessage
+//  — the backend's exact message, the nonce, the ACCOUNT
+//  OBJECT handed to the wallet, the signature passed on as
+//  the wallet serialized it, refusals; and selectWallet, the
+//  wallet in use picked again included. There is no step 2:
+//  a Sui address is the same on every network, so the step
+//  goes 0 → 1 → 3.
 // -----------------------------------------------------------
 
 import { describe, it, expect, vi } from 'vitest';
@@ -92,7 +96,9 @@ async function announce(options) {
 // -----------------------------------------------------------
 //
 // The two Wallet Standard paths, the Sui filter, several
-// wallets, bad announcements, unregistering.
+// wallets and the one in use, bad announcements,
+// unregistering — the departed wallet's account goes with
+// it, and the next wallet still announced takes over.
 // -----------------------------------------------------------
 
 describe('Discovery', () => {
@@ -185,13 +191,14 @@ describe('Discovery', () => {
   });
 
 
-  it.fails("PINNED KNOWN BUG: an unregistered wallet takes its account along — instead address and chains keep naming the dead wallet's account on the install step", async () => {
+  it('an unregistered wallet takes its account along — no address, no chains, nothing in use on the install step', async () => {
     const slush = installSuiWallet({ accounts: [suiAccount()] });
     const { result } = mount();
     await act(async () => {});
     act(() => { slush.unregister(); });
     expect(result.current.address).toBeNull();
     expect(result.current.chains).toEqual([]);
+    expect(result.current.inUse).toBeNull();
   });
 
 
@@ -207,16 +214,64 @@ describe('Discovery', () => {
   });
 
 
-  it.fails('PINNED KNOWN BUG: when the wallet in use unregisters, the next announced Sui wallet takes over — instead the hook drops to the install step with the other wallet still listed', async () => {
+  it('when the wallet in use unregisters, the next announced Sui wallet takes over', async () => {
     const slush = installSuiWallet({ name: 'Slush' });
-    installSuiWallet({ name: 'Suiet' });
+    const suiet = installSuiWallet({ name: 'Suiet' });
     const { result } = mount();
     await act(async () => {});
     act(() => { slush.unregister(); });
     expect(result.current.wallets.map((w) => w.name)).toEqual(['Suiet']);
     expect(result.current.installed).toBe(true);
     expect(result.current.walletName).toBe('Suiet');
+    expect(result.current.inUse).toBe(suiet.wallet);
     expect(result.current.step).toBe(1);
+  });
+
+
+  it("the wallet that takes over brings its own session, never the departed wallet's account", async () => {
+    const slush = installSuiWallet({ name: 'Slush', accounts: [suiAccount(STUDENT_SUI, ['sui:mainnet'])] });
+    installSuiWallet({ name: 'Suiet', accounts: [suiAccount(OTHER_SUI)] });
+    const { result } = mount();
+    await act(async () => {});
+    expect(result.current.address).toBe(STUDENT_SUI);
+    act(() => { slush.unregister(); });
+    await act(async () => {});
+    expect(result.current.walletName).toBe('Suiet');
+    expect(result.current.address).toBe(OTHER_SUI);
+    expect(result.current.chains).toEqual(['sui:testnet']);
+    expect(result.current.step).toBe(3);
+  });
+
+
+  it('a picked wallet that unregisters hands over to the first one still announced', async () => {
+    installSuiWallet({ name: 'Slush' });
+    const suiet = installSuiWallet({ name: 'Suiet', accounts: [suiAccount(OTHER_SUI)] });
+    const { result } = mount();
+    await act(async () => {});
+    act(() => { result.current.selectWallet(suiet.wallet); });
+    await act(async () => {});
+    expect(result.current.address).toBe(OTHER_SUI);
+    act(() => { suiet.unregister(); });
+    await act(async () => {});
+    expect(result.current.walletName).toBe('Slush');
+    expect(result.current.address).toBeNull();
+    expect(result.current.step).toBe(1);
+  });
+
+
+  it('hands out the wallet object in use, so two wallets of one name can be told apart', async () => {
+    const first = installSuiWallet({ name: 'Slush' });
+    const second = installSuiWallet({ name: 'Slush' });
+    const { result } = mount();
+    await act(async () => {});
+    expect(result.current.wallets).toHaveLength(2);
+    expect(result.current.wallets[0]).toBe(first.wallet);
+    expect(result.current.wallets[1]).toBe(second.wallet);
+    expect(result.current.inUse).toBe(first.wallet);
+    act(() => { result.current.selectWallet(second.wallet); });
+    await act(async () => {});
+    expect(result.current.inUse).toBe(second.wallet);
+    expect(result.current.inUse).not.toBe(first.wallet);
   });
 });
 
@@ -231,9 +286,9 @@ describe('Discovery', () => {
 // -----------------------------------------------------------
 //
 // No popup at mount: the wallet's own account list first,
-// then connect({ silent: true }) — the standard's empty
-// answer and a refusal both leave the connect step; an answer
-// for a wallet the student already left is dropped.
+// then a silent connect — the standard's empty answer and a
+// refusal both leave the connect step; an answer for a
+// wallet the student already left is dropped.
 // -----------------------------------------------------------
 
 describe('Restoring a session', () => {
@@ -396,7 +451,7 @@ describe('The change event', () => {
 
 
 // -----------------------------------------------------------
-// connect()
+// connect
 // -----------------------------------------------------------
 //
 // standard:connect, the Sui account picked out of the answer,
@@ -480,7 +535,7 @@ describe('connect()', () => {
 
 
 // -----------------------------------------------------------
-// signMessage() — the ownership proof
+// signMessage — the ownership proof
 // -----------------------------------------------------------
 //
 // sui:signPersonalMessage with the connected ACCOUNT OBJECT
@@ -567,12 +622,12 @@ describe('signMessage() — the ownership proof', () => {
 
 
 // -----------------------------------------------------------
-// selectWallet()
+// selectWallet
 // -----------------------------------------------------------
 //
 // The page's picker: another announced wallet takes over and
 // ITS session is restored — the old account never carries
-// over.
+// over; picking the wallet already in use changes nothing.
 // -----------------------------------------------------------
 
 describe('selectWallet()', () => {
@@ -601,6 +656,20 @@ describe('selectWallet()', () => {
     expect(result.current.address).toBeNull();
     expect(result.current.step).toBe(1);
     expect(suiet.callsTo('connect')).toEqual([[{ silent: true }]]);
+  });
+
+
+  it('picking the wallet already in use keeps its session — no step back to connecting', async () => {
+    const slush = installSuiWallet({ name: 'Slush', accounts: [suiAccount(STUDENT_SUI)] });
+    installSuiWallet({ name: 'Suiet' });
+    const { result } = mount();
+    await act(async () => {});
+    expect(result.current.step).toBe(3);
+    act(() => { result.current.selectWallet(slush.wallet); });
+    await act(async () => {});
+    expect(result.current.walletName).toBe('Slush');
+    expect(result.current.address).toBe(STUDENT_SUI);
+    expect(result.current.step).toBe(3);
   });
 
 

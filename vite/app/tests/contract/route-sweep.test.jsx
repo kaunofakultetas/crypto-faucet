@@ -12,10 +12,10 @@
 //      requests the double knows (setup.js fails the test on
 //      any other); its new-tab links carry rel=noopener, its
 //      images an alt
-//    - every /api GET answering 500 { error } — the navbar
-//      says its list is unreachable, the page shows ITS
-//      failure (the backend's own sentence where the page
-//      passes it on), nothing crashes
+//    - every /api GET answering 500 with the backend's error
+//      body — the navbar says its list is unreachable, the
+//      page shows ITS failure (the backend's own sentence
+//      where the page passes it on), nothing crashes
 //    - every /api GET answering a JSON string — an answer of
 //      the wrong shape: nothing crashes
 //    - every /api GET dropping the connection — like the 500,
@@ -31,8 +31,6 @@
 //  The EVM graph draws with vis-network on a canvas jsdom
 //  lacks; a Network that draws nothing stands in for it here
 //  (the graph's own tests live with the Graph page).
-//
-//  Pinned: the ERC-20 page crashes on a JSON-string answer.
 // -----------------------------------------------------------
 
 import { describe, it, expect, vi } from 'vitest';
@@ -101,10 +99,11 @@ const status = (words) => async () => {
 //   title    — the tab's route name there (null: the bare
 //              site name)
 //   shows    — finds what proves the page rendered
-//   failed   — (message) → finds how the page presents a
-//              failed read; message is the backend's sentence
-//              (500 mode) or null (connection dropped). None:
-//              the page reads nothing — it simply still shows
+//   failed   — given the failure's message, finds how the
+//              page presents a failed read; the message is the
+//              backend's sentence (500 mode) or null
+//              (connection dropped). None: the page reads
+//              nothing — it simply still shows
 //   index    — a family index: on a failed catalog it rests
 //              on "/" with the CatalogUnavailable notice, on a
 //              wrong-shaped one on a blank "/"
@@ -132,14 +131,13 @@ const ROUTES = [
   { path: '/faucet/svm', index: true, ...FAUCET },
   { path: '/faucet/move', index: true, ...FAUCET },
   { path: '/graph', index: true, ...FAUCET },
+  { path: '/graph/utxo', index: true, ...FAUCET },
 ];
 
 // The route × state combinations that fail today, each with
 // what breaks — run as it.fails so the suite stays green
-// while the defect is on record
-const PINS = {
-  '/faucet/erc20/LINK × JSON string': 'the page destructures { token, deployments } from any truthy body and deriveFlow calls deployments.find — a string body crashes it',
-};
+// while the defect is on record. None at the moment
+const PINS = {};
 
 
 

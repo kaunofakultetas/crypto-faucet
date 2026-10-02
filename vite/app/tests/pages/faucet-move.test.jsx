@@ -4,33 +4,40 @@
 //  The Sui faucet end to end against the backend double and
 //  the Sui wallet double (support/wallets/sui.js, the Wallet
 //  Standard): the network's names and the faucet's numbers,
-//  the loading skeleton and the 5 s repoll; the three-step
-//  flow — there is no network step — install (Slush suggested
-//  when nothing announces itself, a wallet announced before or
-//  after the page, another chain's wallet ignored, the picker
-//  for two wallets, a wallet going away), connect (a session
-//  restored without a popup, the popup, refusals) and the
-//  claim (the account object signing the backend's exact
-//  message, the captured request with the address, the
-//  signature untouched — "+", "/" and "=" intact — and the
-//  nonce inside the signed text, "Siunčiama…", one request per
-//  double click, both balances refetched, the wallet's and
-//  the backend's refusals verbatim); the network note (quiet,
-//  or a warning when the account advertises another network;
-//  the wallet's own label for the network); the student's own
+//  the loading skeleton and the 5 s repoll, faucet info that
+//  could not be read (or came in another shape) said so on a
+//  page whose wallet steps still work, the claim held until it
+//  recovers; the three-step flow — there is no network step —
+//  install (Slush suggested when nothing announces itself, a
+//  wallet announced before or after the page, another chain's
+//  wallet ignored, the picker for two wallets — told apart by
+//  identity even under one name — a wallet going away and the
+//  next one taking over), connect (a session restored without
+//  a popup, the popup, refusals) and the claim (the account
+//  object signing the backend's exact message, the captured
+//  request with the address, the signature untouched — "+",
+//  "/" and "=" intact — and the nonce inside the signed text,
+//  the transaction linked to the explorer, "Siunčiama…", one
+//  request per double click, both balances refetched, the
+//  wallet's and the backend's refusals verbatim, a 200 that
+//  names no transaction and the failures that carry no
+//  sentence in Lithuanian); the network note (quiet, or a
+//  warning when the account advertises another network; the
+//  wallet's own label for the network); the student's own
 //  balance read with one GraphQL query from the public
 //  endpoint ("Kraunama…", a wallet that never held SUI as a
 //  real zero, a dash for GraphQL errors with HTTP 200 / a 500
-//  / a 429 / a dropped connection, its repoll and recovery);
-//  account changes inside the wallet; the return address
-//  card; a network switch; unknown networks and a failed
-//  catalog; and the backend contract matrices for
-//  /api/move/networks, /api/move/:network/faucet-balance, the
-//  claim's failure answers and the public GraphQL endpoint.
+//  / a 429 / a dropped connection / an answer that is no
+//  GraphQL, its repoll and recovery); account changes inside
+//  the wallet; the return address card; a network switch;
+//  unknown networks, a failed catalog and one answered
+//  without its networks map; and the backend contract
+//  matrices for /api/move/networks,
+//  /api/move/:network/faucet-balance, the claim's failure
+//  answers and the public GraphQL endpoint.
 //
-//  The page shows neither the payout's transaction id nor an
-//  explorer link, and has no copy button — only what it does
-//  show is asserted.
+//  The page has no copy button — only what it does show is
+//  asserted.
 // -----------------------------------------------------------
 
 import { describe, it, expect, vi } from 'vitest';
@@ -70,6 +77,12 @@ const SUI_DEVNET = {
 
 // An account a multichain wallet may hand out instead of a Sui one
 const solanaAccount = { address: 'DGvWVvGUt92p1YiffQ69Ba75stvSRMjCo6KdUtkWayC8', publicKey: new Uint8Array(32), chains: ['solana:devnet'], features: [] };
+
+// The transaction digest every default payout answers with
+const TXID = f.movePayout().transaction_id;
+
+// What a failed claim says when nobody had words of their own
+const CLAIM_FAILED = 'Nepavyko išsiųsti kriptovaliutos.';
 
 
 
@@ -204,7 +217,10 @@ const exactly = (text) => new RegExp(`^${text.replace(/[.*+?^${}()|[\]\\]/g, '\\
 // -----------------------------------------------------------
 //
 // The names from /api/move/networks, the faucet's payout and
-// balance, the skeleton until both have arrived, the repoll.
+// balance, the skeleton until both have arrived, the repoll —
+// and faucet info that never arrives: the page says so in
+// its own words, the wallet steps stay usable, the claim
+// waits, the next poll recovers.
 // -----------------------------------------------------------
 
 describe('The page and its numbers', () => {
@@ -264,6 +280,67 @@ describe('The page and its numbers', () => {
     expect(row('Čiaupo balansas:')).toHaveTextContent('530.500 tSUI');
     expect(screen.queryByRole('alert')).toBeNull();
   });
+
+
+  it("says the faucet info could not be read — in its own words, not the backend's — on a page whose wallet steps still work", async () => {
+    given.error('get', '/api/move/:network/faucet-balance', 'Sui GraphQL nepasiekiamas', 500);
+    installSuiWallet();
+    const { user } = renderMove();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/^Nepavyko gauti čiaupo informacijos$/);
+    expect(screen.getByRole('heading', { level: 1, name: "Sui Testnet faucet'as" })).toBeInTheDocument();
+    expect(screen.queryByText('Sui GraphQL nepasiekiamas')).toBeNull();
+    expect(screen.queryByText('Čiaupo balansas:')).toBeNull();
+    // No return card for a faucet the page knows nothing about
+    expect(screen.queryByText(/^Grąžinkite nebereikalingą/)).toBeNull();
+    expect(qrCodes()).toHaveLength(0);
+    await user.click(screen.getByRole('button', { name: 'Prijungti piniginę' }));
+    expect(await screen.findByRole('button', { name: 'Gauti Sui Testnet valiutos' })).toBeInTheDocument();
+  });
+
+
+  it.each([
+    ['no address', () => given.json('get', '/api/move/:network/faucet-balance', { ...f.moveBalance(), address: undefined })],
+    ['an empty address', () => given.json('get', '/api/move/:network/faucet-balance', { ...f.moveBalance(), address: '' })],
+    ['the balance as text', () => given.json('get', '/api/move/:network/faucet-balance', { ...f.moveBalance(), balance: '531' })],
+    ['no payout size', () => given.json('get', '/api/move/:network/faucet-balance', { ...f.moveBalance(), chunk_size: null })],
+    ["a proxy's page answered 200", () => given.text('get', '/api/move/:network/faucet-balance', '<html><body>Palaukite…</body></html>')],
+  ])('takes faucet info of another shape for a failed read, never a blank number: %s', async (_, answer) => {
+    answer();
+    renderMove();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/^Nepavyko gauti čiaupo informacijos$/);
+    expect(screen.queryByText(/NaN/)).toBeNull();
+    expect(qrCodes()).toHaveLength(0);
+  });
+
+
+  it('holds the claim while the faucet info could not be read — the wallet is not asked to sign, nothing is sent', async () => {
+    given.error('get', '/api/move/:network/faucet-balance', 'Vidinė serverio klaida', 500);
+    const calls = given.capture('get', '/api/move/:network/request', f.movePayout());
+    const { user, sui, claim } = await atClaimStep();
+    expect(claim).toHaveAttribute('aria-disabled', 'true');
+    await expect(user.click(claim)).rejects.toThrow(/pointer-events: none/);
+    claim.focus();
+    await user.keyboard('{Enter}');
+    await settle(100);
+    expect(sui.callsTo('signPersonalMessage')).toEqual([]);
+    expect(calls).toHaveLength(0);
+  });
+
+
+  it('recovers from a failed first load on the next poll — the numbers, the return card and the claim come back', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    given.sequence('get', '/api/move/:network/faucet-balance', [
+      { status: 500, body: { error: 'Vidinė serverio klaida' } },
+      { body: f.moveBalance() },
+    ]);
+    const { claim } = await atClaimStep();
+    expect(claim).toHaveAttribute('aria-disabled', 'true');
+    await advance(5000);
+    await waitFor(() => expect(row('Čiaupo balansas:')).toHaveTextContent('531.000 tSUI'));
+    expect(screen.queryByText('Nepavyko gauti čiaupo informacijos')).toBeNull();
+    expect(qrCodes()).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Gauti Sui Testnet valiutos' })).toHaveAttribute('aria-disabled', 'false');
+  });
 });
 
 
@@ -277,8 +354,9 @@ describe('The page and its numbers', () => {
 // -----------------------------------------------------------
 //
 // Step one: Slush suggested when nothing announces itself,
-// the discovered wallet named everywhere, the picker for two,
-// a wallet going away.
+// the discovered wallet named everywhere, the picker for two
+// (by identity — two wallets may share a name), a wallet
+// going away and the next one announced taking over.
 // -----------------------------------------------------------
 
 describe('Finding the wallet', () => {
@@ -354,13 +432,25 @@ describe('Finding the wallet', () => {
   });
 
 
-  it.fails('PINNED KNOWN BUG: two wallets announced under one name can be told apart in the picker — instead both show as the one in use (buttons keyed and highlighted by name; React reports duplicate keys)', async () => {
+  it('tells two wallets announced under one name apart in the picker — only the one in use is filled, and React sees no duplicate keys', async () => {
+    const reports = vi.spyOn(console, 'error');
     installSuiWallet({ name: 'Slush' });
     installSuiWallet({ name: 'Slush', accounts: [suiAccount(OTHER_SUI)] });
-    renderMove();
+    const { user } = renderMove();
     await screen.findByText('Piniginė:');
-    const inUse = screen.getAllByRole('button', { name: 'Slush' }).filter((button) => button.classList.contains('MuiButton-contained'));
-    expect(inUse).toHaveLength(1);
+    // The wallet in use is the filled button — MUI's variant
+    // class is the only witness of it
+    const slushes = () => screen.getAllByRole('button', { name: 'Slush' });
+    const filled = () => slushes().filter((button) => button.classList.contains('MuiButton-contained'));
+    expect(filled()).toHaveLength(1);
+    expect(filled()[0]).toBe(slushes()[0]);
+
+    // The second one has a session here: picking it is the claim at once
+    await user.click(slushes()[1]);
+    expect(await screen.findByRole('button', { name: 'Gauti Sui Testnet valiutos' })).toBeInTheDocument();
+    expect(filled()).toHaveLength(1);
+    expect(filled()[0]).toBe(slushes()[1]);
+    expect(reports.mock.calls.filter((args) => /same key/.test(args.join(' ')))).toEqual([]);
   });
 
 
@@ -383,7 +473,7 @@ describe('Finding the wallet', () => {
   });
 
 
-  it.fails('PINNED KNOWN BUG: when the wallet in use goes away, the other announced wallet takes over — instead the page drops to "Susidiegti Slush" and hides the picker, the other wallet unreachable', async () => {
+  it('lets the other announced wallet take over when the one in use goes away — never "Susidiegti Slush" while a wallet is there', async () => {
     const slush = installSuiWallet({ name: 'Slush' });
     installSuiWallet({ name: 'Suiet' });
     renderMove();
@@ -392,6 +482,23 @@ describe('Finding the wallet', () => {
     await settle();
     expect(screen.getByRole('button', { name: 'Prijungti piniginę' })).toBeInTheDocument();
     expect(studentBalance('Suiet')).toBeInTheDocument();
+    expect(currentStep()).toHaveTextContent('Prijungti Suiet');
+    expect(screen.queryByRole('link', { name: 'Susidiegti Slush' })).toBeNull();
+    // One wallet left — nothing to pick between
+    expect(screen.queryByText('Piniginė:')).toBeNull();
+  });
+
+
+  it("restores the session of the wallet that takes over, never the departed wallet's account", async () => {
+    const bodies = captureGraphql((address) => (address === OTHER_SUI ? 500000000 : f.STUDENT_SUI_MIST));
+    const slush = installSuiWallet({ name: 'Slush', accounts: [suiAccount()] });
+    installSuiWallet({ name: 'Suiet', accounts: [suiAccount(OTHER_SUI)] });
+    renderMove();
+    await screen.findByRole('button', { name: 'Gauti Sui Testnet valiutos' });
+    act(() => { slush.unregister(); });
+    await waitFor(() => expect(studentBalance('Suiet')).toHaveTextContent(/^Jūsų Suiet balansas:0\.500 tSUI$/));
+    expect(bodies.at(-1).variables.a).toBe(OTHER_SUI);
+    expect(screen.getByRole('button', { name: 'Gauti Sui Testnet valiutos' })).toBeInTheDocument();
   });
 });
 
@@ -603,8 +710,12 @@ describe("The student's own balance", () => {
   });
 
 
-  it.fails('PINNED KNOWN BUG: an answer that is not GraphQL (a proxy page answered 200) shows a dash — instead the page shows a made-up 0.000 tSUI', async () => {
-    given.text('post', GRAPHQL, '<html><body>Palaukite…</body></html>');
+  it.each([
+    ["a proxy's page answered 200", () => given.text('post', GRAPHQL, '<html><body>Palaukite…</body></html>')],
+    ['an object that is no GraphQL answer', () => given.json('post', GRAPHQL, {})],
+    ['a balance that is no number', () => given.json('post', GRAPHQL, { data: { address: { balance: { totalBalance: 'daug' } } } })],
+  ])('shows a dash — never a made-up 0.000 tSUI — for an answer that carries no readable balance: %s', async (_, answer) => {
+    answer();
     await atClaimStep();
     await waitFor(() => expect(studentBalance()).toHaveTextContent(/^Jūsų Slush balansas:-$/), { timeout: 1500 });
   });
@@ -622,8 +733,10 @@ describe("The student's own balance", () => {
 //
 // sui:signPersonalMessage with the connected account object,
 // then GET /api/move/<network>/request?address=&signature=&
-// nonce= — the in-flight state, the outcome rows, and every
-// refusal from the wallet and from the backend.
+// nonce= — the in-flight state, the outcome rows (the
+// payout's transaction linked to the explorer), every refusal
+// from the wallet and from the backend, and the failures that
+// carry no sentence of their own, in Lithuanian.
 // -----------------------------------------------------------
 
 describe('The claim', () => {
@@ -645,10 +758,31 @@ describe('The claim', () => {
   });
 
 
-  it('says the coins are on their way to the wallet', async () => {
+  it("says the coins are on their way and names the transaction in full, linked to the network's explorer", async () => {
     const { user, claim } = await atClaimStep();
     await user.click(claim);
-    expect(await screen.findByRole('alert')).toHaveTextContent(/^Sui Testnet išsiųstas į jūsų piniginę\.$/);
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(exactly(`Sui Testnet išsiųstas į jūsų piniginę. Transakcija: ${TXID}`));
+    const link = within(alert).getByRole('link', { name: TXID });
+    expect(link).toHaveAttribute('href', `https://suiscan.xyz/testnet/tx/${TXID}`);
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    // A long digest wraps inside the alert instead of widening
+    // the card — the class is where that lives
+    expect(link).toHaveClass('break-all', 'underline');
+  });
+
+
+  it.each([
+    ['names no explorer', { block_explorer_urls: [] }],
+    ['names an explorer address that is no URL', { block_explorer_urls: ['suiscan.xyz/testnet'] }],
+  ])('shows the transaction digest as plain text when the network %s', async (_, changes) => {
+    given.json('get', '/api/move/networks', networksWith(changes));
+    const { user, claim } = await atClaimStep();
+    await user.click(claim);
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(exactly(`Sui Testnet išsiųstas į jūsų piniginę. Transakcija: ${TXID}`));
+    expect(within(alert).queryByRole('link')).toBeNull();
   });
 
 
@@ -659,7 +793,7 @@ describe('The claim', () => {
     await waitFor(() => expect(bodies).toHaveLength(1));
     expect(balances).toHaveLength(1);
     await user.click(claim);
-    await screen.findByText('Sui Testnet išsiųstas į jūsų piniginę.');
+    await screen.findByText(/^Sui Testnet išsiųstas į jūsų piniginę\./);
     await waitFor(() => expect(balances).toHaveLength(2), { timeout: 1000 });
     await waitFor(() => expect(bodies).toHaveLength(2), { timeout: 1000 });
   });
@@ -693,7 +827,7 @@ describe('The claim', () => {
     expect(held.requests).toBe(1);
     expect(sui.callsTo('signPersonalMessage')).toHaveLength(1);
     await held.release();
-    expect(await screen.findByText('Sui Testnet išsiųstas į jūsų piniginę.')).toBeInTheDocument();
+    expect(await screen.findByText(/^Sui Testnet išsiųstas į jūsų piniginę\./)).toBeInTheDocument();
   });
 
 
@@ -724,7 +858,34 @@ describe('The claim', () => {
     const { user, claim } = await atClaimStep();
     await user.click(claim);
     expect(await screen.findByRole('alert')).toHaveTextContent(exactly(message));
-    expect(screen.queryByText('Sui Testnet išsiųstas į jūsų piniginę.')).toBeNull();
+    expect(screen.queryByText(/išsiųstas į jūsų piniginę/)).toBeNull();
+  });
+
+
+  it.each([
+    ["a proxy's HTML error page", () => given.html('get', '/api/move/:network/request'), `${CLAIM_FAILED} Serveris grąžino klaidą (502).`],
+    ['a 500 with no body', () => given.empty('get', '/api/move/:network/request', 500), `${CLAIM_FAILED} Serveris grąžino klaidą (500).`],
+    ['a dropped connection', () => given.networkError('get', '/api/move/:network/request'), `${CLAIM_FAILED} Patikrinkite interneto ryšį.`],
+  ])("says it in Lithuanian, never in axios's English, for %s", async (_, answer, message) => {
+    answer();
+    const { user, claim } = await atClaimStep();
+    await user.click(claim);
+    expect(await screen.findByRole('alert')).toHaveTextContent(exactly(message));
+  });
+
+
+  it.each([
+    ['an empty object', () => given.json('get', '/api/move/:network/request', {}), CLAIM_FAILED],
+    ["a proxy's page", () => given.text('get', '/api/move/:network/request', '<html><body>Palaukite…</body></html>'), CLAIM_FAILED],
+    ['a transaction digest that is no string', () => given.json('get', '/api/move/:network/request', { ...f.movePayout(), transaction_id: 12345 }), CLAIM_FAILED],
+    ['a refusal sent as { error }', () => given.json('get', '/api/move/:network/request', { error: f.COOLDOWN_MESSAGE }), f.COOLDOWN_MESSAGE],
+  ])('treats a 200 answer that names no transaction as a failure, not a payout: %s', async (_, answer, message) => {
+    answer();
+    const { user, claim } = await atClaimStep();
+    await user.click(claim);
+    expect(await screen.findByRole('alert')).toHaveTextContent(exactly(message));
+    expect(screen.queryByText(/išsiųstas į jūsų piniginę/)).toBeNull();
+    expect(document.querySelector('a[href*="/tx/"]')).toBeNull();
   });
 
 
@@ -824,7 +985,7 @@ describe('Switching networks', () => {
     installSuiWallet({ accounts: [suiAccount(STUDENT_SUI, ALL_SUI_CHAINS)] });
     const { user } = renderWithPicker();
     await user.click(await screen.findByRole('button', { name: 'Gauti Sui Testnet valiutos' }));
-    await screen.findByText('Sui Testnet išsiųstas į jūsų piniginę.');
+    await screen.findByText(/^Sui Testnet išsiųstas į jūsų piniginę\./);
     await user.click(screen.getByRole('link', { name: 'Devnet' }));
     expect(await pageLoaded("Sui Devnet faucet'as")).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
@@ -858,6 +1019,13 @@ describe('Switching networks', () => {
 // -----------------------------------------------------------
 // Unknown networks and a missing network list
 // -----------------------------------------------------------
+//
+// An unknown :network gets the error card and never polls; a
+// network list that failed — or answered 200 without its
+// networks map — gets the list's failure card, never a
+// skeleton that does not end; the real App routes here and
+// titles the tab.
+// -----------------------------------------------------------
 
 describe('Unknown networks and a missing network list', () => {
 
@@ -880,6 +1048,19 @@ describe('Unknown networks and a missing network list', () => {
   });
 
 
+  it.each([
+    ["a proxy's page", () => given.text('get', '/api/move/networks', '<html><body>Palaukite…</body></html>')],
+    ['an empty object', () => given.json('get', '/api/move/networks', {})],
+    ['a list where the map belongs', () => given.json('get', '/api/move/networks', { ...f.moveNetworks, networks: [f.moveNetworksMap.suiTestnet] })],
+  ])('says the network list could not be read when it answers 200 without a networks map, instead of a skeleton forever: %s', async (_, answer) => {
+    answer();
+    renderMove();
+    expect(await screen.findByText('Nepavyko gauti tinklų sąrašo. Perkraukite puslapį.')).toBeInTheDocument();
+    expect(screen.queryByText('Kraunami tinklo duomenys…')).toBeNull();
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+  });
+
+
   it('the real App routes /faucet/move/suiTestnet here, under the tab title "Move čiaupas"', async () => {
     renderApp({ route: '/faucet/move/suiTestnet' });
     expect(await pageLoaded()).toBeInTheDocument();
@@ -898,13 +1079,13 @@ describe('Unknown networks and a missing network list', () => {
 // -----------------------------------------------------------
 //
 // Every response variant against the endpoints the page
-// reads: the network list, the faucet's balance (the page has
-// NO failure state for it — the failure variants are pinned),
-// the claim's failure answers (a render that clicks the claim
-// of a restored session: the matrix does not await it, the
-// click is its last step) and the public GraphQL balance —
-// a restored session is at the claim step at once, so the
-// row's four states need no click.
+// reads: the network list, the faucet's balance (its failure
+// is the page's notice in place of the numbers, under the
+// page's own title), the claim's failure answers (a render
+// that clicks the claim of a restored session: the matrix
+// does not await it, the click is its last step) and the
+// public GraphQL balance — a restored session is at the claim
+// step at once, so the row's four states need no click.
 // -----------------------------------------------------------
 
 describeEndpointContract({
@@ -916,8 +1097,6 @@ describeEndpointContract({
   loading: () => screen.getByRole('status'),
 });
 
-
-const NO_FAILURE_STATE = 'a failed faucet-balance leaves the page on its loading skeleton forever — no failure is ever shown';
 
 describeEndpointContract({
   path: '/api/move/:network/faucet-balance',
@@ -931,7 +1110,6 @@ describeEndpointContract({
     expect(screen.getByText(/Nepavyko/)).toBeInTheDocument();
   },
   loading: () => screen.getByRole('status'),
-  pins: Object.fromEntries(VARIANTS.filter((variant) => variant.expect === 'failed').map((variant) => [variant.name, NO_FAILURE_STATE])),
 });
 
 
@@ -952,11 +1130,6 @@ describeEndpointContract({
     expect(alert.textContent).not.toMatch(/Network Error|Request failed with status code/);
   },
   loading: () => screen.getByRole('button', { name: 'Siunčiama…' }),
-  pins: {
-    'HTML error page from the proxy (502) → the failure is shown': 'the student reads axios\'s English "Request failed with status code 502"',
-    'status 500 with an empty body → the failure is shown': 'the student reads axios\'s English "Request failed with status code 500"',
-    'connection dropped → the failure is shown': 'the student reads axios\'s English "Network Error"',
-  },
 });
 
 

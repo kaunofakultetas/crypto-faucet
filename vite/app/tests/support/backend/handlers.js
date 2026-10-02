@@ -21,7 +21,7 @@
 //  for.
 //
 //  Used by:
-//    - server.js — setupServer(...defaultHandlers)
+//    - server.js — the msw server starts from these handlers
 // -----------------------------------------------------------
 
 import { http, HttpResponse } from 'msw';

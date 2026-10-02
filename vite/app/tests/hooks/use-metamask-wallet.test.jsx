@@ -5,14 +5,18 @@
 //  (support/wallets/metamask.js), rendered with renderHook
 //  inside a query client: how MetaMask is FOUND (EIP-6963
 //  only — never the window.ethereum squatter; the stable build
-//  over flask / mmi; a wallet that announces late; a malformed
-//  announcement), the bootstrap reads and the events that keep
-//  account and chain fresh, the step ladder, connect,
-//  switchNetwork (the 4902 add-then-switch, the wrapped 4902,
-//  every refusal, the landing check), signMessage (the exact
-//  Lithuanian claim message as UTF-8 hex, the nonce) and the
-//  balance poll (1 s, the chain written back, a wrong chain's
-//  null, a failing RPC and its recovery).
+//  over flask / mmi, also when it arrives after flask was
+//  wired — the hook then follows it, one provider for every
+//  read, event and action; a wallet that announces late; a
+//  malformed announcement), the bootstrap reads and the events
+//  that keep account and chain fresh, the step ladder,
+//  connect, switchNetwork (the 4902 add-then-switch, the
+//  wrapped 4902, every refusal, the landing check),
+//  signMessage (the exact Lithuanian claim message as UTF-8
+//  hex, the nonce), the balance poll (1 s, the chain written
+//  back, a wrong chain's null, a failing RPC and its recovery)
+//  and the chain tick that does the same repair with no chain
+//  to expect.
 //
 //  The hook caches the first MetaMask it hears for the life of
 //  its module — every test gets a fresh copy of the module
@@ -38,6 +42,9 @@ const NOT_LANDED = 'Tinklas dar neįjungtas — paspauskite mygtuką dar kartą 
 const sepolia = f.evmNetworksMap.sepolia;
 const hoodi = f.evmNetworksMap.hoodi;
 
+// MetaMask's flask build, announced beside the stable one
+const FLASK = { rdns: 'io.metamask.flask', name: 'MetaMask Flask', onWindow: false };
+
 
 // A fresh hook module per test — its provider cache is empty
 let hookModule;
@@ -60,8 +67,14 @@ beforeEach(async () => {
 // renderWallet mounts the hook for an expected chain (SEPOLIA
 // when no argument is given; an explicit undefined is the
 // ERC-20 page's chain-agnostic use) inside its own query
-// client; rerender({ expected }) changes it. hopMethods drops the balance poll's reads from
-// a call record, leaving the switch conversation.
+// client; a rerender with another expected chain changes it.
+// hopMethods drops the balance poll's reads from a call
+// record, leaving the switch conversation. freezeTicks fakes
+// ONLY setInterval: the balance poll and the chain tick stand
+// still until the test advances them, while the wallet's
+// answers and settle run on real time — so those tests read
+// the hook after a settle, never through waitFor, whose own
+// re-checks would be frozen too.
 // -----------------------------------------------------------
 
 function renderWallet(...args) {
@@ -76,6 +89,8 @@ const HOP = ['wallet_switchEthereumChain', 'wallet_addEthereumChain'];
 
 const hopMethods = (wallet) => wallet.methods().filter((m) => HOP.includes(m));
 
+const freezeTicks = () => vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+
 
 
 
@@ -89,7 +104,10 @@ const hopMethods = (wallet) => wallet.methods().filter((m) => HOP.includes(m));
 // EIP-6963 only: a provider announced under rdns io.metamask*
 // — the stable build beats flask / mmi, otherwise the first
 // one wins — and a hook that found nothing at mount is wired
-// the moment one shows up.
+// the moment one shows up. A hook already wired to flask
+// moves over when the stable build arrives: its listeners,
+// its reads and every action go to the stable build from
+// then on, starting from scratch.
 // -----------------------------------------------------------
 
 describe('Finding MetaMask', () => {
@@ -240,8 +258,8 @@ describe('Finding MetaMask', () => {
   });
 
 
-  it.fails('talks to one wallet only when the stable build announces after a flask build was wired — PINNED KNOWN BUG: the hook keeps reading and signing with flask while connect() asks the stable build', async () => {
-    const flask = installMetamask({ rdns: 'io.metamask.flask', name: 'MetaMask Flask', onWindow: false });
+  it('talks to one wallet only when the stable build announces after a flask build was wired — connects and signs with the stable build', async () => {
+    const flask = installMetamask(FLASK);
     const { result } = renderWallet(undefined);
     await waitFor(() => expect(result.current.step).toBe(1));
 
@@ -253,6 +271,59 @@ describe('Finding MetaMask', () => {
     await expect(result.current.signMessage()).resolves.toMatchObject({ signature: SIGNATURE });
     expect(stable.signed).toHaveLength(1);
     expect(flask.callsTo('personal_sign')).toEqual([]);
+  });
+
+
+  it("moves its listeners and reads over to the stable build — the account and chain are the stable build's, flask is no longer heard", async () => {
+    const flask = installMetamask({ ...FLASK, connected: true, chainId: MAINNET });
+    const { result } = renderWallet(undefined);
+    await waitFor(() => expect(result.current.chainId).toBe(MAINNET));
+    expect(result.current.account).toBe(f.STUDENT_EVM);
+
+    let stable;
+    act(() => { stable = installMetamask({ onWindow: false, connected: true, accounts: [OTHER_ACCOUNT], chainId: HOODI }); });
+    await waitFor(() => expect(result.current.account).toBe(OTHER_ACCOUNT));
+    expect(result.current.chainId).toBe(HOODI);
+    expect(flask.listenerCount('accountsChanged')).toBe(0);
+    expect(flask.listenerCount('chainChanged')).toBe(0);
+    expect(stable.listenerCount('accountsChanged')).toBe(1);
+    expect(stable.listenerCount('chainChanged')).toBe(1);
+
+    // What happens inside flask no longer reaches the page
+    act(() => flask.changeChain(SEPOLIA));
+    act(() => flask.changeAccounts([]));
+    expect(result.current).toMatchObject({ account: OTHER_ACCOUNT, chainId: HOODI, step: 3 });
+  });
+
+
+  it("starts the stable build from scratch — flask's account does not linger while the stable build's own read fails", async () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    installMetamask({ ...FLASK, connected: true });
+    const { result } = renderWallet(undefined);
+    await waitFor(() => expect(result.current.step).toBe(3));
+
+    act(() => {
+      installMetamask({ onWindow: false, connected: true, announce: false })
+        .fail('eth_accounts', rpcError(-32603, 'Disconnected from MetaMask background.'))
+        .announce();
+    });
+    await waitFor(() => expect(result.current.step).toBe(1));
+    expect(result.current.account).toBeNull();
+  });
+
+
+  it('switches chains through the stable build once it has replaced flask', async () => {
+    const flask = installMetamask({ ...FLASK, connected: true, chainId: MAINNET });
+    const { result } = renderWallet();
+    await waitFor(() => expect(result.current.step).toBe(2));
+
+    let stable;
+    act(() => { stable = installMetamask({ onWindow: false, connected: true, chainId: MAINNET }); });
+    await waitFor(() => expect(stable.callsTo('eth_accounts')).toHaveLength(1));
+    await act(() => result.current.switchNetwork(sepolia));
+    expect(stable.chainId).toBe(SEPOLIA);
+    expect(flask.callsTo('wallet_switchEthereumChain')).toEqual([]);
+    await waitFor(() => expect(result.current.step).toBe(3));
   });
 });
 
@@ -433,7 +504,7 @@ describe('The step ladder', () => {
 
 
 // -----------------------------------------------------------
-// connect()
+// connect
 // -----------------------------------------------------------
 
 describe('connect()', () => {
@@ -513,13 +584,13 @@ describe('connect()', () => {
 
 
 // -----------------------------------------------------------
-// switchNetwork()
+// switchNetwork
 // -----------------------------------------------------------
 //
-// wallet_switchEthereumChain with the hex id; 4902 → add from
-// the network config, then switch again; the landing is read
-// back with eth_chainId. Every failure is a ready-to-display
-// Lithuanian sentence.
+// wallet_switchEthereumChain with the hex id; on a 4902 the
+// chain is added from the network config, then switched to
+// again; the landing is read back with eth_chainId. Every
+// failure is a ready-to-display Lithuanian sentence.
 // -----------------------------------------------------------
 
 describe('switchNetwork()', () => {
@@ -664,7 +735,7 @@ describe('switchNetwork()', () => {
 
 
 // -----------------------------------------------------------
-// signMessage()
+// signMessage
 // -----------------------------------------------------------
 //
 // The ownership proof both EVM-family pages send with a
@@ -844,5 +915,81 @@ describe('The balance poll', () => {
     await waitFor(() => expect(result.current.balance).not.toBeNull());
     act(() => metamask.changeAccounts([OTHER_ACCOUNT]));
     await waitFor(() => expect(metamask.callsTo('eth_getBalance').some((call) => call.params[0] === OTHER_ACCOUNT)).toBe(true));
+  });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// The chain tick with no chain to expect
+// -----------------------------------------------------------
+//
+// The ERC-20 page's use: no balance to poll, so eth_chainId
+// alone is re-read every second while a wallet is connected
+// — the repair the balance poll gives the EVM page, for a
+// lost first read and for a switch MetaMask did not announce.
+// The ticks are frozen and advanced by hand.
+// -----------------------------------------------------------
+
+describe('The chain tick with no chain to expect', () => {
+
+  it('repairs a failed first eth_chainId a second later — and asks for no balance', async () => {
+    freezeTicks();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const metamask = installMetamask({ connected: true })
+      .fail('eth_chainId', rpcError(-32603, 'Disconnected from MetaMask background.'), { once: true });
+    const { result } = renderWallet(undefined);
+    await settle();
+    expect(result.current.account).toBe(f.STUDENT_EVM);
+    expect(result.current.chainId).toBeNull();
+
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    await settle();
+    expect(result.current.chainId).toBe(SEPOLIA);
+    expect(metamask.callsTo('eth_getBalance')).toEqual([]);
+  });
+
+
+  it('catches a chain switch MetaMask did not announce on the next tick, a second after the last', async () => {
+    freezeTicks();
+    const metamask = installMetamask({ connected: true });
+    const { result } = renderWallet(undefined);
+    await settle();
+    expect(result.current.chainId).toBe(SEPOLIA);
+
+    metamask.changeChain(MAINNET, { silently: true });
+    await act(() => vi.advanceTimersByTimeAsync(999));
+    await settle();
+    expect(result.current.chainId).toBe(SEPOLIA);
+    await act(() => vi.advanceTimersByTimeAsync(1));
+    await settle();
+    expect(result.current.chainId).toBe(MAINNET);
+    expect(result.current.step).toBe(3);
+  });
+
+
+  it('reads nothing before the wallet is connected', async () => {
+    freezeTicks();
+    const metamask = installMetamask();
+    renderWallet(undefined);
+    await settle();
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    expect(metamask.callsTo('eth_chainId')).toHaveLength(1);
+  });
+
+
+  it('stops once unmounted', async () => {
+    freezeTicks();
+    const metamask = installMetamask({ connected: true });
+    const { unmount } = renderWallet(undefined);
+    await settle();
+    unmount();
+    const reads = metamask.callsTo('eth_chainId').length;
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    expect(metamask.callsTo('eth_chainId')).toHaveLength(reads);
   });
 });

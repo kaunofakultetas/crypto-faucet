@@ -7,10 +7,9 @@
 //  touching it:
 //
 //    - a family DISABLED the way the backend disables one —
-//      its slice empty: { default_network: null, networks: {} }
-//      ({ default_token: null, tokens: {} } for ERC-20), the
-//      shape the backend's tests/test_disabled_families.py
-//      pins
+//      its slice emptied: no default network and no networks
+//      (no default token and no tokens for ERC-20), the shape
+//      the backend's tests/test_disabled_families.py pins
 //    - a slice replaced (a default pointing at a network the
 //      map no longer has, a reordered map …)
 //    - the navbar's persisted copy of the last payload
@@ -58,10 +57,10 @@ export const EMPTY_SLICES = {
 // catalogWithout / catalogWith
 // -----------------------------------------------------------
 //
-//   catalogWithout('evm', 'utxo')   — those families disabled
-//   catalogWith({ evm: { … } })     — those slices replaced
-//
-// Both return a fresh deep copy.
+// catalogWithout disables the families it is given, each
+// slice emptied the way EMPTY_SLICES has it; catalogWith
+// replaces whole slices of the fixture with the ones the test
+// passes, keyed by family. Both return a fresh deep copy.
 //
 // Used by:
 //   - core/app.test.jsx, components/navbar.test.jsx
@@ -83,11 +82,11 @@ export const catalogWithout = (...families) => catalogWith(
 // rememberCatalog / rememberPick
 // -----------------------------------------------------------
 //
-//   rememberCatalog(payload)        — as if a previous visit
-//                                     had fetched it (a string
-//                                     is stored as it is)
-//   rememberPick('evm', 'hoodi')    — as if the student had
-//                                     picked it in the dropdown
+// What an earlier visit leaves in localStorage:
+// rememberCatalog stores a payload as if that visit had
+// fetched it (a string is stored as it is, so a test can
+// leave a corrupt copy), rememberPick a family's network or
+// token key as if the student had picked it in the dropdown.
 //
 // setup.js clears localStorage after every test.
 //

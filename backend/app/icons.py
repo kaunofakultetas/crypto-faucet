@@ -55,6 +55,7 @@ ICON_EXTENSIONS = ('svg', 'png', 'webp')
 
 
 
+
 ############################################################
 # icon_url
 ############################################################
@@ -77,6 +78,7 @@ def icon_url(icon_type, key):
         if os.path.isfile(os.path.join(ICONS_DIR, icon_type, f"{key}.{ext}")):
             return f"/api/icons/{icon_type}/{key}"
     return None
+
 
 
 
@@ -113,7 +115,3 @@ def get_icon(icon_type, key):
             return send_from_directory(ICONS_DIR, relative, max_age=3600)
 
     abort(404)
-
-
-
-

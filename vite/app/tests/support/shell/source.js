@@ -16,7 +16,7 @@
 //
 //    APP_ROOT / SRC    — where the app and its source live
 //    readSource        — one file as text
-//    sourceFiles       — every .js / .jsx under a folder
+//    sourceFiles       — every .js / .jsx / .mjs under a folder
 //    withoutComments   — code with the comments blanked out
 //    routeTags         — the <Route> tags of a JSX text
 //    appRoutes         — every route of App.jsx, full paths
@@ -47,9 +47,10 @@ export const SRC = join(APP_ROOT, 'src');
 // readSource / sourceFiles
 // -----------------------------------------------------------
 //
-//   readSource('src/App.jsx')   → the file's text
-//   sourceFiles()               → [{ file: 'src/…', code }]
-//                                 for every .js/.jsx under src
+// readSource reads one file, named by its path under vite/app,
+// as text. sourceFiles reads every .js, .jsx and .mjs file
+// under a folder — src unless told otherwise — each with its
+// path relative to vite/app and its text.
 //
 // Used by:
 //   - appRoutes / routeTitles / pageImports (below)
@@ -78,8 +79,8 @@ export const sourceFiles = (dir = SRC) => walk(dir)
 // -----------------------------------------------------------
 //
 // Blanks out block and line comments (a "//" right after a
-// colon is a URL's, not a comment) — the banners quote code
-// ("axios.get(…)", "<Route …>") that must not count as code.
+// colon is a URL's, not a comment) — a banner that names a
+// call or a route tag must not count as code.
 //
 // Used by:
 //   - appRoutes (below)
@@ -100,11 +101,13 @@ export const withoutComments = (code) => code
 // routeTags
 // -----------------------------------------------------------
 //
-// Every <Route …> / <Route … /> / </Route> of a JSX text, in
-// order, as { attrs, selfClosing } or { close: true }. An
-// opening tag ends at the first ">" outside braces and
-// quotes — element={<Navigate to="/" replace />} holds both.
-// <Routes> is not a <Route>.
+// Every opening, self-closing and closing <Route> tag of a
+// JSX text, in order: an opening tag with its attribute text
+// and whether it closes itself, a closing tag as a bare mark.
+// An opening tag ends at the first ">" outside braces and
+// quotes — a redirect's element attribute, a <Navigate> with
+// a quoted target, holds both. A <Routes> tag is never taken
+// for one.
 //
 // Used by:
 //   - appRoutes (below)
@@ -157,14 +160,15 @@ function routeTags(jsx) {
 // appRoutes
 // -----------------------------------------------------------
 //
-//   appRoutes() → [{ path, index, element, redirectTo }]
-//
-// Every <Route> of App.jsx in declaration order, its path
-// made absolute through its parents ('/faucet/evm/:network';
-// an index route carries its parent's path, the root one
-// '/'; the catch-all stays '*'). element is the component
-// named in element={<X …/>} (null for a layout route that
-// only groups children); redirectTo is a <Navigate>'s target.
+// Every <Route> of App.jsx in declaration order, each with
+// its path, whether it is an index route, the component it
+// renders and where it redirects to. The path is made
+// absolute through its parents (an index route carries its
+// parent's path, the root one '/'; the catch-all stays '*').
+// The component is the one named in the element attribute —
+// null for a layout route that only groups children — and the
+// redirect target is a <Navigate>'s, null for every other
+// route.
 //
 // Used by:
 //   - core/structural.test.js — titles, pages, families
@@ -216,10 +220,9 @@ export function appRoutes() {
 // routeTitles
 // -----------------------------------------------------------
 //
-//   routeTitles() → { titles: [{ prefix, title }], site }
-//
-// App.jsx's ROUTE_TITLES table in its order (first match
-// wins there) and the bare SITE_TITLE.
+// App.jsx's ROUTE_TITLES table as its prefix and title pairs,
+// in its order (first match wins there), and the bare
+// SITE_TITLE.
 //
 // Used by:
 //   - core/structural.test.js
@@ -248,11 +251,11 @@ export function routeTitles() {
 // pageImports
 // -----------------------------------------------------------
 //
-//   pageImports() → [{ name: 'FaucetEVM', dir: 'Faucet_EVM' }]
-//
-// Every `import X from '@/pages/<Dir>/Page'` of App.jsx — a
-// static import is the only form the one-bundle decision
-// allows (see App.jsx's header).
+// Every page module App.jsx imports — the name it is imported
+// under and its folder in src/pages, read from the default
+// imports of a folder's Page module. A static import is the
+// only form the one-bundle decision allows (see App.jsx's
+// header).
 //
 // Used by:
 //   - core/structural.test.js

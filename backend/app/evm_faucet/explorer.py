@@ -549,7 +549,7 @@ class EtherscanExplorer:
         # or a community faucet's is the whole testnet's
         # traffic, not this graph's neighborhood — its cached
         # faucet-related rows are served, nothing more.
-        # =============================================================
+        # ===========================================================
         fetch_key = (network, address.lower())
         is_live_window = to_ts > int(time.time()) - 3600
 
@@ -589,7 +589,7 @@ class EtherscanExplorer:
         # The range predicate rides on the (network, timestamp)
         # index — no date column needed, the timestamp already IS
         # the date.
-        # ============================================================
+        # ==========================================================
         with get_db_connection() as conn:
             sqlQueryResult = conn.execute('''
                 WITH GetLatestUpdate AS (
@@ -729,7 +729,6 @@ class EtherscanExplorer:
 
 
 
-
     ############################################################
     # set_address_name
     ############################################################
@@ -761,8 +760,3 @@ class EtherscanExplorer:
             ''', [address.lower(), label])
 
         return {"status": "OK"}, 200
-
-
-
-
-

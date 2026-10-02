@@ -32,7 +32,6 @@ import PlayArrowRoundedIcon from '@mui/icons-material/PlayArrowRounded';
 
 
 
-
 // -----------------------------------------------------------
 // PRESENTATIONS
 // -----------------------------------------------------------
@@ -93,7 +92,6 @@ const PRESENTATIONS = [
     ],
   },
 ];
-
 
 
 
@@ -194,7 +192,6 @@ function PresentationCard({ title, description, href, thumbnail, buttons }) {
     </Card>
   );
 }
-
 
 
 

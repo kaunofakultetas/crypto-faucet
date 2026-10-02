@@ -12,8 +12,10 @@
 //  day that fell out of the list showing as the newest, a
 //  single day shrinking the row to the dropdown alone — and,
 //  on the page, the day list from /transaction-days asked in
-//  the browser's timezone plus today, today alone while the
-//  list fails, and the graph drawing the day picked.
+//  the browser's timezone plus today, only the entries of a
+//  broken list that name a day, today alone while the list
+//  fails or is no list at all, and the graph drawing the day
+//  picked.
 // -----------------------------------------------------------
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -21,6 +23,7 @@ import { useState } from 'react';
 import { screen, within, waitFor, fireEvent } from '@testing-library/react';
 import { renderPage } from '../../support/render';
 import { given } from '../../support/backend/server';
+import { settle } from '../../support/backend/contract';
 import { mediaQueryMatches } from '../../support/setup';
 import {
   DAYS, TODAY, YESTERDAY, pinToday, renderGraph, answerGraph, askedFor, windowOf, findBox, queryBox, headerCells,
@@ -294,6 +297,33 @@ describe('Day picker on the page', () => {
     given.json('get', DAYS, { days: [{ count: 2, day: YESTERDAY }, { count: 1, day: TODAY }] });
     renderGraph();
     await waitFor(() => expect(daySlider()).toHaveAttribute('max', '1'));
+  });
+
+
+  it('offers only the entries of a broken list that name a day, and steps onto them as usual', async () => {
+    given.json('get', DAYS, { days: [{ count: 1, day: null }, { count: 2, day: 12345 }, 'diena', { count: 3, day: 'vakar' }, { count: 6, day: '2025-08-13' }] });
+    const calls = answerGraph();
+    const { user } = renderGraph();
+    await findBox(T.T1);
+    await waitFor(() => expect(daySlider()).toHaveAttribute('max', '1'));
+    const list = await openList(user);
+    expect(within(list).getAllByRole('option').map((option) => option.textContent)).toEqual(['2026-09-30 (šiandien)', '2025-08-13']);
+    await user.keyboard('{Escape}');
+
+    await user.click(screen.getByRole('button', { name: 'Ankstesnė diena' }));
+    await waitFor(() => expect(askedFor(calls, '2025-08-13')).toHaveLength(1));
+    expect(dateField()).toHaveValue('2025-08-13');
+  });
+
+
+  it('offers today alone when the day list is no list at all', async () => {
+    const calls = given.capture('get', DAYS, { days: 'kelios dienos' });
+    renderGraph();
+    await findBox(T.T1);
+    await waitFor(() => expect(calls).toHaveLength(1));
+    await settle();
+    expect(dateField()).toHaveValue('2026-09-30 (šiandien)');
+    expect(screen.queryByRole('button', { name: 'Ankstesnė diena' })).toBeNull();
   });
 
 

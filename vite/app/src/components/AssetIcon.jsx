@@ -77,12 +77,11 @@ function colorFromString(input) {
 // AssetIcon (default export)
 // -----------------------------------------------------------
 //
-//   <AssetIcon assetKey="sepolia" icon={payload.icon}
-//              size={24} inline />
-//
-// icon is the backend-advertised URL or null; assetKey seeds
-// the fallback colour, so it must be the CATALOG key, not a
-// display name.
+// One asset's mark at the requested pixel size. The icon URL
+// is the one the backend advertises, or nothing; the asset
+// key seeds the fallback colour, so it must be the CATALOG
+// key, never a display name — the same asset would otherwise
+// change colour from page to page.
 //
 // Used by:
 //   - see the file header

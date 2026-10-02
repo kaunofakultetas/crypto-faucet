@@ -87,7 +87,7 @@ def main():
     # STEP 2: simulate first — their faucet reverts when the
     # wallet already holds 200 FOLD or more, and a doomed
     # claim should not cost gas
-    # =======================================================
+    # ======================================================
     try:
         upstream.functions.faucet().estimate_gas({'from': account.address})
     except Exception:

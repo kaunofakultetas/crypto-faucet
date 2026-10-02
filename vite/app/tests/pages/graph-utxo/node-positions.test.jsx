@@ -10,7 +10,8 @@
 //  gets its own spot); click or drag (the 4 px slop in screen
 //  pixels, Enter and Space, the right button, a cancelled
 //  press, one pointer at a time, the pressed box drawn on
-//  top, a box vanishing mid-press — pinned); the drag itself
+//  top, a press ended by its box vanishing or by a lost
+//  pointer capture, the next click working); the drag itself
 //  (one box moves, every move measured from the press, the
 //  block growing in the drag's direction — later blocks
 //  pushed right, earlier ones left, the first into the
@@ -60,14 +61,15 @@ const KEY = 'utxo-graph-positions:btc4';
 // Helpers
 // -----------------------------------------------------------
 //
-// saved() reads a network's stored positions; savePositions
+// saved reads a network's stored positions; savePositions
 // puts some there before the page mounts. screenOf maps the
 // fixture's five boxes to where they sit on screen, to compare
-// a whole drawing before and after a gesture. dialog() is the
-// transaction dialog, if one is open. showDay steps the day
-// slider once in a direction and waits for that day to draw.
-// WithNetworkSwitch is the page next to a button that moves
-// the router to the knf network — the page stays mounted.
+// a whole drawing before and after a gesture. dialog is the
+// transaction dialog, if one is open. showDay presses the day
+// stepper it names, back or forward, and waits for that day
+// to draw. WithNetworkSwitch is the page next to a button
+// that moves the router to the knf network — the page stays
+// mounted.
 // -----------------------------------------------------------
 
 const saved = (key = KEY) => JSON.parse(localStorage.getItem(key) ?? 'null');
@@ -322,7 +324,7 @@ describe('Click or drag', () => {
   });
 
 
-  it.fails('a box leaving the day while pressed does not swallow the next click on another box — PINNED KNOWN BUG: nothing ends the vanished box\'s press, so the next click only ends it and opens nothing', async () => {
+  it('a box leaving the day while pressed does not swallow the next click on another box', async () => {
     useFakeClock();
     const withoutT5 = dayTransactions().filter((tx) => tx.txid !== T.T5);
     answerGraph({}, { transactions: withoutT5 });
@@ -335,11 +337,29 @@ describe('Click or drag', () => {
     press(t5, { x: 500, y: 100 });
     await advance(5000);
     await waitFor(() => expect(queryBox(T.T5)).toBeNull());
+    expect(document.querySelector('use')).toBeNull();
     release(scroller(), 500, 100);
 
     await user.click(getBox(T.T1));
     const opened = await screen.findByRole('dialog', { name: 'Transakcija' }, { timeout: 1000 });
     expect(within(opened).getByText(T.T1)).toBeInTheDocument();
+  });
+
+
+  it('a press whose box loses the pointer capture ends without opening anything, and the next click works', async () => {
+    const { user } = renderGraph();
+    const t1 = await findBox(T.T1);
+    press(t1, { x: 100, y: 100 });
+    fireEvent.lostPointerCapture(t1, { pointerId: 1 });
+    expect(document.querySelector('use')).toBeNull();
+
+    // The release that follows reaches the box no longer pressed
+    release(t1, 100, 100);
+    await settle(50);
+    expect(dialog()).toBeNull();
+
+    await user.click(getBox(T.T2));
+    expect(within(await screen.findByRole('dialog', { name: 'Transakcija' })).getByText(T.T2)).toBeInTheDocument();
   });
 });
 

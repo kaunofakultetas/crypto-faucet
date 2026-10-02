@@ -7,25 +7,35 @@
 //
 //  The four-step MetaMask flow (install → connect → switch
 //  network → claim) is driven by the shared useMetamaskWallet
-//  hook;
-//  claiming signs a nonce message the backend verifies before
-//  sending (GET /api/evm/<network>/request). The faucet's
+//  hook; claiming signs a nonce message the backend verifies
+//  before sending (GET /api/evm/<network>/request), and a
+//  payout is announced with its transaction id, linked to the
+//  transaction on the network's block explorer. The faucet's
 //  return address renders as text + QR, with a shortcut to
 //  the transaction graph (/graph/<network>).
 //
-//  Network metadata (chain id, names, RPC urls) comes from
-//  /api/evm/networks and also feeds MetaMask's
+//  Network metadata (chain id, names, RPC urls, explorer)
+//  comes from /api/evm/networks and also feeds MetaMask's
 //  wallet_addEthereumChain when the chain is missing there.
 //  The page shows skeletons until both the metadata and the
-//  faucet info have arrived; a catalog that failed, or a
-//  :network the catalog does not know, gets an error card
-//  instead of skeletons forever.
+//  faucet info have arrived, and nothing it reads can keep
+//  them up forever: a catalog that failed or came back in a
+//  shape the page cannot use, or a :network the catalog does
+//  not know, gets an error card; faucet info that failed or
+//  came back malformed is said in the card where its numbers
+//  would stand, while the poll keeps trying.
 //
 //  Split into (root component last):
 //
 //    FAUCET_REFRESH_MS — faucet balance repoll cadence
+//    CLAIM_FAILED      — the claim's own failure sentence
+//    isPlainObject     — the shape checks' building block
+//    isCatalog         — a usable /api/evm/networks answer
+//    isFaucetInfo      — a usable faucet-balance answer
 //    useFaucetInfo     — network metadata + faucet polling
 //    LoadingSkeleton   — full-page skeleton layout
+//    FaucetRows        — the faucet's numbers, or its failure
+//    ReturnAddressCard — return address, QR, graph shortcut
 //    FaucetEVM         — page state + layout (default export)
 // -----------------------------------------------------------
 
@@ -35,17 +45,92 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import QRCode from 'react-qr-code';
 import axios from 'axios';
 
-import { Button, Box, Skeleton, Stack, CircularProgress } from '@mui/material';
+import { Alert, Button, Box, Skeleton, Stack, CircularProgress } from '@mui/material';
 import HubIcon from '@mui/icons-material/Hub';
 
 import useMetamaskWallet from '@/hooks/useMetamaskWallet';
 import { WalletStepper, WalletGateButton, FadingAlert, useAlerts } from '@/components/WalletFlow';
 import AssetIcon from '@/components/AssetIcon';
 import ErrorCard from '@/components/ErrorCard';
+import PayoutMessage from '@/components/PayoutMessage';
+import { requestErrorText } from '@/utils/requestError';
+import { payoutTxid } from '@/utils/payout';
 
 
 // How often the faucet balance repolls
 const FAUCET_REFRESH_MS = 3000;
+
+// What a failed claim says when neither the backend nor the
+// wallet gave a reason of their own
+const CLAIM_FAILED = 'Nepavyko išsiųsti kriptovaliutos.';
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// isPlainObject
+// -----------------------------------------------------------
+//
+// A JSON object in the everyday sense — not null, not a list,
+// not a string or a number — the one container the backend's
+// answers are built from.
+//
+// Used by:
+//   - isCatalog, isFaucetInfo (below)
+// -----------------------------------------------------------
+
+const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// isCatalog
+// -----------------------------------------------------------
+//
+// Whether an /api/evm/networks answer can drive the page: an
+// object whose networks map holds an entry per network.
+// Anything else — a proxy's empty body, a list, the map
+// missing — used to leave the page waiting for networks that
+// would never come.
+//
+// Used by:
+//   - useFaucetInfo (below) — the query and its cache reads
+// -----------------------------------------------------------
+
+const isCatalog = (body) => isPlainObject(body) && isPlainObject(body.networks);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// isFaucetInfo
+// -----------------------------------------------------------
+//
+// Whether a faucet-balance answer is what the page renders:
+// the faucet's address as text (the return address and its
+// QR code are made from it), the balance and the per-claim
+// amount as numbers. An answer of any other shape is a failed
+// read rather than something to render — a missing address
+// used to crash the whole page.
+//
+// Used by:
+//   - useFaucetInfo (below) — the query and its cache reads
+// -----------------------------------------------------------
+
+const isFaucetInfo = (body) => isPlainObject(body)
+  && typeof body.address === 'string' && body.address !== ''
+  && Number.isFinite(body.balance)
+  && Number.isFinite(body.chunk_size);
 
 
 
@@ -57,21 +142,25 @@ const FAUCET_REFRESH_MS = 3000;
 // useFaucetInfo
 // -----------------------------------------------------------
 //
-//   const { networkInfo, faucetInfo, catalogFailed,
-//           unknownNetwork } = useFaucetInfo(network)
-//
 // The backend side of the page as two TanStack queries: the
-// network's metadata (chain id, names, RPC urls — from
-// /api/evm/networks, cache shared with the graph page; the
-// navbar reads the bundled /api/faucet/catalog instead) and
-// the faucet info ({ address, balance, chunk_size }),
-// polling every 3 s once the metadata is in.
-// A network switch changes the query keys, so the previous
-// chain's numbers never linger. A failed faucet poll keeps
-// the last payload; a catalog that never arrived
-// (catalogFailed) and a :network the catalog does not know
-// (unknownNetwork) are reported apart, so the page can say
-// so instead of showing skeletons forever.
+// network's metadata (chain id, names, RPC urls, explorer —
+// from /api/evm/networks, cache shared with the graph page;
+// the navbar reads the bundled /api/faucet/catalog instead)
+// and the faucet's address, balance and per-claim amount,
+// polling every 3 s once the metadata is in. A network switch
+// changes the query keys, so the previous chain's numbers
+// never linger.
+//
+// Both answers are checked for the shape the page needs
+// inside their queries, so a malformed body fails the query
+// just like an error status does. The checks run again on the
+// way out, because the graph page fills the same cache
+// entries without them. The page learns which case it is in:
+// the catalog never arrived or is unusable (catalogFailed),
+// the catalog does not know this :network (unknownNetwork),
+// or the faucet info never arrived (faucetFailed — the poll
+// keeps trying, and a later answer clears it). A failed
+// repoll keeps the last good numbers on screen.
 //
 // Used by:
 //   - FaucetEVM (below)
@@ -79,24 +168,39 @@ const FAUCET_REFRESH_MS = 3000;
 
 function useFaucetInfo(network) {
 
-  const { data: networksData, isError: catalogError } = useQuery({
+  const { data: catalog, isError: catalogError } = useQuery({
     queryKey: ['evm-networks'],
-    queryFn: async () => (await axios.get('/api/evm/networks')).data,
+    queryFn: async () => {
+      const body = (await axios.get('/api/evm/networks')).data;
+      if (!isCatalog(body)) throw new Error('Unexpected /api/evm/networks answer');
+      return body;
+    },
     staleTime: 5 * 60 * 1000,
   });
-  const networks = networksData?.networks ?? null;
-  const networkInfo = networks?.[network] ?? null;
-  const catalogFailed = catalogError && !networks;
+  const networks = isCatalog(catalog) ? catalog.networks : null;
+  // Own keys only — a :network named after a property every
+  // object inherits is not a network the catalog knows
+  const networkInfo = networks && Object.hasOwn(networks, network) ? networks[network] : null;
+  // An unusable answer the graph page cached counts as a
+  // failure too, not as a load still on its way
+  const catalogFailed = !networks && (catalogError || catalog !== undefined);
   const unknownNetwork = Boolean(networks) && !networkInfo;
 
-  const { data: faucetInfo = null } = useQuery({
+
+  const faucetQuery = useQuery({
     queryKey: ['evm-faucet-balance', network],
-    queryFn: async () => (await axios.get(`/api/evm/${network}/faucet-balance`)).data,
+    queryFn: async () => {
+      const body = (await axios.get(`/api/evm/${network}/faucet-balance`)).data;
+      if (!isFaucetInfo(body)) throw new Error('Unexpected faucet-balance answer');
+      return body;
+    },
     enabled: Boolean(networkInfo),
     refetchInterval: FAUCET_REFRESH_MS,
   });
+  const faucetInfo = isFaucetInfo(faucetQuery.data) ? faucetQuery.data : null;
+  const faucetFailed = !faucetInfo && faucetQuery.isError;
 
-  return { networkInfo, faucetInfo, catalogFailed, unknownNetwork };
+  return { networkInfo, faucetInfo, faucetFailed, catalogFailed, unknownNetwork };
 }
 
 
@@ -110,7 +214,8 @@ function useFaucetInfo(network) {
 // -----------------------------------------------------------
 //
 // The whole page as grey bones — same four cards, shown until
-// both the network metadata and the faucet info have arrived.
+// both the network metadata and the faucet info have arrived,
+// or the faucet info has failed.
 //
 // Used by:
 //   - FaucetEVM (below)
@@ -158,11 +263,105 @@ function LoadingSkeleton() {
 
 
 // -----------------------------------------------------------
+// FaucetRows
+// -----------------------------------------------------------
+//
+// The faucet's two numbers in the main card — what one claim
+// pays out and what the faucet still holds — or, when the
+// faucet info never arrived, the sentence saying so in their
+// place, in the UTXO page's words. A backend that cannot
+// answer used to leave the skeleton up forever.
+//
+// Used by:
+//   - FaucetEVM (below)
+// -----------------------------------------------------------
+
+function FaucetRows({ faucetInfo, shortName }) {
+
+  if (!faucetInfo) {
+    return <Alert severity="error" sx={{ my: 1 }}>Nepavyko gauti čiaupo informacijos</Alert>;
+  }
+
+  return (
+    <>
+      <div className="my-2 flex">
+        <span className="flex-1">Išsiųsime jums:</span>
+        <span className="text-right">{faucetInfo.chunk_size.toFixed(3)} {shortName}</span>
+      </div>
+      <div className="my-2 flex">
+        <span className="flex-1">Čiaupo balansas:</span>
+        <span className="text-right">{faucetInfo.balance.toFixed(3)} {shortName}</span>
+      </div>
+    </>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// ReturnAddressCard
+// -----------------------------------------------------------
+//
+// The bottom card: the faucet's own address, lower-cased, as
+// text and QR code so leftover coins can be sent back, with
+// the shortcut into the network's transaction graph. The
+// graph needs an explorer behind it — a chain without one
+// gets no button rather than an empty graph. Shown only once
+// the faucet's address is known.
+//
+// Used by:
+//   - FaucetEVM (below)
+// -----------------------------------------------------------
+
+function ReturnAddressCard({ address, shortName, showGraph, onOpenGraph }) {
+
+  const faucetAddress = address.toLowerCase();
+
+  return (
+    <div className="card-surface mx-auto mb-5 w-full min-w-[320px] max-w-[640px] p-4">
+      <div className="my-2 flex items-start gap-4">
+        <span className="flex-1">
+          Grąžinkite nebereikalingą <u><b>{shortName}</b></u> krypto atgal:
+          <br /><br />{faucetAddress}
+          {showGraph && (
+            <>
+              <br /><br />
+              <Button
+                variant="contained"
+                onClick={onOpenGraph}
+                startIcon={<HubIcon />}
+                sx={{ padding: '10px 16px' }}
+              >
+                Transakcijų srautas
+              </Button>
+            </>
+          )}
+        </span>
+        <QRCode value={faucetAddress} size={128} />
+      </div>
+    </div>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // FaucetEVM (default export)
 // -----------------------------------------------------------
 //
 // The page itself: wires the wallet and faucet hooks into the
 // stepper, the balance rows, the claim button and the alerts.
+// The claim waits while the faucet's own info never arrived —
+// the card says why — and every outcome belongs to the
+// network it was claimed on.
 //
 // Used by:
 //   - App.jsx — route /faucet/evm/:network
@@ -173,7 +372,7 @@ export default function FaucetEVM() {
   const { network } = useParams();
   const navigate = useNavigate();
 
-  const { networkInfo, faucetInfo, catalogFailed, unknownNetwork } = useFaucetInfo(network);
+  const { networkInfo, faucetInfo, faucetFailed, catalogFailed, unknownNetwork } = useFaucetInfo(network);
   const wallet = useMetamaskWallet(networkInfo?.chain_id);
   const { alerts, addAlert, clearAlerts } = useAlerts();
   const queryClient = useQueryClient();
@@ -200,27 +399,37 @@ export default function FaucetEVM() {
   // before paying out — no transaction on the student's side.
   // A successful claim invalidates the balance query, so the
   // faucet's number drops immediately instead of on the next
-  // poll. An answer that arrives after a network switch is
-  // dropped: it belongs to the chain it was issued for.
+  // poll, and is announced with its transaction. A 200 that
+  // names no transaction paid nothing out, so it is reported
+  // as a failed claim. An answer that arrives after a network
+  // switch is dropped: it belongs to the chain it was issued
+  // for.
   const claimNative = async () => {
     const forNetwork = network;
     setClaimingFor(forNetwork);
     try {
       const { nonce, signature } = await wallet.signMessage();
 
-      await axios.get(`/api/evm/${forNetwork}/request`, {
+      const { data: payout } = await axios.get(`/api/evm/${forNetwork}/request`, {
         params: { address: wallet.account, signature, nonce },
       });
+      const txHash = payoutTxid(payout, 'transaction_hash', CLAIM_FAILED);
 
       queryClient.invalidateQueries({ queryKey: ['evm-faucet-balance', forNetwork] });
       if (networkRef.current !== forNetwork) return;
-      addAlert('success', `${networkInfo.full_name} išsiųstas į jūsų piniginę.`);
+      addAlert('success', (
+        <PayoutMessage
+          sentence={`${networkInfo.full_name} išsiųstas į jūsų piniginę.`}
+          txid={txHash}
+          explorer={networkInfo.block_explorer_urls?.[0]}
+        />
+      ));
     } catch (e) {
-      // Backend refusals arrive as { error } in the response
-      // body; wallet errors (sign refused, not connected) only
-      // carry a message
+      // The backend's refusals are shown word for word, a
+      // wallet's refusal in the wallet's words, anything else
+      // as the page's own sentence with the reason after it
       if (networkRef.current !== forNetwork) return;
-      addAlert('error', e.response?.data?.error || e.message || 'Nepavyko išsiųsti kriptovaliutos.');
+      addAlert('error', requestErrorText(e, CLAIM_FAILED));
     } finally {
       setClaimingFor((current) => (current === forNetwork ? null : current));
     }
@@ -235,11 +444,9 @@ export default function FaucetEVM() {
     return <ErrorCard>Nežinomas tinklas: {network}</ErrorCard>;
   }
 
-  if (!networkInfo || !faucetInfo) {
+  if (!networkInfo || (!faucetInfo && !faucetFailed)) {
     return <LoadingSkeleton />;
   }
-
-  const faucetAddress = faucetInfo.address.toLowerCase();
 
   // Three states that must not blur: no wallet or a dead RPC
   // is a dash, a poll still in flight is "Kraunama…". The
@@ -251,6 +458,10 @@ export default function FaucetEVM() {
     const microEther = Number(wei / 1_000_000_000_000n);
     return `${(microEther / 1e6).toFixed(3)} ${networkInfo.short_name}`;
   };
+
+  // Nothing to claim from a faucet whose info never arrived —
+  // the button stays, greyed like a claim in flight
+  const claimBlocked = claiming || !faucetInfo;
 
 
   return (
@@ -287,14 +498,7 @@ export default function FaucetEVM() {
           <span className="flex-1">Jūsų MetaMask balansas:</span>
           <span className="text-right">{wallet.step === 3 ? formatBalance(wallet.balance) : 'Piniginė neprijungta'}</span>
         </div>
-        <div className="my-2 flex">
-          <span className="flex-1">Išsiųsime jums:</span>
-          <span className="text-right">{parseFloat(faucetInfo.chunk_size).toFixed(3)} {networkInfo.short_name}</span>
-        </div>
-        <div className="my-2 flex">
-          <span className="flex-1">Čiaupo balansas:</span>
-          <span className="text-right">{parseFloat(faucetInfo.balance).toFixed(3)} {networkInfo.short_name}</span>
-        </div>
+        <FaucetRows faucetInfo={faucetInfo} shortName={networkInfo.short_name} />
 
         <div className="mt-3">
           <WalletGateButton
@@ -311,8 +515,8 @@ export default function FaucetEVM() {
               color="primary"
               fullWidth
               aria-busy={claiming}
-              aria-disabled={claiming}
-              onClick={claiming ? undefined : claimNative}
+              aria-disabled={claimBlocked}
+              onClick={claimBlocked ? undefined : claimNative}
               sx={{ minHeight: 40, '&[aria-disabled="true"]': { opacity: 0.6, pointerEvents: 'none' } }}
             >
               {claiming && <CircularProgress size={22} color="inherit" aria-hidden="true" sx={{ mr: 1 }} />}
@@ -328,32 +532,16 @@ export default function FaucetEVM() {
         ))}
       </div>
 
-      {/* Return address + the transaction graph shortcut */}
-      <div className="card-surface mx-auto mb-5 w-full min-w-[320px] max-w-[640px] p-4">
-        <div className="my-2 flex items-start gap-4">
-          <span className="flex-1">
-            Grąžinkite nebereikalingą <u><b>{networkInfo.short_name}</b></u> krypto atgal:
-            <br /><br />{faucetAddress}
-            {/* The graph needs an explorer behind it — a chain
-                without one gets no button rather than an empty
-                graph */}
-            {networkInfo.has_explorer !== false && (
-              <>
-                <br /><br />
-                <Button
-                  variant="contained"
-                  onClick={() => navigate(`/graph/${network}`)}
-                  startIcon={<HubIcon />}
-                  sx={{ padding: '10px 16px' }}
-                >
-                  Transakcijų srautas
-                </Button>
-              </>
-            )}
-          </span>
-          <QRCode value={faucetAddress} size={128} />
-        </div>
-      </div>
+      {/* Return address + the transaction graph shortcut, once
+          the faucet's address is known */}
+      {faucetInfo && (
+        <ReturnAddressCard
+          address={faucetInfo.address}
+          shortName={networkInfo.short_name}
+          showGraph={networkInfo.has_explorer !== false}
+          onOpenGraph={() => navigate(`/graph/${network}`)}
+        />
+      )}
 
     </Box>
   );

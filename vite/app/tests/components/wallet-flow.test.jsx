@@ -9,11 +9,11 @@
 //  icons that survive a re-render), WalletGateButton (the
 //  install link, connect and switch with their refusals routed
 //  to onError, another wallet's name / link / switch help,
-//  nothing from step 3 on), FadingAlert (8 s visible, a 0.5 s
-//  fade, the pause on pointer and focus, the close button,
-//  measured on fake timers) and useAlerts (the list, the tags,
-//  a dismiss per row, clearAlerts' stable identity, and each
-//  row's own clock).
+//  nothing from step 3 on), FadingAlert (a message carrying a
+//  link, 8 s visible, a 0.5 s fade, the pause on pointer and
+//  focus, the close button, measured on fake timers) and
+//  useAlerts (the list, the tags, a dismiss per row,
+//  clearAlerts' stable identity, and each row's own clock).
 // -----------------------------------------------------------
 
 import { describe, it, expect, vi } from 'vitest';
@@ -45,10 +45,11 @@ const sepolia = f.evmNetworksMap.sepolia;
 //
 // readSteps reads the stepper's text the way a screen reader
 // does, linearly: each step's spoken state word, then its
-// label. iconOf(i) is the bubble of step i (the state word's
-// parent) — the icon is what tells a sighted student done
-// from current. The Ethereum diamond is the one inline SVG
-// that is not an MUI icon (those carry a data-testid).
+// label. iconOf is the bubble of a step, by its position (the
+// state word's parent) — the icon is what tells a sighted
+// student done from current. The Ethereum diamond is the one
+// inline SVG that is not an MUI icon (those carry a
+// data-testid).
 // -----------------------------------------------------------
 
 function readSteps(container) {
@@ -277,6 +278,20 @@ describe('FadingAlert', () => {
 
     renderPage(<FadingAlert severity="error" onDone={vi.fn()}>{f.COOLDOWN_MESSAGE}</FadingAlert>);
     expect(within(screen.getByRole('alert')).getByTestId('ErrorOutlineIcon')).toBeInTheDocument();
+  });
+
+
+  it("carries a message with a link inside it — the faucet pages' transaction link stays a working link", () => {
+    const hash = f.evmPayout().transaction_hash;
+    renderPage(
+      <FadingAlert severity="success" onDone={vi.fn()}>
+        Ethereum Sepolia išsiųstas į jūsų piniginę. Transakcija:{' '}
+        <a href={`https://sepolia.etherscan.io/tx/${hash}`} target="_blank" rel="noopener noreferrer">{hash}</a>
+      </FadingAlert>
+    );
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent(`Ethereum Sepolia išsiųstas į jūsų piniginę. Transakcija: ${hash}`);
+    expect(within(alert).getByRole('link', { name: hash })).toHaveAttribute('href', `https://sepolia.etherscan.io/tx/${hash}`);
   });
 
 

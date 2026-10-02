@@ -12,13 +12,17 @@
 //  The balance repolls silently every 5 s; the network's
 //  display names come from /api/utxo/networks (BTC/Bitcoin
 //  defaults cover the fetch window; a :network the catalog
-//  does not know gets an error card, never a fake Bitcoin
-//  page). All UI text is Lithuanian.
+//  does not know gets an error card, and so does a list that
+//  never arrives or arrives without its networks map — never
+//  a fake Bitcoin page). A payout is announced only with the
+//  transaction it made, linked to the chain's explorer; every
+//  failure reads in Lithuanian. All UI text is Lithuanian.
 //
 //  Split into (root component last):
 //
 //    BALANCE_REFRESH_MS — background repoll cadence
 //    DEFAULT_NET_META   — BTC fallback until the names load
+//    PAYOUT_FAILED      — the page's own failure sentence
 //    useFaucetInfo      — names + faucet info + polling
 //    BalanceRows        — "we'll send" + balance lines
 //    ReturnAddressCard  — return address + QR + the graph
@@ -38,6 +42,9 @@ import HubIcon from '@mui/icons-material/Hub';
 
 import AssetIcon from '@/components/AssetIcon';
 import ErrorCard from '@/components/ErrorCard';
+import PayoutMessage from '@/components/PayoutMessage';
+import { requestErrorText } from '@/utils/requestError';
+import { payoutTxid } from '@/utils/payout';
 
 
 // How often the faucet balance repolls in the background
@@ -49,6 +56,10 @@ const BALANCE_REFRESH_MS = 5000;
 // page shows the unknown-network card instead
 const DEFAULT_NET_META = { short_name: 'BTC', full_name: 'Bitcoin', icon: null, block_explorer: null };
 
+// What a failed request says when the backend had no sentence
+// of its own — requestErrorText adds the reason after it
+const PAYOUT_FAILED = 'Nepavyko išsiųsti kriptovaliutos.';
+
 
 
 
@@ -59,26 +70,29 @@ const DEFAULT_NET_META = { short_name: 'BTC', full_name: 'Bitcoin', icon: null, 
 // useFaucetInfo
 // -----------------------------------------------------------
 //
-//   const { netMeta, faucetInfo, loadingInfo, initialLoad,
-//           catalogFailed, unknownNetwork, refresh } =
-//     useFaucetInfo(network)
-//
 // Everything the page knows about the faucet, as two TanStack
-// queries: the network's display names (the page's own fetch
-// — the navbar reads the bundled /api/faucet/catalog
-// instead) and the live faucet info
-// ({ balance, address, chunk_size } or { error }), repolled
-// silently every 5 s. initialLoad separates the first fetch
-// (skeletons) from the background repolls (no flicker); a
-// network switch changes the query key, so a slow answer from
-// the previous chain can never overwrite the current one.
-// Only a fetch that NEVER succeeded becomes the { error }
+// queries. The network's display names come from the page's
+// own fetch of the network list — the navbar reads the
+// bundled /api/faucet/catalog instead — and an answer without
+// a networks map (a proxy's page with HTTP 200, an empty
+// object) is a failed fetch, never a list that knows nothing.
+// The live faucet info (address, balance and payout size, or
+// an { error } sentence) repolls silently every 5 s.
+//
+// The hook hands back the display names (the BTC defaults
+// until the list arrives), the faucet info, two loading flags
+// — initialLoad tells the first fetch (skeletons) from the
+// background repolls (no flicker) — whether the list never
+// arrived (catalogFailed) or arrived without this network
+// (unknownNetwork), and a refresh the page calls after a
+// payout for an immediate refetch of the balance.
+//
+// A network switch changes the query key, so a slow answer
+// from the previous chain can never overwrite the current
+// one. Only a fetch that NEVER succeeded becomes the { error }
 // payload — a failed repoll keeps the last numbers on screen.
-// The poll is gated on the catalog knowing the network, so an
-// unknown :network never repolls a 500 forever; catalogFailed
-// (the catalog never arrived) and unknownNetwork (it arrived
-// without this key) let the page say which. refresh() (after
-// a payout) invalidates the balance for an immediate refetch.
+// The poll is gated on the list knowing the network, so an
+// unknown :network never repolls a 500 forever.
 //
 // Used by:
 //   - FaucetUTXO (below)
@@ -88,11 +102,19 @@ function useFaucetInfo(network) {
 
   const queryClient = useQueryClient();
 
-  // Display names; a fetch that failed keeps the BTC defaults,
-  // an answer WITHOUT this network is reported as unknown
+  // Display names; the BTC defaults stand in only while the
+  // list is on its way — a list that never arrives is
+  // reported as failed, one WITHOUT this network as unknown
   const { data: networksData, isError: catalogError } = useQuery({
     queryKey: ['utxo-networks'],
-    queryFn: async () => (await axios.get('/api/utxo/networks')).data,
+    queryFn: async () => {
+      const list = (await axios.get('/api/utxo/networks')).data;
+      // No map, no list — failing here puts up the card instead
+      // of a generic Bitcoin page with a form that works
+      const map = list?.networks;
+      if (!map || typeof map !== 'object' || Array.isArray(map)) throw new Error('no networks map in the answer');
+      return list;
+    },
     staleTime: 5 * 60 * 1000,
   });
   const networks = networksData?.networks ?? null;
@@ -278,11 +300,14 @@ export default function FaucetUTXO() {
   }, [network]);
 
 
-  // Ask the faucet to send coins. Backend errors arrive both
-  // as { error } payloads with HTTP 200 and as 4xx/5xx with
-  // { error, details } — the student sees the curated error
-  // only; details is the raw exception, a debugging field the
-  // backend log carries. The outcome is pinned to the network
+  // Ask the faucet to send coins. The backend's refusals
+  // arrive as an { error } sentence, with HTTP 200 as well as
+  // with 4xx/5xx, and the student sees that sentence only — a
+  // 500's details field is the raw exception, a debugging
+  // field the backend log carries. Any other failure, a 200
+  // that names no transaction included (payoutTxid), gets the
+  // page's own sentence with the reason after it
+  // (requestErrorText). The outcome is pinned to the network
   // it was issued for (its ticker travels with it), and an
   // answer that arrives after a switch is dropped rather than
   // shown under the new chain's name.
@@ -296,24 +321,13 @@ export default function FaucetUTXO() {
       setSubmittingFor(forNetwork);
       const { data } = await axios.get(`/api/utxo/${forNetwork}/request-btc`, { params: { address: recipient.trim() } });
       if (networkRef.current !== forNetwork) return;
-      if (data?.error) {
-        setError(data.error);
-      } else {
-        setSuccess({ txid: data.transaction_id, amount: data.amount, short });
-        setRecipient('');
-        refresh(); // the balance just changed
-      }
+      const txid = payoutTxid(data, 'transaction_id', PAYOUT_FAILED);
+      setSuccess({ txid, amount: data.amount, short });
+      setRecipient('');
+      refresh(); // the balance just changed
     } catch (e) {
       if (networkRef.current !== forNetwork) return;
-      if (e.response?.data?.error) {
-        setError(e.response.data.error);
-      } else if (e.response?.status === 429) {
-        setError('Per daug užklausų. Palaukite ir bandykite vėl.');
-      } else if (e.response?.status >= 400) {
-        setError(`Serverio klaida (${e.response.status}): ${e.response.data?.error || 'Nežinoma klaida'}`);
-      } else {
-        setError('Nepavyko išsiųsti kriptovaliutos. Patikrinkite interneto ryšį.');
-      }
+      setError(requestErrorText(e, PAYOUT_FAILED));
     } finally {
       setSubmittingFor((current) => (current === forNetwork ? null : current));
     }
@@ -360,23 +374,15 @@ export default function FaucetUTXO() {
           ) : null}
 
           {/* The txid links to the network's block explorer when the
-              config names one (mempool-style <base>/tx/<txid>) — the
-              exercise is watching the transaction confirm */}
+              config names one — the exercise is watching the
+              transaction confirm */}
           {success && (
             <Alert severity="success">
-              Išsiųsta {success.amount} {success.short}. Transakcija:{' '}
-              {netMeta.block_explorer ? (
-                <a
-                  href={`${netMeta.block_explorer.replace(/\/$/, '')}/tx/${success.txid}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="break-all underline"
-                >
-                  {success.txid}
-                </a>
-              ) : (
-                <span className="break-all">{success.txid}</span>
-              )}
+              <PayoutMessage
+                sentence={`Išsiųsta ${success.amount} ${success.short}.`}
+                txid={success.txid}
+                explorer={netMeta.block_explorer}
+              />
             </Alert>
           )}
           {error && (

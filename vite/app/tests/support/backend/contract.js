@@ -6,8 +6,8 @@
 //  test per response VARIANT — every way the answer can be
 //  broken, wrong, late or missing:
 //
-//    failures (the backend's { error } answers — 500, 400, 404
-//    — a proxy's HTML page, a 500 with no body, a dropped
+//    failures (the backend's error answers — 500, 400, 404 —
+//    a proxy's HTML page, a 500 with no body, a dropped
 //    connection) — each must reach the screen the way THIS
 //    page presents a failure (the `failed` callback: an error
 //    card, a notice, a dash …), its own chrome still standing,
@@ -117,9 +117,12 @@ export const hugeList = (body, n = 300) => {
 // VARIANTS
 // -----------------------------------------------------------
 //
-// Every generated test: { name, respond(fixture) → msw
-// response, expect: 'failed' | 'survives' | 'hostile' |
-// 'loading' | 'loaded' }.
+// Every generated test: its name, the msw response it builds
+// from a copy of the fixture, and what the page must do with
+// that answer — 'failed' (show the failure), 'survives'
+// (stand without crashing), 'hostile' (stand, with markup
+// rendered as text), 'loading' (hold its loading state) or
+// 'loaded' (show the data).
 //
 // Used by:
 //   - describeEndpointContract (below)
@@ -159,28 +162,25 @@ export const VARIANTS = [
 // describeEndpointContract
 // -----------------------------------------------------------
 //
-// Generates the matrix for one endpoint:
+// Generates the matrix for one endpoint: a describe block
+// named after its method and path, one test per variant. The
+// page test names the endpoint by its msw path and method (a
+// GET unless it says otherwise) and hands over the happy
+// body, of which every variant gets a fresh copy; the rest is
+// what this page understands.
 //
-//   describeEndpointContract({
-//     path: '/api/evm/:network/faucet-balance', // msw path
-//     method: 'get',                            // default
-//     fixture: f.evmBalance(),                  // the happy body
-//     render: () => renderPage(<FaucetEVM />, { route, path }),
-//     chrome: () => screen.getByRole('heading', { … }),
-//     loaded: async () => { await screen.findByText('41.6') },
-//     failed: async () => { await screen.findByText('Nepavyko …') },
-//     loading: () => screen.getByText('Kraunama…'),   // optional
-//     only: [...names], skip: { name: 'why' },        // optional
-//     pins: { name: 'what breaks' },                  // it.fails
-//   })
-//
-// `render` may be async — an endpoint the page calls only
-// after a click renders and clicks there, and is awaited.
-// `chrome` runs after every variant: the page must still show
-// its own frame. `loaded` is awaited for the variants that end
-// with data on screen, `failed` for the failure variants (a
-// page with no visible failure state passes a callback that
-// asserts what it shows instead — say, a dash).
+// `render` mounts the page; it may be async — an endpoint the
+// page calls only after a click renders and clicks there, and
+// is awaited. `chrome` runs after every variant: the page must
+// still show its own frame. `loaded` is awaited for the
+// variants that end with data on screen, `failed` for the
+// failure variants (a page with no visible failure state
+// passes a callback that asserts what it shows instead — say,
+// a dash), and the optional `loading` must hold while the
+// request hangs. `only` narrows the run to the variants it
+// names; `skip` and `pins` map a variant's name to a reason —
+// a skipped variant is listed with its reason, a pinned one
+// runs as it.fails with the bug in its title.
 //
 // Used by:
 //   - page tests
@@ -262,12 +262,13 @@ export function describeEndpointContract({ path, method = 'get', fixture, render
 // settle / expectNoCrash
 // -----------------------------------------------------------
 //
-// settle() lets React flush the state updates an answered
-// request triggers (a few macrotasks inside act, so the updates
-// are not reported as un-acted); expectNoCrash() checks that no
-// error boundary fired — the test net of renderPage
-// (data-testid render-crashed) nor the App's own card
-// ("Puslapio nepavyko atvaizduoti.").
+// settle lets React flush the state updates an answered
+// request triggers (a wait of a few macrotasks inside act —
+// 30 ms unless the caller names another — so the updates are
+// not reported as un-acted); expectNoCrash checks that no
+// error boundary fired — neither the test net of renderPage
+// (data-testid render-crashed), whose message it fails with,
+// nor the App's own card ("Puslapio nepavyko atvaizduoti.").
 //
 // Used by:
 //   - describeEndpointContract (above), page tests, the route

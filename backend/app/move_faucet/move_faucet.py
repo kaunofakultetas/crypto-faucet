@@ -633,7 +633,7 @@ class MoveFaucet:
         # STEP 2: signature check. This is the exact message the
         # frontend asks the wallet to sign — any mismatch (different
         # nonce, different wording) fails verification.
-        # ======================================================
+        # ==========================================================
         # A wallet account that signs with anything but plain
         # Ed25519 (a Google-login zkLogin account, a hardware or
         # multisig one) is told WHICH account type it is — retrying
@@ -655,7 +655,7 @@ class MoveFaucet:
         # holds a chunk, the cooldown slot must be free, and the
         # faucet must still have the chunk plus the gas margin.
         # Every failure path after the claim releases the slot.
-        # =======================================================
+        # ======================================================
         try:
             user_mist = client.get_balance(to_address, params['coin_type'])
         except Exception:
@@ -691,7 +691,7 @@ class MoveFaucet:
         # very second), so a payout can never be prepared in
         # advance. setdefault is atomic under the GIL, so the lock
         # map needs no lock of its own.
-        # =======================================================
+        # =========================================================
         try:
             with self._send_locks.setdefault(network, threading.Lock()):
                 tx_bcs = client.build_transfer(

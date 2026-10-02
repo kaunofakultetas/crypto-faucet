@@ -1,7 +1,8 @@
 // -----------------------------------------------------------
 //  [*] Test support — the vitest setup file
 //
-//  Runs before every test file (vite.config.js → test.setupFiles):
+//  Runs before every test file (test.setupFiles in
+//  vite.config.js):
 //
 //    - jest-dom matchers (toBeInTheDocument, toBeDisabled, …)
 //    - the browser APIs jsdom lacks that MUI and the app's own

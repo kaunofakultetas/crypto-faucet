@@ -29,6 +29,10 @@ from tests import helpers
 
 
 
+
+
+
+
 ############################################################
 # WsgiTargetTests
 ############################################################
@@ -49,6 +53,10 @@ class WsgiTargetTests(unittest.TestCase):
                      '/api/erc20/<network>/<token>/request', '/api/icons/<icon_type>/<key>',
                      '/api/get-example-blockchain'):
             self.assertIn(rule, rules)
+
+
+
+
 
 
 

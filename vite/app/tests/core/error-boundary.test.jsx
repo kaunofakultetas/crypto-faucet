@@ -274,7 +274,7 @@ describe('ErrorBoundary buttons', () => {
   });
 
 
-  it.fails('also removes the UTXO graph\'s saved box positions — PINNED KNOWN BUG: CACHE_KEY_PREFIXES misses "utxo-graph-positions:", which Graph_UTXO persists', async () => {
+  it('also removes the UTXO graph\'s saved box positions', async () => {
     remember({ 'utxo-graph-positions:btc4': JSON.stringify({ [`${'a1'.repeat(32)}`]: { x: 10, y: 20 } }) });
     const { user } = renderCrashed();
     await user.click(screen.getByRole('button', { name: CLEAR_AND_RELOAD }));
@@ -294,7 +294,8 @@ describe('ErrorBoundary buttons', () => {
 
 
   it('still reloads when the storage cannot even be listed (blocked in a private window)', async () => {
-    // clear() is what setup.js calls on it after the test
+    // The stand-in keeps a working clear — setup.js calls it
+    // after the test, before the real storage is put back
     vi.stubGlobal('localStorage', new Proxy({ clear() {} }, {
       ownKeys() {
         throw new DOMException('The operation is insecure.', 'SecurityError');

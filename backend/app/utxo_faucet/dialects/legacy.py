@@ -29,6 +29,10 @@ from embit.transaction import SIGHASH
 
 
 
+
+
+
+
 ############################################################
 # LegacyDialect
 ############################################################
@@ -42,6 +46,8 @@ class LegacyDialect:
     TX_VERSION = 1
     INPUT_SIZE = 148
     OUTPUT_SIZE = 34
+
+
 
 
 
@@ -66,6 +72,8 @@ class LegacyDialect:
 
 
 
+
+
     ############################################################
     # faucet_script
     ############################################################
@@ -84,6 +92,8 @@ class LegacyDialect:
 
 
 
+
+
     ############################################################
     # faucet_address
     ############################################################
@@ -98,6 +108,8 @@ class LegacyDialect:
     def faucet_address(self, pub) -> str:
         keyhash = embit_hashes.hash160(pub.serialize())
         return embit_base58.encode_check(bytes([self.p2pkh_prefix]) + keyhash)
+
+
 
 
 
@@ -126,6 +138,8 @@ class LegacyDialect:
 
 
 
+
+
     ############################################################
     # validate_address
     ############################################################
@@ -145,6 +159,8 @@ class LegacyDialect:
         return payload[0] == self.p2pkh_prefix or (
             self.p2sh_prefix is not None and payload[0] == self.p2sh_prefix
         )
+
+
 
 
 
@@ -176,6 +192,8 @@ class LegacyDialect:
 
 
 
+
+
     ############################################################
     # address_of
     ############################################################
@@ -198,6 +216,8 @@ class LegacyDialect:
         if self.p2sh_prefix is not None and len(script) == 23 and script[:2] == b'\xa9\x14' and script[22:] == b'\x87':
             return embit_base58.encode_check(bytes([self.p2sh_prefix]) + script[2:22])
         return None
+
+
 
 
 

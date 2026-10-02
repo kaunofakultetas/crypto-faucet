@@ -49,6 +49,10 @@ HANDSHAKE = rpc_ok(['ElectrumX 2.0.0', '1.4'])
 
 
 
+
+
+
+
 ############################################################
 # FakeElectrumSocket
 ############################################################
@@ -98,6 +102,10 @@ class FakeElectrumSocket:
 
 
 
+
+
+
+
 ############################################################
 # fake_transport
 ############################################################
@@ -140,6 +148,10 @@ def fake_transport(*scripts):
                 yield sockets
 
     return patched()
+
+
+
+
 
 
 
@@ -219,6 +231,10 @@ class ElectrumFramingTests(unittest.TestCase):
         self.assertEqual(result['confirmed'], 1)
         self.assertIn("Electrum request 'm'", printed.getvalue())
         self.assertIn('btc4', printed.getvalue())
+
+
+
+
 
 
 
@@ -338,6 +354,10 @@ class ElectrumHealingTests(unittest.TestCase):
 
 
 
+
+
+
+
 ############################################################
 # ElectrumQueryTests
 ############################################################
@@ -385,6 +405,9 @@ class ElectrumQueryTests(unittest.TestCase):
         sent = sockets[0].requests()[1]
         self.assertEqual(sent['method'], 'blockchain.scripthash.listunspent')
         self.assertEqual(sent['params'], ['cd' * 32])
+
+
+
 
 
 

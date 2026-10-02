@@ -217,6 +217,10 @@ def init_db_tables():
 
 
 
+
+
+
+
 ############################################################
 # init_default_data
 ############################################################
@@ -251,8 +255,3 @@ def init_default_data():
                 VALUES (?, ?, ?, ?, ?) 
             ''', 
                 [block['Height'], block['BlockHash'], block['PrevBlock'], block['Nonce'], block['Transactions']])
-
-
-
-
-

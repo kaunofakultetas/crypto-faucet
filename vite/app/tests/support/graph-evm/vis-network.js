@@ -4,9 +4,8 @@
 //  vis-network draws on a <canvas> — jsdom has none (setup.js
 //  hands out an inert 2D context), so the real Network cannot
 //  run here. The graph uses exactly one class of it, Network;
-//  this module stands in for the whole package:
-//
-//    vi.mock('vis-network', () => import('../../support/graph-evm/vis-network'));
+//  this module stands in for the whole package — every EVM
+//  graph test file has vi.mock load it in vis-network's place.
 //
 //  The double records what the graph hands it — the container
 //  div, the node and edge DataSets (the REAL vis-data ones the
@@ -16,16 +15,17 @@
 //  moveTo, getNodeAt, getPositions, destroy) and lets a test
 //  do what a student's mouse does on the canvas:
 //
-//    doubleClick(id)      — the 'doubleClick' event on a node
-//                           (expand the address)
-//    rightClick(id)       — the 'oncontext' event with that
-//                           node under the pointer (rename)
-//    wheelZoom(scale)     — the 'zoom' event a wheel turn fires
-//    drag(id, x)          — a node dropped at a new x
-//                           ('dragEnd' with that node)
-//    pan()                — a canvas pan ('dragEnd', no node)
+//    doubleClick — the 'doubleClick' event on a node (expand
+//                  the address)
+//    rightClick  — the 'oncontext' event with a node under the
+//                  pointer (rename)
+//    wheelZoom   — the 'zoom' event a wheel turn fires, at the
+//                  scale the test names
+//    drag        — a node dropped at a new x ('dragEnd' with
+//                  that node)
+//    pan         — a canvas pan ('dragEnd', no node)
 //
-//  Each of them runs inside act() and resolves after React
+//  Each of them runs inside act and resolves after React
 //  flushed what the event set off (a request it sends lands
 //  later — wait for its effect on screen).
 //
@@ -217,11 +217,10 @@ export class Network {
 // resetNetworks / liveNetwork
 // -----------------------------------------------------------
 //
-// resetNetworks() empties the registry and restores the
+// resetNetworks empties the registry and restores the
 // defaults (a beforeEach of every graph test file);
-// liveNetwork() is the Network currently on screen — the
-// newest one not destroyed — or undefined before the graph
-// booted.
+// liveNetwork is the Network currently on screen — the newest
+// one not destroyed — or undefined before the graph booted.
 //
 // Used by:
 //   - tests/pages/graph-evm/*.test.jsx

@@ -68,6 +68,10 @@ CONFIG_DIR = os.getenv('CONFIG_DIR') or (
 
 
 
+
+
+
+
 ############################################################
 # Coins configuration — loaded from CONFIG_DIR/coins.py
 ############################################################

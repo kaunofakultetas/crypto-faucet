@@ -13,18 +13,22 @@
 //  backend's verdict is what the student sees); the payout —
 //  the captured GET and its query, "Siunčiama…", a double
 //  click sending once, the success line with the txid linked
-//  to the chain's explorer, the cleared field, the balance
-//  refetched — and every refusal (the cooldown, the empty
-//  faucet, the node's too-long mempool chain, a bad address, a
-//  500's hidden details, a 200 { error }, a bare 429, a
-//  proxy's page, a dropped connection); the return address
-//  card (the address, its QR code, "Transakcijų grafikas" into
+//  to the chain's explorer (plain text without a usable one),
+//  the cleared field, the balance refetched — and every
+//  refusal (the cooldown, the empty faucet, the node's
+//  too-long mempool chain, a bad address, a 500's hidden
+//  details, a 200 carrying an error, a 200 that names no
+//  transaction, a bare 429, a proxy's page, a dropped
+//  connection — the page's own sentence with the reason after
+//  it where the backend gave none); the return address card
+//  (the address, its QR code, "Transakcijų grafikas" into
 //  /graph/utxo/:network); a network switch in the picker
 //  (outcomes dropped, the pasted address kept, a late answer
-//  never landing on the wrong chain); unknown networks and a
-//  failed catalog; and the backend contract matrices for
-//  /api/utxo/networks, /api/utxo/:network/faucet-balance and
-//  the payout's failure answers.
+//  never landing on the wrong chain); unknown networks, a
+//  failed catalog and one answered without its networks map;
+//  and the backend contract matrices for /api/utxo/networks,
+//  /api/utxo/:network/faucet-balance and the payout's failure
+//  answers.
 //
 //  The page has no copy button — the address is plain,
 //  selectable text.
@@ -72,16 +76,16 @@ const TXID = f.utxoPayout().transaction_id;
 // renderUtxo mounts the page on its route pattern, as App.jsx
 // does; renderWithPicker adds links to other networks (the
 // navbar picker's effect: the route changes, the page stays
-// mounted) and a stand-in for the graph page. row() is a
-// labelled line of the main card as the student reads it;
-// spanning() matches a sentence that runs through inline
-// markup (<u>, <b>), exactly() a whole text with nothing
-// around it. requestTo pastes an address and presses
-// the button — the student's own gesture. qrCodes() finds the
-// page's QR codes (an <svg> with no role or name: its 128 px
-// size is the only handle) and qrModulesFor() draws the QR of
+// mounted) and a stand-in for the graph page. The row helper
+// is a labelled line of the main card as the student reads
+// it; spanning matches a sentence that runs through inline
+// markup (underline, bold), exactly a whole text with nothing
+// around it. requestTo pastes an address and presses the
+// button — the student's own gesture. qrCodes finds the
+// page's QR codes (an svg with no role or name: its 128 px
+// size is the only handle) and qrModulesFor draws the QR of
 // a value with the same component, so the page's QR can be
-// checked for what it ENCODES. holdPayout() keeps the payout's
+// checked for what it ENCODES. holdPayout keeps the payout's
 // answer until the test releases it, for the tests about what
 // happens while it is in flight.
 // -----------------------------------------------------------
@@ -517,6 +521,17 @@ describe('The payout', () => {
   });
 
 
+  it('shows the txid as plain text when the explorer address is no usable URL, never a link relative to the faucet', async () => {
+    given.json('get', '/api/utxo/networks', networksWith('btc4', { block_explorer: 'mempool.space/testnet4' }));
+    const { user } = renderUtxo();
+    await balancesLoaded();
+    await requestTo(user, f.JONAS);
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(`Išsiųsta 0.1 tBTC4. Transakcija: ${TXID}`);
+    expect(within(alert).queryByRole('link')).toBeNull();
+  });
+
+
   it('clears the field after a payout — the button asks for the next address', async () => {
     const { user } = renderUtxo();
     await balancesLoaded();
@@ -586,9 +601,11 @@ describe('The payout', () => {
 // Refusals
 // -----------------------------------------------------------
 //
-// The backend's sentences shown as they are; the page's own
-// Lithuanian for answers that carry none. The pasted address
-// stays for another try.
+// The backend's sentences shown as they are; for answers that
+// carry none, the page's own sentence with the reason after
+// it — no connection, or the status the server answered —
+// and a 200 that names no transaction is a failure too. The
+// pasted address stays for another try.
 // -----------------------------------------------------------
 
 describe('Refusals', () => {
@@ -632,27 +649,33 @@ describe('Refusals', () => {
 
 
   it.each([
-    ['a bare 429 from a rate-limiting proxy', () => given.empty('get', '/api/utxo/:network/request-btc', 429), 'Per daug užklausų. Palaukite ir bandykite vėl.'],
-    ["a proxy's HTML error page", () => given.html('get', '/api/utxo/:network/request-btc'), 'Serverio klaida (502): Nežinoma klaida'],
-    ['a 500 with no body', () => given.empty('get', '/api/utxo/:network/request-btc', 500), 'Serverio klaida (500): Nežinoma klaida'],
+    ['a bare 429 from a rate-limiting proxy', () => given.empty('get', '/api/utxo/:network/request-btc', 429), 'Nepavyko išsiųsti kriptovaliutos. Per daug užklausų — palaukite ir bandykite vėl.'],
+    ["a proxy's HTML error page", () => given.html('get', '/api/utxo/:network/request-btc'), 'Nepavyko išsiųsti kriptovaliutos. Serveris grąžino klaidą (502).'],
+    ['a 500 with no body', () => given.empty('get', '/api/utxo/:network/request-btc', 500), 'Nepavyko išsiųsti kriptovaliutos. Serveris grąžino klaidą (500).'],
     ['a dropped connection', () => given.networkError('get', '/api/utxo/:network/request-btc'), 'Nepavyko išsiųsti kriptovaliutos. Patikrinkite interneto ryšį.'],
   ])('says it in Lithuanian for %s', async (_, answer, message) => {
     answer();
     const { user } = renderUtxo();
     await balancesLoaded();
     await requestTo(user, f.JONAS);
-    expect(await screen.findByRole('alert')).toHaveTextContent(message);
+    expect(await screen.findByRole('alert')).toHaveTextContent(exactly(message));
+    expect(addressField()).toHaveValue(f.JONAS);
   });
 
 
-  it.fails('PINNED KNOWN BUG: a 200 answer without a transaction id is not announced as a payout — the page says "Išsiųsta" and links /tx/undefined', async () => {
-    given.json('get', '/api/utxo/:network/request-btc', {});
+  it.each([
+    ['an empty object', () => given.json('get', '/api/utxo/:network/request-btc', {})],
+    ["a proxy's page", () => given.text('get', '/api/utxo/:network/request-btc', '<html><body>Palaukite…</body></html>')],
+    ['a transaction id that is no string', () => given.json('get', '/api/utxo/:network/request-btc', { ...f.utxoPayout(), transaction_id: 12345 })],
+  ])('treats a 200 answer that names no transaction as a failure, not a payout: %s', async (_, answer) => {
+    answer();
     const { user } = renderUtxo();
     await balancesLoaded();
     await requestTo(user, f.JONAS);
-    await settle(100);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/^Nepavyko išsiųsti kriptovaliutos\.$/);
     expect(screen.queryByText(/^Išsiųsta/)).toBeNull();
-    expect(document.querySelector('a[href$="/tx/undefined"]')).toBeNull();
+    expect(document.querySelector('a[href*="/tx/"]')).toBeNull();
+    expect(addressField()).toHaveValue(f.JONAS);
   });
 });
 
@@ -804,9 +827,9 @@ describe('Switching networks', () => {
 // -----------------------------------------------------------
 //
 // An unknown :network gets the error card and never polls; a
-// failed list says so; while the list loads the page stands
-// on generic BTC labels; the real App routes here and titles
-// the tab.
+// failed list says so, and so does an answer that is no list;
+// while the list loads the page stands on generic BTC labels;
+// the real App routes here and titles the tab.
 // -----------------------------------------------------------
 
 describe('Routes, unknown networks and a missing network list', () => {
@@ -844,12 +867,18 @@ describe('Routes, unknown networks and a missing network list', () => {
   });
 
 
-  it.fails('PINNED KNOWN BUG: a network list with no networks map (a proxy page answered 200) is never a fake Bitcoin page — the page stays on the generic BTC labels, form usable, forever', async () => {
-    given.text('get', '/api/utxo/networks', '<html><body>Palaukite…</body></html>');
+  it.each([
+    ["a proxy's page", () => given.text('get', '/api/utxo/networks', '<html><body>Palaukite…</body></html>')],
+    ['an empty object', () => given.json('get', '/api/utxo/networks', {})],
+    ['a list where the map belongs', () => given.json('get', '/api/utxo/networks', { ...f.utxoNetworks, networks: [f.utxoNetworksMap.btc4] })],
+  ])('says the network list could not be read when it answers 200 without a networks map — never a fake Bitcoin page: %s', async (_, answer) => {
+    answer();
+    const calls = given.capture('get', '/api/utxo/:network/faucet-balance', f.utxoBalance());
     renderUtxo();
-    await settle(200);
+    expect(await screen.findByText('Nepavyko gauti tinklų sąrašo. Perkraukite puslapį.')).toBeInTheDocument();
     expect(screen.queryByRole('heading', { level: 1, name: "Bitcoin faucet'as" })).toBeNull();
     expect(screen.queryByRole('textbox', { name: 'Jūsų BTC adresas' })).toBeNull();
+    expect(calls).toHaveLength(0);
   });
 
 
@@ -922,7 +951,7 @@ describeEndpointContract({
   chrome: () => screen.getByRole('heading', { level: 1, name: "Bitcoin Testnet4 faucet'as" }),
   failed: async () => {
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent(/^(Vidinė serverio klaida|Nepalaikomas tinklas: x|Nerasta|Serverio klaida \((502|500)\): Nežinoma klaida|Nepavyko išsiųsti kriptovaliutos\. Patikrinkite interneto ryšį\.)$/);
+    expect(alert).toHaveTextContent(/^(Vidinė serverio klaida|Nepalaikomas tinklas: x|Nerasta|Nepavyko išsiųsti kriptovaliutos\. Serveris grąžino klaidą \((502|500)\)\.|Nepavyko išsiųsti kriptovaliutos\. Patikrinkite interneto ryšį\.)$/);
     expect(addressField()).toHaveValue(f.JONAS);
   },
   loading: () => screen.getByRole('button', { name: 'Siunčiama…' }),

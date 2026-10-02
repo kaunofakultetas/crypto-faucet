@@ -12,11 +12,12 @@
 //  and the fiber chain up from it leads to the component that
 //  rendered it.
 //
-//  componentOf(element, name) → the function component called
-//  `name` that rendered `element` (throws when there is none).
-//  Relies on React DOM's "__reactFiber$…" node key and on the
-//  function keeping its name (true for the test build — vite
-//  does not minify it).
+//  componentOf walks that chain up from a rendered element and
+//  hands back the function component of the given name that
+//  rendered it, and throws when there is none. It relies on
+//  React DOM's "__reactFiber$…" node key and on the function
+//  keeping its name (true for the test build — vite does not
+//  minify it).
 //
 //  Used by:
 //    - tests/pages/presentations.test.jsx

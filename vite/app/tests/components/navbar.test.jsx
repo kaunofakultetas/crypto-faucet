@@ -42,7 +42,8 @@ const renderNavbar = (route = '/presentations') => renderPage(<><Navbar /><Locat
 
 const navbar = () => screen.getByRole('navigation');
 
-// The switch's segments as [caption, pressed]
+// The switch's segments, each as its caption and its
+// aria-pressed state
 const segments = () => within(within(navbar()).getByRole('group')).getAllByRole('button')
   .map((button) => [button.textContent, button.getAttribute('aria-pressed')]);
 
@@ -61,8 +62,8 @@ const EVERY_FAMILY = FAUCET_TYPES.map((type) => type.key);
 
 const typeOf = (key) => FAUCET_TYPES.find((type) => type.key === key);
 
-// One faucet URL per family, in navbar order: [family, route,
-// the switch's caption, the pick the picker names]
+// One faucet URL per family, in navbar order: the family, its
+// route, the switch's caption and the pick the picker names
 const FAMILY_URLS = [
   ['utxo', '/faucet/utxo/btc4', 'UTXO', 'Bitcoin Testnet4'],
   ['evm', '/faucet/evm/sepolia', 'EVM', 'Ethereum Sepolia'],

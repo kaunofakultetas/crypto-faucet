@@ -2,9 +2,10 @@
 //  [*] Test support — the MetaMask double (EIP-1193 + EIP-6963)
 //
 //  The EVM-family pages never meet a real wallet in this suite.
-//  installMetamask() puts an EIP-1193 provider — request(),
-//  on / removeListener — where the app looks for MetaMask, and
-//  answers like the extension wherever a page depends on it:
+//  installMetamask puts an EIP-1193 provider — its request
+//  method, on and removeListener — where the app looks for
+//  MetaMask, and answers like the extension wherever a page
+//  depends on it:
 //
 //    - FOUND like MetaMask: announced through EIP-6963 under
 //      rdns io.metamask on install, and again on every
@@ -12,11 +13,11 @@
 //      (vi.stubGlobal) like the real extension — which the app
 //      must never trust on its own (Phantom squats there too,
 //      installPhantomEvm)
-//    - accounts: eth_accounts answers [] until the site is
-//      connected; eth_requestAccounts is the popup — approved
-//      by default (accountsChanged fires), declined (4001), or
-//      left open (hold / hang — a second request meanwhile is
-//      MetaMask's -32002 "already pending")
+//    - accounts: eth_accounts answers an empty list until the
+//      site is connected; eth_requestAccounts is the popup —
+//      approved by default (accountsChanged fires), declined
+//      (4001), or left open (hold / hang — a second request
+//      meanwhile is MetaMask's -32002 "already pending")
 //    - chains: eth_chainId in hex; wallet_switchEthereumChain
 //      to a chain the wallet does not know is 4902 (optionally
 //      wrapped the way newer builds do);
@@ -30,11 +31,11 @@
 //      new shows up in the call record instead of passing
 //
 //  Every call lands in wallet.calls. Any method can be made to
-//  fail, to be declined, to hang, to wait for the test (hold →
-//  release / decline) or to answer something else; what the
-//  student does inside the extension is changeAccounts /
+//  fail, to be declined, to hang, to wait for the test (hold,
+//  then release or decline) or to answer something else; what
+//  the student does inside the extension is changeAccounts /
 //  changeChain / emit. Nothing here knows React — tests wrap
-//  the moves that update state in act().
+//  the moves that update state in act.
 //
 //  The app caches the first MetaMask it hears for the life of
 //  its module, so the test files re-import the code under test
@@ -140,34 +141,46 @@ function decodeMessage(data) {
 // installEvmWallet
 // -----------------------------------------------------------
 //
-//   const wallet = installEvmWallet({ rdns, name, flags, … })
-//
 // Any EIP-1193 wallet — installMetamask / installPhantomEvm
-// below fill in who it claims to be. Options (defaults):
+// below fill in who it claims to be: its rdns, its name and
+// the flags on its provider. Every other option has a default
+// a test may change.
 //
-//   accounts        [STUDENT_EVM]  what the wallet holds
-//   connected       false          site already permitted
-//   chainId         SEPOLIA        where the wallet sits
-//   chains          [MAINNET, SEPOLIA]  what it knows (+ chainId)
-//   balance         1.5 ETH        wei on every chain
-//   announce        true           EIP-6963 now and on request
-//                                  ('on-request': only when
-//                                  asked; false: nothing until
-//                                  wallet.announce())
-//   onWindow        true           also window.ethereum
-//   emitsChainChanged     true     a switch fires chainChanged
-//   emitsAccountsChanged  true     a granted connect fires it
-//   wraps4902       false          4902 inside -32603's data
-//   switchesOnAdd   false          adding also switches
+// The wallet holds the student's address (STUDENT_EVM) and
+// the site is not yet permitted. It sits on Sepolia and knows
+// Ethereum mainnet and Sepolia — always with the chain it
+// sits on among them — and has 1.5 ETH, in wei, on every
+// chain. It announces itself through EIP-6963 at once and on
+// every request ('on-request': only when asked; false: not
+// until the test calls announce), and it also sits on
+// window.ethereum unless onWindow is turned off.
 //
-// The handle: provider, calls / signed / watched / added,
-// chainId / accounts / connected, methods(), callsTo(m),
-// listenerCount(e), emit(e, payload), announce(),
-// changeAccounts(list), changeChain(id, { silently }),
-// setBalance(wei, chainId?), fail(m, error?, { once }),
-// decline(m, { once }), hang(m), hold(m) → { called, params,
-// release(value?), decline(error?) }, answer(m, fn, { once }),
-// restore(m).
+// A switch fires chainChanged and a granted connect fires
+// accountsChanged unless emitsChainChanged /
+// emitsAccountsChanged are turned off; wraps4902 puts the
+// unknown chain's 4902 inside a -32603 error's data, the way
+// newer builds do; switchesOnAdd makes adding a chain switch
+// to it as well.
+//
+// The handle it returns keeps the record: the provider and
+// its EIP-6963 info, every call, the signed messages, the
+// watched tokens, the added chains, and the wallet's chain,
+// the accounts the site can see and the connection as they
+// stand — with readers for the methods called, the calls to
+// one method and the listeners of one event. It plays what
+// the student does inside the extension: emit an event,
+// announce, change the accounts, change the chain (silently
+// if asked), set a chain's balance.
+//
+// And it scripts deviations per method: fail with an error
+// (an internal JSON-RPC error unless the test brings its
+// own), decline, hang, answer through a function of the
+// params, or hold the call until the test releases it — with
+// the real answer or one of its own — or declines it. A hang
+// stays until restore brings the real answers back, and so do
+// fail, decline and answer unless limited to the next call
+// (once); a hold catches only the next call and tells whether
+// it came and with what params.
 //
 // Used by:
 //   - installMetamask / installPhantomEvm (below)
@@ -456,14 +469,15 @@ export function installEvmWallet({
 // installMetamask / installPhantomEvm
 // -----------------------------------------------------------
 //
-// installMetamask(options) — the stable MetaMask build
-// (rdns io.metamask); pass rdns 'io.metamask.flask' /
-// 'io.metamask.mmi' for the other builds.
+// installMetamask is the stable MetaMask build (rdns
+// io.metamask); the other builds are the same double with
+// their own rdns passed as an option — io.metamask.flask,
+// io.metamask.mmi.
 //
-// installPhantomEvm(options) — Phantom's EVM provider: it
-// announces as app.phantom but, on window.ethereum, claims
-// isMetaMask: true — the squatter the app must not mistake
-// for MetaMask.
+// installPhantomEvm is Phantom's EVM provider: it announces as
+// app.phantom but, on window.ethereum, claims to be MetaMask
+// through its isMetaMask flag — the squatter the app must not
+// mistake for MetaMask.
 //
 // Used by:
 //   - the EVM-family hook and page tests

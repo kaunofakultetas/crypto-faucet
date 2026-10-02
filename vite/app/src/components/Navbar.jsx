@@ -4,7 +4,7 @@
 //  Shown on every page: the VU KnF logo linking to "/", the
 //  faucet controls (on faucet pages a segmented faucet-type
 //  switch plus the network dropdown, elsewhere a quick
-//  "Atidaryti faucet'ą" button), the Vaizdo įrašai link and
+//  "Atidaryti faucet'ą" button), the Prezentacijos link and
 //  the "Kiti įrankiai" dropdown with the teaching tools.
 //
 //  What the dropdown lists depends on the type, because the
@@ -178,11 +178,10 @@ export const FAUCET_TYPES = [
 // useFaucetCatalogs
 // -----------------------------------------------------------
 //
-//   const { loading, families } = useFaucetCatalogs()
-//   families.evm / .erc20 / .utxo / .svm / .move
-//     → { items, defaultKey }
-//
-// The whole faucet offering from ONE request —
+// The whole faucet offering, handed back as one entry per
+// faucet type — the type's ready picker items and the key
+// the backend suggests as its default — plus the loading and
+// failure flags. It all comes from ONE request —
 // GET /api/faucet/catalog answers with every family's public
 // catalog keyed by type, so there is a single loading flag
 // and never a partial answer to reconcile. Each entry's own
@@ -257,8 +256,6 @@ export function useFaucetCatalogs() {
 // -----------------------------------------------------------
 // faucetTargetFor
 // -----------------------------------------------------------
-//
-//   faucetTargetFor(families.evm, 'evm')  →  'sepolia' | null
 //
 // Where a jump into one faucet type lands: the student's last
 // pick for that type (lastPick:<type> in localStorage), the

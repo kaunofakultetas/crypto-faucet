@@ -8,12 +8,11 @@
 //  a status nobody knows …). Every builder returns a fresh
 //  object; the shared fixture is never touched.
 //
-//    spend(txid, vout, address, value)  — an input
-//    coin(address, value, options)      — an output
-//    transaction({ txid, block, … })    — one transaction
-//    dayOf(transactions, changes)       — a whole graph answer
-//    dayTransactions()                  — the fixture day's
-//                                         T1…T5, copied
+//    spend           — an input
+//    coin            — an output
+//    transaction     — one transaction
+//    dayOf           — a whole graph answer
+//    dayTransactions — the fixture day's T1…T5, copied
 //
 //  Used by:
 //    - tests/pages/graph-utxo/*
@@ -42,10 +41,12 @@ export const X = {
 // spend / coin / transaction
 // -----------------------------------------------------------
 //
-// An input spending `txid:vout` (address and value may be
-// null — the server never gave that earlier transaction); an
-// output with its spend state (spentBy { txid, vin }, or
-// spentKnown false for an address nobody has read); a
+// An input spending one output of an earlier transaction (its
+// address and value may be null — the server never gave that
+// earlier transaction); an output with its script type
+// (p2wpkh unless told otherwise) and its spend state —
+// spentBy names the transaction and the input that spent it,
+// spentKnown turned off marks an address nobody has read; a
 // transaction mined in `block` (null: the mempool), with a
 // fee and a size unless told otherwise.
 // -----------------------------------------------------------
@@ -82,9 +83,12 @@ export function transaction({
 // dayOf / dayTransactions
 // -----------------------------------------------------------
 //
-// A graph answer holding `transactions`, the fixture's blocks
-// (plus any block a transaction names that the list lacks)
-// and names, live unless told otherwise.
+// A graph answer holding the transactions given, the
+// fixture's blocks (plus any block a transaction names that
+// the list lacks) and names — live unless the changes a test
+// spreads over it say otherwise. dayTransactions is a fresh
+// copy of the fixture day's transactions, the mempool's T5
+// included.
 // -----------------------------------------------------------
 
 export function dayOf(transactions, changes = {}) {

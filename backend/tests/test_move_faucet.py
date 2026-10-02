@@ -40,6 +40,10 @@ def tearDownModule():
 
 
 
+
+
+
+
 ############################################################
 # MoveChainRegistryTests
 ############################################################
@@ -66,6 +70,10 @@ class MoveChainRegistryTests(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:
             chain_params('sui', 'regtest')
         self.assertIn('testnet', str(caught.exception))
+
+
+
+
 
 
 
@@ -111,6 +119,10 @@ class MoveIdentityTests(unittest.TestCase):
 
 
 
+
+
+
+
 ############################################################
 # MoveSignatureTests
 ############################################################
@@ -152,6 +164,10 @@ class MoveSignatureTests(unittest.TestCase):
 
 
 
+
+
+
+
 ############################################################
 # MoveNetworksPayloadTests
 ############################################################
@@ -181,6 +197,10 @@ class MoveNetworksPayloadTests(unittest.TestCase):
         self.assertNotIn('rpc_url"', payload)
         self.assertNotIn('TEST_RPC_SECRET', payload)
         self.assertNotIn('sekretas-iš-env', payload)
+
+
+
+
 
 
 

@@ -7,7 +7,7 @@
 //
 //    LocationProbe / currentPath — for renderPage (a memory
 //                   router): the probe renders the router's
-//                   pathname + search where currentPath()
+//                   pathname + search where currentPath
 //                   reads it
 //    navigateTo   — for renderApp (App's own BrowserRouter):
 //                   what the browser's Back / Forward / an
@@ -36,8 +36,10 @@ import { useLocation } from 'react-router-dom';
 // LocationProbe / currentPath
 // -----------------------------------------------------------
 //
-//   renderPage(<><Navbar /><LocationProbe /></>, { route })
-//   expect(currentPath()).toBe('/faucet/evm/hoodi')
+// The probe is rendered beside the element under test, inside
+// renderPage's memory router, and writes the router's pathname
+// and search into a hidden output; currentPath reads it back,
+// so a test can assert where a click took the student.
 //
 // Used by:
 //   - the component tests that render with renderPage
@@ -60,11 +62,11 @@ export const currentPath = () => screen.getByTestId('location').textContent;
 // navigateTo / goBack
 // -----------------------------------------------------------
 //
-//   await navigateTo('/presentations')   — push + popstate
-//   await goBack()                       — history.back()
-//
-// jsdom delivers history.back()'s popstate on a later task,
-// so a test waits for the location after goBack.
+// navigateTo pushes a path onto the history and fires the
+// popstate the router listens to; goBack is the browser's
+// Back. Both run inside act. jsdom delivers history.back()'s
+// popstate on a later task, so a test waits for the location
+// after goBack.
 //
 // Used by:
 //   - core/app.test.jsx, core/error-boundary.test.jsx

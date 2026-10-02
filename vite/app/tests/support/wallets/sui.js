@@ -5,8 +5,8 @@
 //  Sui-capable Phantom …) the MOVE faucet discovers
 //  (Faucet_MOVE/useSuiWallet.js). Sui wallets inject no window
 //  global: they announce themselves through the Wallet
-//  Standard's two window events, and install() does exactly
-//  what the standard's registerWallet() does —
+//  Standard's two window events, and install does exactly
+//  what the standard's registerWallet does —
 //
 //    - dispatches 'wallet-standard:register-wallet' with a
 //      callback, for an app already listening (the wallet
@@ -15,27 +15,31 @@
 //      that mounts later (the wallet loaded BEFORE the page);
 //      the listener is removed when the test finishes
 //
-//  — so the order of installSuiWallet() and render() in a test
-//  is the order the browser loaded them in. The wallet object
-//  carries the features the hook talks through:
+//  — so in a test, the order of installing the wallet and
+//  rendering the page is the order the browser loaded them
+//  in. The wallet object carries the features the hook talks
+//  through:
 //
-//    standard:connect         connect() — the popup: approve /
-//                             reject / an error; connect({
-//                             silent: true }) — no popup: the
-//                             standard's empty answer for an
-//                             origin not yet authorised, or a
-//                             reject, or an approval
-//    standard:events          on('change', listener) → off();
-//                             change() plays the student
-//                             switching or disconnecting the
-//                             account inside the extension
-//    sui:signPersonalMessage  signPersonalMessage({ account,
-//                             message }) → { bytes, signature }
-//                             — the signature already serialized
-//                             base64 (flag || sig || pubkey)
+//    standard:connect         the popup — approve, reject or
+//                             an error — and its silent form
+//                             with no popup: the standard's
+//                             empty answer for an origin not
+//                             yet authorised, or a reject, or
+//                             an approval
+//    standard:events          listens for 'change' and hands
+//                             back the function that stops
+//                             listening; change plays the
+//                             student switching or
+//                             disconnecting the account inside
+//                             the extension
+//    sui:signPersonalMessage  signs an account's message and
+//                             answers the message in base64
+//                             with the signature, already
+//                             serialized base64 (the flag, the
+//                             signature and the public key)
 //
-//  Every call is recorded in `calls` ({ method, args }).
-//  Nothing here imports the code under test.
+//  Every call is recorded in `calls`, with its method and its
+//  arguments. Nothing here imports the code under test.
 //
 //  Used by:
 //    - hooks/use-sui-wallet.test.jsx
@@ -106,32 +110,37 @@ export const rejected = () => walletError('User rejected the request');
 // createSuiWallet
 // -----------------------------------------------------------
 //
-//   const sui = createSuiWallet({ ...options })
-//   sui.install()     — announce it (registerWallet's two paths)
-//   sui.unregister()  — the extension goes away (every unregister
-//                       the apps handed back is called)
-//   sui.change(accounts) — the 'change' event, accounts updated
-//   sui.emitChange(properties) — a raw 'change' event
+// Builds the double without announcing it, for the tests
+// that announce late or several wallets at once: install
+// announces it (registerWallet's two paths), unregister makes
+// the extension go away (every unregister the apps handed
+// back is called), change fires the 'change' event with the
+// account list updated, and emitChange fires a raw 'change'
+// event with whatever properties the test gives.
 //
-// Options (all optional):
+// Every option may be left out. name is the wallet's own
+// name, Slush unless given. accounts is what the wallet
+// already lists — an origin authorised in an earlier visit;
+// none by default — and accountsOnConnect what the connect
+// popup answers, one suiAccount unless given. silent is how a
+// silent connect answers: 'empty' (the default) hands back
+// the accounts already listed, none for an origin not yet
+// authorised, as the standard does; or 'reject', 'approve',
+// or a function of the connect's input. connect is the
+// popup's answer: 'approve' (the default), 'reject', an
+// Error, or a function of the input. sign answers the
+// signature the same way, with 'no-signature' besides — an
+// answer that carries none. signature is what an approved
+// signature answers, SUI_SIGNATURE unless given. events and
+// sui offer standard:events and sui:signPersonalMessage, both
+// on by default; a wallet without sui:signPersonalMessage is
+// one for another chain.
 //
-//   name      — the wallet's own name ('Slush')
-//   accounts  — what wallet.accounts already lists: an origin
-//               authorised in an earlier visit ([])
-//   accountsOnConnect — what the connect popup answers
-//               ([suiAccount()])
-//   silent    — connect({ silent: true }) when nothing is
-//               listed: 'empty' ({ accounts: [] } — the
-//               standard's answer) | 'reject' | 'approve' |
-//               (input) => value
-//   connect   — 'approve' | 'reject' | an Error | (input) => value
-//   sign      — 'approve' | 'reject' | 'no-signature' | an Error |
-//               (input) => value
-//   signature — what an approved signature answers
-//               (SUI_SIGNATURE)
-//   events    — offers standard:events (true)
-//   sui       — offers sui:signPersonalMessage (true; false is a
-//               wallet for another chain)
+// Beside the wallet object and the call record, the double
+// reads back the arguments of every call to one method
+// (callsTo), the number of 'change' listeners (listening) and
+// what the page asked the wallet to sign, as text
+// (signedTexts).
 //
 // Used by:
 //   - installSuiWallet (below), tests that announce late or
@@ -246,7 +255,7 @@ export function createSuiWallet(options = {}) {
     },
 
     // A raw 'change' event, as a wallet may send it (only the
-    // properties that changed — say, { chains } alone)
+    // properties that changed — say, its chains alone)
     emitChange(properties) {
       for (const listener of [...listeners]) listener(properties);
     },
@@ -281,8 +290,7 @@ export function createSuiWallet(options = {}) {
 // installSuiWallet
 // -----------------------------------------------------------
 //
-// createSuiWallet(options).install() — one wallet, announced
-// now.
+// One wallet, created and announced at once.
 //
 // Used by:
 //   - hooks/use-sui-wallet.test.jsx

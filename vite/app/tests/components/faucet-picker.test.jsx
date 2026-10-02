@@ -45,8 +45,9 @@ const renderPicker = ({ route = '/faucet/evm/sepolia', items = EVM_ITEMS, faucet
   { route },
 );
 
-// hidden: true — while the menu is open, MUI hides the page
-// behind it (the trigger included) from assistive technology
+// Found with hidden elements included — while the menu is
+// open, MUI hides the page behind it (the trigger included)
+// from assistive technology
 const trigger = (name) => screen.getByRole('button', { name, hidden: true });
 
 const openMenu = async (user, name = 'Ethereum Sepolia') => {
@@ -56,7 +57,7 @@ const openMenu = async (user, name = 'Ethereum Sepolia') => {
 
 const filterField = () => screen.getByPlaceholderText('Filtruoti…');
 
-// Each row as [name, secondary line]; a divider as '—'
+// Each row as its name and secondary line; a divider as '—'
 const rowsOf = (menu) => [...menu.querySelectorAll('[role="menuitem"], hr')].map((node) => (
   node.tagName === 'HR' ? '—' : [...node.querySelectorAll('p')].map((p) => p.textContent)
 ));
@@ -278,7 +279,7 @@ describe('FaucetPicker filter', () => {
   });
 
 
-  it.fails('one ArrowDown from the filter reaches the first row — PINNED KNOWN BUG: MenuList makes the filter\'s wrapper its tab stop (ItemRow hides `selected` from it), so the first ArrowDown focuses an invisible box', async () => {
+  it('one ArrowDown from the filter reaches the first row — the filter\'s wrapper is no keyboard stop', async () => {
     const { user } = renderPicker();
     await openMenu(user);
     expect(filterField()).toHaveFocus();
@@ -439,7 +440,7 @@ describe('FaucetPicker favourites', () => {
   });
 
 
-  it.fails('a favourites entry of the wrong shape (valid JSON, not a list) starts fresh too — PINNED KNOWN BUG: useLocalStorage guards only unreadable JSON; favorites.includes throws and the navbar crashes', async () => {
+  it('a favourites entry of the wrong shape (valid JSON, not a list) starts fresh too', async () => {
     // An object map of favourites — what an older build could
     // have left behind
     localStorage.setItem('favFaucetPicks', JSON.stringify({ 'evm:sepolia': true }));

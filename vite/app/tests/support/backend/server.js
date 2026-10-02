@@ -54,12 +54,16 @@ server.events.on('request:unhandled', ({ request }) => {
 // url
 // -----------------------------------------------------------
 //
-// "/api/evm/networks" → "http://localhost:3000/api/evm/networks".
-// Paths may carry msw params (":network") and wildcards ("*");
-// an absolute URL is returned unchanged.
+// An "/api/…" path made absolute on the jsdom origin
+// (TEST_ORIGIN), where the handlers listen. The path may carry
+// msw params and wildcards; a URL that is already absolute is
+// returned unchanged.
 //
 // Used by:
-//   - handlers.js, given (below), contract.js
+//   - given (below), contract.js, shell/requests.js,
+//     graph-evm/backend.js
+//   - the faucet page tests — handlers of their own, and the
+//     URLs some of them assert on
 // -----------------------------------------------------------
 
 export const url = (path) => (/^https?:\/\//.test(path) ? path : `${TEST_ORIGIN}${path}`);
@@ -74,12 +78,15 @@ export const url = (path) => (/^https?:\/\//.test(path) ? path : `${TEST_ORIGIN}
 // apiError
 // -----------------------------------------------------------
 //
-// The body of every backend failure: { error: "<message>" } —
-// a Lithuanian sentence the pages show as it is (the faucets'
-// cooldown, an empty faucet, an unknown network …).
+// The body of every backend failure: an object whose error
+// field holds a Lithuanian sentence the pages show as it is
+// (the faucets' cooldown, an empty faucet, an unknown
+// network …).
 //
 // Used by:
-//   - handlers.js, given.error, contract.js
+//   - given.error (below), contract.js — the failure variants
+//   - graph-evm/backend.js — its outages and refusals
+//   - contract/route-sweep.test.jsx — the 500 mode
 // -----------------------------------------------------------
 
 export const apiError = (message) => ({ error: message });
@@ -95,32 +102,39 @@ export const apiError = (message) => ({ error: message });
 // -----------------------------------------------------------
 //
 // One-liners that override the answer of a single endpoint
-// for the rest of the test. `method` is 'get' | 'post';
-// `path` is an "/api/…" path with optional msw params. Every
+// for the rest of the test. Each takes the HTTP method (get or
+// post) and an "/api/…" path, msw params allowed. Every
 // override goes through server.use and so is dropped by the
 // handler reset in setup.js afterEach.
 //
-//   given.json('get', '/api/evm/networks', {})         — any body, 200
-//   given.json('get', '/api/evm/networks', {}, { status: 500 })
-//   given.error('get', '/api/evm/:network/request', 'Palaukite', 429)
-//   given.html('get', '/api/evm/networks')             — a proxy's HTML 502
-//   given.text('get', '/api/evm/networks', 'oops')     — text/plain 200
-//   given.empty('get', '/api/evm/networks')            — 200, no body
-//   given.networkError('get', '/api/evm/networks')     — connection failed
-//   given.hang('get', '/api/evm/networks')             — never answers
-//   given.slow('get', '/api/evm/networks', 300, body)  — answers after ms
-//   const calls = given.capture('get', '/api/evm/:network/request', body)
-//     → calls[i] = { url, params, query, body } for every request
-//       that arrived (query: the URL's search params as an
-//       object; body: the parsed JSON or text a POST carried,
-//       else null). `body` may be a function of
-//       ({ params, query }) returning the answer's body — or a
-//       whole response (HttpResponse.json(…, { status: 503 }))
-//   given.sequence('get', '/api/x', [r1, r2])          — one per call,
-//     the last repeats; r = { status?, body?, error?, html? }
+// json answers any body, with status 200 unless the test
+// names another; error answers the backend's own failure body
+// carrying the test's message, a 400 unless told otherwise;
+// html is a proxy's HTML error page, a 502 Bad Gateway unless
+// the test gives its own status and page; text is a
+// text/plain body and empty an answer with no body at all,
+// both 200 unless told otherwise; networkError is a dropped
+// connection, hang a request that never answers, and slow
+// answers the body only after the given number of
+// milliseconds.
+//
+// capture answers with a body and hands back the list of
+// every request that arrived — its URL, its path params, its
+// query (the URL's search params as an object) and its body
+// (the parsed JSON or text a POST carried, else null). The
+// body may also be a function of the request's path params
+// and query (here the search params as they are) that returns
+// the answer's body; the body, or what the function returns,
+// may be a whole msw response the test built itself.
+//
+// sequence answers each call with the next response of a
+// list, the last one repeating: a dropped connection, an HTML
+// page (a 502 unless it names a status) or a JSON body (an
+// empty object with status 200 unless it gives others).
 //
 // Used by:
-//   - page and component tests, contract.js
+//   - page, component and core tests
+//   - graph-utxo/graph.jsx — answerGraph
 // -----------------------------------------------------------
 
 const respond = (method, path, resolver) => {

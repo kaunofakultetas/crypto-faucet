@@ -12,9 +12,9 @@
 //  render.jsx renderApp). What jsdom cannot do is a HARD
 //  navigation: window.location.reload() logs "Not implemented"
 //  and does nothing. The one place the app reloads — the
-//  ErrorBoundary card's two buttons — is tested with
-//  installLocationDouble(), which swaps the global `location`
-//  for a plain object that COUNTS reloads instead.
+//  ErrorBoundary card's two buttons — is tested with the
+//  installLocationDouble helper below, which swaps the global
+//  `location` for a plain object that COUNTS reloads instead.
 //
 //  Used by:
 //    - backend/server.js, backend/handlers.js — TEST_ORIGIN

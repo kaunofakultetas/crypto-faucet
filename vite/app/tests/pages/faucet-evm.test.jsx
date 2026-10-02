@@ -3,21 +3,28 @@
 //
 //  The native-coin faucet end to end against the backend
 //  double and the MetaMask double: the skeleton, the catalog's
-//  error card, an unknown (or hostile) :network; the title, the
-//  numbers (the chunk, the faucet's balance and its 3 s poll,
-//  the student's MetaMask balance — "Kraunama…", a dash, the
-//  three-decimal rounding of wei), the return address with its
-//  QR code and the graph shortcut; the four-step flow — no
-//  MetaMask (and the Phantom squatter), connecting, declining,
-//  a popup already open, a wrong chain switched, added (4902)
-//  or refused, a late MetaMask; the student's own moves inside
-//  MetaMask while on the page (chain, a silent switch, account,
-//  a disconnected site, a dead RPC); the claim — the signed
-//  nonce and the request it rides on, the success and the
+//  error card (a list that failed or came back unusable, also
+//  from the cache the graph page shares), an unknown (or
+//  hostile, or built-in-named) :network, faucet info that
+//  failed or came back malformed (said in the card, the claim
+//  held, the poll recovering); the title, the numbers (the
+//  chunk, the faucet's balance and its 3 s poll, the student's
+//  MetaMask balance — "Kraunama…", a dash, the three-decimal
+//  rounding of wei), the return address with its QR code and
+//  the graph shortcut; the four-step flow — no MetaMask (and
+//  the Phantom squatter), connecting, declining, a popup
+//  already open, a wrong chain switched, added (4902) or
+//  refused, a late MetaMask; the student's own moves inside
+//  MetaMask while on the page (chain, a silent switch,
+//  account, a disconnected site, a dead RPC); the claim — the
+//  signed nonce and the request it rides on, the success with
+//  its transaction linked on the network's explorer (plain
+//  text without one), a 200 that names no transaction, the
 //  refreshed balance, the backend's refusals word for word
 //  (cooldown 429, empty faucet 503, 400, 403, 500), a dropped
-//  connection, a declined signature, a double click, a network
-//  switch mid-claim; and the backend contract matrices for
+//  connection and a proxy's error page in Lithuanian, a
+//  declined signature, a double click, a network switch
+//  mid-claim; and the backend contract matrices for
 //  /api/evm/networks, /api/evm/:network/faucet-balance and the
 //  payout's failure answers.
 //
@@ -30,7 +37,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { screen, within, waitFor, fireEvent, act } from '@testing-library/react';
 import { Link, Route, Routes, useParams } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
-import { renderPage } from '../support/render';
+import { makeQueryClient, renderPage } from '../support/render';
 import { server, given, url } from '../support/backend/server';
 import { describeEndpointContract, settle, VARIANTS } from '../support/backend/contract';
 import * as f from '../support/backend/fixtures';
@@ -43,6 +50,17 @@ import {
 const CLAIM_MESSAGE = 'Pasirašykite žinutę kad patvirtintumėte jog naudojate šią piniginę. Nonce: ';
 const SUCCESS = 'Ethereum Sepolia išsiųstas į jūsų piniginę.';
 const STATE_WORDS = /^(atlikta|dabartinis žingsnis|dar neatlikta)$/;
+
+// The payout's transaction, and where Sepolia's explorer
+// keeps it
+const TX_HASH = f.evmPayout().transaction_hash;
+const TX_URL = `https://sepolia.etherscan.io/tx/${TX_HASH}`;
+
+// The page's own sentences for a failed claim, a faucet whose
+// info never arrived and a network list it cannot use
+const CLAIM_FAILED = 'Nepavyko išsiųsti kriptovaliutos.';
+const FAUCET_FAILED = 'Nepavyko gauti čiaupo informacijos';
+const NETWORKS_FAILED = 'Nepavyko gauti tinklų sąrašo. Perkraukite puslapį.';
 
 // The payout's answers when something between the page and the
 // backend breaks — the contract matrix's failure variants
@@ -67,19 +85,22 @@ beforeEach(async () => {
 // Helpers
 // -----------------------------------------------------------
 //
-// renderEvmFaucet mounts the page on its route pattern;
+// renderEvmFaucet mounts the page on its route pattern (with
+// a prepared query client when a test needs one);
 // renderWithRoutes adds what surrounds it in the app — the
 // picker's links (a network switch keeps the page mounted,
 // as in the navbar) and the graph route behind the shortcut.
-// valueOf reads a balance row by its label. freezePolls fakes
-// ONLY setInterval — the pages' polls stand still until the
-// test advances them, while requests, user-event and findBy*
-// (which re-checks on DOM changes) run on real time; under it
-// the tests wait on the screen, never on a call count.
+// valueOf reads a balance row by its label; payoutAlert finds
+// the success alert by the sentence that opens it. freezePolls
+// fakes ONLY setInterval — the pages' polls stand still until
+// the test advances them, while requests, user-event and
+// findBy* (which re-checks on DOM changes) run on real time;
+// under it the tests wait on the screen, never on a call
+// count.
 // -----------------------------------------------------------
 
-const renderEvmFaucet = (network = 'sepolia') =>
-  renderPage(<FaucetEVM />, { route: `/faucet/evm/${network}`, path: '/faucet/evm/:network' });
+const renderEvmFaucet = (network = 'sepolia', { client } = {}) =>
+  renderPage(<FaucetEVM />, { route: `/faucet/evm/${network}`, path: '/faucet/evm/:network', client });
 
 function GraphPage() {
   const { network } = useParams();
@@ -109,6 +130,7 @@ const switchButton = (name = 'Ethereum Sepolia') => screen.findByRole('button', 
 
 const valueOf = (label) => screen.getByText(label).nextElementSibling;
 const walletBalance = () => valueOf('Jūsų MetaMask balansas:');
+const payoutAlert = async () => (await screen.findByText(SUCCESS, { exact: false })).closest('[role="alert"]');
 const currentStep = () => document.querySelector('[aria-current="step"]');
 const stepStates = () => screen.getAllByText(STATE_WORDS).map((word) => word.textContent);
 
@@ -161,9 +183,34 @@ describe('Loading, the catalog and unknown networks', () => {
     given.error('get', '/api/evm/networks', 'Vidinė serverio klaida', 500);
     const balances = given.capture('get', '/api/evm/:network/faucet-balance', f.evmBalance());
     renderEvmFaucet();
-    expect(await screen.findByText('Nepavyko gauti tinklų sąrašo. Perkraukite puslapį.')).toBeInTheDocument();
+    expect(await screen.findByText(NETWORKS_FAILED)).toBeInTheDocument();
     expect(screen.queryByRole('status')).toBeNull();
     expect(balances).toEqual([]);
+  });
+
+
+  it.each([
+    ['a bare string', 'netikėtas atsakymas'],
+    ['a list', [f.evmNetworksMap.sepolia]],
+    ['JSON null', null],
+    ['an object without the networks map', { default_network: 'sepolia' }],
+    ['a networks map that is a list', { default_network: 'sepolia', networks: [f.evmNetworksMap.sepolia] }],
+  ])('shows the same error card, not an endless skeleton, for a network list that is %s — and asks for no balance', async (_, body) => {
+    given.json('get', '/api/evm/networks', body);
+    const balances = given.capture('get', '/api/evm/:network/faucet-balance', f.evmBalance());
+    renderEvmFaucet();
+    expect(await screen.findByText(NETWORKS_FAILED)).toBeInTheDocument();
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(balances).toEqual([]);
+  });
+
+
+  it('shows the error card for an unusable network list the graph page left in the cache both pages share', async () => {
+    const client = makeQueryClient({ gcTime: Infinity });
+    client.setQueryData(['evm-networks'], { default_network: 'sepolia' });
+    renderEvmFaucet('sepolia', { client });
+    expect(await screen.findByText(NETWORKS_FAILED)).toBeInTheDocument();
+    expect(screen.queryByRole('status')).toBeNull();
   });
 
 
@@ -182,6 +229,15 @@ describe('Loading, the catalog and unknown networks', () => {
     renderEvmFaucet('%3Cimg%20src%3Dx%20onerror%3Dalert(1)%3E');
     expect(await screen.findByText('Nežinomas tinklas: <img src=x onerror=alert(1)>')).toBeInTheDocument();
     expect(document.querySelector('img[src="x"]')).toBeNull();
+  });
+
+
+  it('takes a :network named like a built-in property of every object for one the catalog does not know', async () => {
+    const balances = given.capture('get', '/api/evm/:network/faucet-balance', f.evmBalance());
+    renderEvmFaucet('constructor');
+    expect(await screen.findByText('Nežinomas tinklas: constructor')).toBeInTheDocument();
+    await settle();
+    expect(balances).toEqual([]);
   });
 
 
@@ -252,6 +308,92 @@ describe('The page — title, numbers, return address', () => {
     renderEvmFaucet('arbitrumSepolia');
     await pageLoaded('Arbitrum Sepolia');
     expect(screen.queryByRole('button', { name: 'Transakcijų srautas' })).toBeNull();
+  });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// Faucet info that never arrives
+// -----------------------------------------------------------
+//
+// A faucet balance that fails, or comes back in a shape the
+// page cannot use: the page's sentence where the numbers
+// stand, the rest of the page up, the claim held and no
+// return address — until a later poll brings the info back.
+// -----------------------------------------------------------
+
+describe('Faucet info that never arrives', () => {
+
+  it('says "Nepavyko gauti čiaupo informacijos" where the numbers stand — the title and the flow stay, the claim waits, no return address', async () => {
+    given.error('get', '/api/evm/:network/faucet-balance', 'Nepavyko gauti čiaupo balanso', 500);
+    const payouts = given.capture('get', '/api/evm/:network/request', f.evmPayout());
+    const metamask = installMetamask({ connected: true });
+    renderEvmFaucet();
+
+    const failure = (await screen.findByText(FAUCET_FAILED)).closest('[role="alert"]');
+    expect(within(failure).getByTestId('ErrorOutlineIcon')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: "Ethereum Sepolia faucet'as" })).toBeInTheDocument();
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(screen.queryByText('Išsiųsime jums:')).toBeNull();
+    expect(screen.queryByText('Čiaupo balansas:')).toBeNull();
+    expect(await screen.findByText('1.500 SepETH')).toBeInTheDocument();
+    expect(screen.queryByText(/Grąžinkite nebereikalingą/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Transakcijų srautas' })).toBeNull();
+
+    const button = await claimButton();
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(button);
+    await settle();
+    expect(metamask.callsTo('personal_sign')).toEqual([]);
+    expect(payouts).toEqual([]);
+  });
+
+
+  it.each([
+    ['a bare string', 'netikėtas atsakymas'],
+    ['a number', 42],
+    ['a list', [f.evmBalance()]],
+    ['JSON null', null],
+    ['an empty object', {}],
+    ['a null address', { ...f.evmBalance(), address: null }],
+    ['a numeric address', { ...f.evmBalance(), address: 12345 }],
+    ['a balance that is no number', { ...f.evmBalance(), balance: 'daug' }],
+  ])('takes a faucet balance answer that is %s for a failed read — the same sentence, never a crash', async (_, body) => {
+    given.json('get', '/api/evm/:network/faucet-balance', body);
+    renderEvmFaucet();
+    expect(await screen.findByText(FAUCET_FAILED)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: "Ethereum Sepolia faucet'as" })).toBeInTheDocument();
+    expect(screen.queryByText(/Grąžinkite nebereikalingą/)).toBeNull();
+  });
+
+
+  it('recovers on a later poll — the numbers and the return address come back, the sentence goes', async () => {
+    freezePolls();
+    given.sequence('get', '/api/evm/:network/faucet-balance', [
+      { status: 500, body: { error: 'Nepavyko gauti čiaupo balanso' } },
+      { body: f.evmBalance() },
+    ]);
+    renderEvmFaucet();
+    expect(await screen.findByText(FAUCET_FAILED)).toBeInTheDocument();
+
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    expect(await screen.findByText('41.604 SepETH')).toBeInTheDocument();
+    expect(screen.queryByText(FAUCET_FAILED)).toBeNull();
+    expect(screen.getByText(/Grąžinkite nebereikalingą/)).toBeInTheDocument();
+  });
+
+
+  it('loads normally over an unusable faucet balance the graph page left in the cache both pages share', async () => {
+    const client = makeQueryClient({ gcTime: Infinity });
+    client.setQueryData(['evm-faucet-balance', 'sepolia'], { address: null });
+    renderEvmFaucet('sepolia', { client });
+    expect(await screen.findByText('41.604 SepETH')).toBeInTheDocument();
+    expect(screen.getByText(/Grąžinkite nebereikalingą/)).toHaveTextContent(f.FAUCET_EVM);
   });
 });
 
@@ -456,7 +598,7 @@ describe("The student's moves inside MetaMask while on the page", () => {
     act(() => metamask.changeAccounts([OTHER_ACCOUNT]));
     expect(await screen.findByText('2.000 SepETH')).toBeInTheDocument();
     await claim(user);
-    await screen.findByText(SUCCESS);
+    await payoutAlert();
     expect(payouts[0].query.address).toBe(OTHER_ACCOUNT);
     expect(metamask.signed[0].address).toBe(OTHER_ACCOUNT);
   });
@@ -556,7 +698,8 @@ describe('The MetaMask balance row', () => {
 //
 // Sign, send, tell: GET /api/evm/<network>/request with the
 // address, the signature and its nonce; the outcome as an
-// alert under the button.
+// alert under the button — a payout with its transaction,
+// linked on the network's block explorer.
 // -----------------------------------------------------------
 
 describe('Claiming', () => {
@@ -566,7 +709,7 @@ describe('Claiming', () => {
     const metamask = installMetamask({ connected: true });
     const { user } = renderEvmFaucet();
     await claim(user);
-    await screen.findByText(SUCCESS);
+    await payoutAlert();
 
     expect(payouts).toHaveLength(1);
     const { nonce } = payouts[0].query;
@@ -576,13 +719,67 @@ describe('Claiming', () => {
   });
 
 
-  it('tells the student the coins are on the way and frees the button for the next claim', async () => {
+  it('tells the student the coins are on the way, names the transaction and frees the button for the next claim', async () => {
     installMetamask({ connected: true });
     const { user } = renderEvmFaucet();
     await claim(user);
     const alert = await screen.findByRole('alert');
-    expect(alert.textContent).toBe(SUCCESS);
+    expect(alert.textContent).toBe(`${SUCCESS} Transakcija: ${TX_HASH}`);
     expect(within(alert).getByTestId('SuccessOutlinedIcon')).toBeInTheDocument();
+    expect(await claimButton()).toHaveAttribute('aria-disabled', 'false');
+  });
+
+
+  it("links the transaction to its page on the network's block explorer, opened in a new tab", async () => {
+    installMetamask({ connected: true });
+    const { user } = renderEvmFaucet();
+    await claim(user);
+    const link = within(await payoutAlert()).getByRole('link', { name: TX_HASH });
+    expect(link).toHaveAttribute('href', TX_URL);
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
+
+  it("links a claim on Hoodi to Hoodi's own explorer", async () => {
+    installMetamask({ connected: true, chainId: HOODI, chains: [MAINNET, SEPOLIA, HOODI] });
+    const { user } = renderEvmFaucet('hoodi');
+    await claim(user, 'Ethereum Hoodi');
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toBe(`Ethereum Hoodi išsiųstas į jūsų piniginę. Transakcija: ${TX_HASH}`);
+    expect(within(alert).getByRole('link', { name: TX_HASH })).toHaveAttribute('href', `https://light-hoodi.beaconcha.in/tx/${TX_HASH}`);
+  });
+
+
+  it('names the transaction as plain text on a network without an explorer configured', async () => {
+    given.json('get', '/api/evm/networks', {
+      ...f.evmNetworks,
+      networks: { ...f.evmNetworksMap, sepolia: { ...f.evmNetworksMap.sepolia, block_explorer_urls: [] } },
+    });
+    installMetamask({ connected: true });
+    const { user } = renderEvmFaucet();
+    await claim(user);
+    const alert = await payoutAlert();
+    expect(alert.textContent).toBe(`${SUCCESS} Transakcija: ${TX_HASH}`);
+    expect(within(alert).queryByRole('link')).toBeNull();
+  });
+
+
+  it.each([
+    ['no transaction id', { message: 'ETH sent successfully', amount: 0.2 }],
+    ['a null transaction id', { ...f.evmPayout(), transaction_hash: null }],
+    ['a numeric transaction id', { ...f.evmPayout(), transaction_hash: 12345 }],
+    ['an empty transaction id', { ...f.evmPayout(), transaction_hash: '' }],
+    ['a bare string for a body', 'ETH sent successfully'],
+    ['JSON null for a body', null],
+  ])('reports a 200 with %s as a failed claim, not a payout', async (_, body) => {
+    given.json('get', '/api/evm/:network/request', body);
+    installMetamask({ connected: true });
+    const { user } = renderEvmFaucet();
+    await claim(user);
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toBe(CLAIM_FAILED);
+    expect(within(alert).getByTestId('ErrorOutlineIcon')).toBeInTheDocument();
     expect(await claimButton()).toHaveAttribute('aria-disabled', 'false');
   });
 
@@ -616,7 +813,7 @@ describe('Claiming', () => {
     fireEvent.click(busy);
     await act(async () => signature.release());
 
-    await screen.findByText(SUCCESS);
+    await payoutAlert();
     expect(metamask.callsTo('personal_sign')).toHaveLength(1);
     expect(payouts).toHaveLength(1);
   });
@@ -650,21 +847,21 @@ describe('Claiming', () => {
   });
 
 
-  it.fails('explains a dropped connection in Lithuanian — PINNED KNOWN BUG: the alert shows axios\'s English "Network Error"; the page\'s Lithuanian fallback is unreachable', async () => {
+  it("explains a dropped connection in Lithuanian — the page's own sentence and a word about the connection", async () => {
     given.networkError('get', '/api/evm/:network/request');
     installMetamask({ connected: true });
     const { user } = renderEvmFaucet();
     await claim(user);
-    expect((await screen.findByRole('alert')).textContent).toMatch(/^Nepavyko išsiųsti kriptovaliutos/);
+    expect((await screen.findByRole('alert')).textContent).toBe(`${CLAIM_FAILED} Patikrinkite interneto ryšį.`);
   });
 
 
-  it.fails('explains a proxy\'s error page in Lithuanian — PINNED KNOWN BUG: the alert shows axios\'s English "Request failed with status code 502"', async () => {
+  it("explains a proxy's error page in Lithuanian — the page's own sentence and the status it answered with", async () => {
     given.html('get', '/api/evm/:network/request');
     installMetamask({ connected: true });
     const { user } = renderEvmFaucet();
     await claim(user);
-    expect((await screen.findByRole('alert')).textContent).toMatch(/^Nepavyko išsiųsti kriptovaliutos/);
+    expect((await screen.findByRole('alert')).textContent).toBe(`${CLAIM_FAILED} Serveris grąžino klaidą (502).`);
   });
 
 
@@ -714,7 +911,7 @@ describe('Claiming', () => {
     expect(await screen.findByRole('button', { name: 'Siunčiama…' })).toHaveAttribute('aria-busy', 'true');
 
     await act(async () => answer(HttpResponse.json(f.evmPayout())));
-    expect(await screen.findByText(SUCCESS)).toBeInTheDocument();
+    expect(await payoutAlert()).toHaveTextContent(`${SUCCESS} Transakcija: ${TX_HASH}`);
     expect(await claimButton()).toHaveAttribute('aria-disabled', 'false');
   });
 
@@ -824,10 +1021,11 @@ describe('The faucet balance poll', () => {
 // -----------------------------------------------------------
 //
 // The network list (catalog error card, skeleton), the
-// faucet balance (the skeleton is all the page has — its
-// failures and malformed bodies are pinned below) and the
-// payout's failure answers, which must reach the student as
-// an alert under the button.
+// faucet balance (its failures said in the card where the
+// numbers stand — a malformed body is one of them, see
+// "Faucet info that never arrives") and the payout's failure
+// answers, which must reach the student as an alert under
+// the button.
 // -----------------------------------------------------------
 
 describeEndpointContract({
@@ -836,13 +1034,10 @@ describeEndpointContract({
   render: () => renderEvmFaucet(),
   chrome: pageStands,
   loaded: async () => { await pageLoaded(); },
-  failed: async () => { await screen.findByText('Nepavyko gauti tinklų sąrašo. Perkraukite puslapį.'); },
+  failed: async () => { await screen.findByText(NETWORKS_FAILED); },
   loading: () => screen.getByRole('status'),
 });
 
-
-const BALANCE_NEVER_ARRIVES = 'a faucet balance that never arrives keeps the skeleton up forever — no error is ever shown (the UTXO page says "Nepavyko gauti čiaupo informacijos")';
-const BALANCE_CRASH = 'a balance answer without a string `address` crashes the page — faucetInfo.address.toLowerCase() in FaucetEVM';
 
 describeEndpointContract({
   path: '/api/evm/:network/faucet-balance',
@@ -850,17 +1045,8 @@ describeEndpointContract({
   render: () => renderEvmFaucet(),
   chrome: pageStands,
   loaded: async () => { await screen.findByText('41.604 SepETH'); },
-  failed: async () => { await screen.findByText(/^Nepavyko/, {}, { timeout: 1500 }); },
+  failed: async () => { await screen.findByText(FAUCET_FAILED, {}, { timeout: 1500 }); },
   loading: () => screen.getByRole('status'),
-  pins: {
-    ...Object.fromEntries(FAILURES.map((name) => [name, BALANCE_NEVER_ARRIVES])),
-    'a JSON string → page survives': BALANCE_CRASH,
-    'a JSON number → page survives': BALANCE_CRASH,
-    'wrong container (object for a list, list for an object) → page survives': BALANCE_CRASH,
-    'every field missing → page survives': BALANCE_CRASH,
-    'every leaf null → page survives': BALANCE_CRASH,
-    'types swapped (numbers as strings, strings as numbers) → page survives': BALANCE_CRASH,
-  },
 });
 
 

@@ -11,7 +11,10 @@
 //  transacted on (GET /api/evm/<network>/transaction-days,
 //  bucketed in the browser's IANA zone) plus today,
 //  and defaults to today. Days without root activity would render a lone
-//  faucet node, so they are not listed. The picked day
+//  faucet node, so they are not listed. A day list the page
+//  cannot read — no list at all, or entries without a date —
+//  counts as no list, so today alone is offered instead of
+//  the page crashing. The picked day
 //  travels into every graph fetch as a half-open [from, to)
 //  unix window computed from the STUDENT'S local midnight;
 //  viewing a past day freezes the live sweeps and skips the
@@ -23,8 +26,8 @@
 //
 //  Split into (root component last):
 //
-//    todayString   — today as local 'YYYY-MM-DD'
-//    rangeOfDay    — 'YYYY-MM-DD' → local-day unix window
+//    todayString   — today's date in the local zone
+//    rangeOfDay    — a day's local-midnight unix window
 //    DateSliderBar — the top bar: searchable day dropdown,
 //                    −/+ steppers and the day slider
 //    GraphPage     — address + day list + picked-day state
@@ -43,6 +46,11 @@ import RemoveIcon from '@mui/icons-material/Remove';
 
 import CryptoFlowGraph from './components/CryptoFlowGraph';
 
+
+// How a day is written everywhere on this page: the year, the
+// month and the day of the month, zero-padded, joined by
+// hyphens — the form transaction-days answers in
+const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 // The round brand-colored day-stepper buttons, matching the
 // graph's zoom buttons
@@ -91,9 +99,11 @@ function todayString() {
 // rangeOfDay
 // -----------------------------------------------------------
 //
-// 'YYYY-MM-DD' → that day's half-open unix window
-// [00:00, next 00:00) in the student's local timezone.
-// The Date(y, m, d) constructor handles month bounds and DST.
+// A day's date turned into its half-open unix window, from
+// local midnight up to the next local midnight, in the
+// student's own timezone. Both ends come from the local Date
+// constructor, which handles month bounds and the 23- and
+// 25-hour days of the clock changes.
 //
 // Used by:
 //   - GraphPage (below)
@@ -122,11 +132,14 @@ function rangeOfDay(dayString) {
 //
 // ONE compact row with three ways to pick a day, all over the
 // SAME used-day list: the searchable dropdown (Autocomplete,
-// newest first — type a fragment like "07-" to filter), then
-// the − / + steppers (exactly one used day earlier / later)
+// newest first — typing part of a date filters it), then the
+// − / + steppers (exactly one used day earlier / later)
 // around the slider. Slider positions are indices into
 // `days`, rightmost = newest; the tooltip previews WHILE
-// dragging, the graph refetches only on release.
+// dragging, the graph refetches only on release. An index
+// means nothing to a screen reader, so the slider is named
+// "Diena" — as the UTXO graph's is — and speaks the day it
+// stands on, marked as today the way the dropdown marks it.
 //
 // With a single known day there is nothing to step or slide —
 // the row shrinks to the centered dropdown alone.
@@ -197,6 +210,8 @@ function DateSliderBar({ days, selectedDay, today, onCommit }) {
               const index = Array.isArray(value) ? value[0] : value;
               commitIndex(index);
             }}
+            aria-label="Diena"
+            getAriaValueText={(index) => dayText(days[index] ?? '')}
             sx={{ flex: 1 }}
           />
 
@@ -296,9 +311,15 @@ export default function GraphPage() {
     staleTime: 60 * 1000,
   });
 
-  // Today is always offered, even before its first transaction
+  // Today is always offered, even before its first transaction.
+  // An answer that is no list (a proxy's page, a reshaped
+  // object) counts as none, and an entry without a readable
+  // date is left out — mapping the raw answer during render
+  // took the whole page down, and a day that is no date would
+  // leave rangeOfDay nothing to build a window from
   const days = useMemo(() => {
-    const known = (daysData?.days ?? []).map((entry) => entry.day);
+    const listed = Array.isArray(daysData?.days) ? daysData.days : [];
+    const known = listed.map((entry) => entry?.day).filter((day) => typeof day === 'string' && DAY_PATTERN.test(day));
     return known.includes(today) ? known : [...known, today];
   }, [daysData, today]);
 

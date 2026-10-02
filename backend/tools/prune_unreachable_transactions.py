@@ -109,7 +109,7 @@ def prune(conn, apply_changes):
     # that steer the walk: the named wallets (the class' anchors)
     # as roots and the flagged contracts/hubs as walls the walk
     # never passes through.
-    # ============================================================
+    # ===========================================================
     blocked = {row[0] for row in conn.execute(
         "SELECT address FROM Graph_Addresses WHERE COALESCE(is_contract, 0) = 1 OR COALESCE(is_hub, 0) = 1")}
     roots = {row[0] for row in conn.execute(
@@ -132,7 +132,7 @@ def prune(conn, apply_changes):
     # network separately. A contract or hub can be REACHED (it
     # stays a leaf on the graph) but is never expanded — its far
     # side stays dark, exactly like the frontend's sweep.
-    # ============================================================
+    # ===========================================================
     visited = set()
     queue = deque((network, root) for network in networks for root in roots)
     while queue:
@@ -152,7 +152,7 @@ def prune(conn, apply_changes):
     # STEP 3: partition the rows. A row survives when at least
     # one endpoint is a reachable class wallet ON THAT NETWORK —
     # a stranger's donation to a public hub has neither.
-    # ============================================================
+    # ==========================================================
     drop = [row for row in rows
             if (row['network'], row['from_address']) not in good
             and (row['network'], row['to_address']) not in good]
@@ -183,7 +183,7 @@ def prune(conn, apply_changes):
     # flagged contracts/hubs (the explorer's classification —
     # losing them would let the next sweep scrape a hub again).
     # VACUUM reclaims the space.
-    # ============================================================
+    # =========================================================
     conn.executemany("DELETE FROM Graph_Transactions WHERE rowid = ?",
                      [(row['rid'],) for row in drop])
 

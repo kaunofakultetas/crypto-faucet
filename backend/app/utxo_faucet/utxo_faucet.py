@@ -96,6 +96,10 @@ DEFAULT_NETWORK = 'btc4'
 
 
 
+
+
+
+
 ############################################################
 # _electrum_scripthash
 ############################################################
@@ -189,6 +193,8 @@ class MempoolChainTooLong(RuntimeError):
 ############################################################
 
 class NetworkContext:
+
+
 
 
 
@@ -525,7 +531,7 @@ class UTXOFaucet:
         # section (payout + connection settings live there). The
         # network IS just its address params here — embit has no
         # chain registry to satisfy, so KNF needs nothing special.
-        # ==========================================================
+        # ========================================================
         config = self.network_configs.get(network_key)
         if not config:
             raise ValueError(f'Unknown UTXO network: {network_key}')
@@ -693,7 +699,7 @@ class UTXOFaucet:
         # STEP 3: outputs. The dialect decodes the recipient (full
         # checksum check) into this chain's scriptPubKey flavour and
         # raises ValueError on anything that isn't valid here.
-        # ===========================================================
+        # ==========================================================
         to_script = ctx.dialect.recipient_script(to_address)
 
         outputs = [TransactionOutput(amount_sat, to_script)]
@@ -730,7 +736,7 @@ class UTXOFaucet:
         # the faucet's unconfirmed chain is already at its limit
         # is told apart (MempoolChainTooLong); nothing is
         # remembered then — the transaction never happened.
-        # ==========================================================
+        # =========================================================
         try:
             tx_id = ctx.electrum.request("blockchain.transaction.broadcast", [tx.serialize().hex()])
         except RuntimeError as e:
@@ -953,7 +959,7 @@ class UTXOFaucet:
             # STEP 1: input validation — address present, decodes
             # for this network, and not the faucet paying itself in
             # ANY encoding of its own key (see _pays_own_key).
-            # =========================================================
+            # =====================================================
             if not to_address:
                 return {"error": "Trūksta reikalingų parametrų"}, 400
 
@@ -998,7 +1004,7 @@ class UTXOFaucet:
             # Electrum trouble, a failed broadcast — releases the
             # cooldown slot claimed in STEP 2 before the error
             # propagates.
-            # ========================================================
+            # =======================================================
             try:
                 balance_info = self._faucet_balance(ctx)
                 current_balance = balance_info["confirmed"]  # the conservative floor, see above
@@ -1017,7 +1023,7 @@ class UTXOFaucet:
                 # same UTXOs and race to double-spend them. On success
                 # the cached balance is dropped so the page shows the
                 # payout on its next poll.
-                # ======================================================
+                # ====================================================
                 # round, not int: 0.29 * 1e8 is 28999999.999999996 in binary
                 amount_sat = int(round(float(ctx.chunk_size_btc) * 1e8))
                 with self._send_locks.setdefault(network_key, threading.Lock()):
@@ -1053,10 +1059,3 @@ class UTXOFaucet:
         except Exception as e:
             logging.exception(f"{network_key} payout to {to_address} failed")
             return {"error": "Nepavyko išsiųsti transakcijos. Bandykite dar kartą.", "details": str(e)}, 500
-
-
-
-
-
-
-

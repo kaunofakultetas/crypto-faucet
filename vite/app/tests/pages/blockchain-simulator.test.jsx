@@ -20,9 +20,11 @@
 //  failed), the SHA256 tool link (a plain new-tab link,
 //  window.open never used), the example chain from
 //  /api/get-example-blockchain (loading, failures and garbage
-//  answers leave the student's chain alone, a retry) with its
-//  backend contract matrix, the minimap's scroll sync, and the
-//  real App's route and title.
+//  answers leave the student's chain alone, a retry, and the
+//  chain re-linked and re-hashed on arrival, so a block edited
+//  in the database shows as broken with every block after it)
+//  with its backend contract matrix, the minimap's scroll sync,
+//  and the real App's route and title.
 //
 //  Math.random picks the cast of a generated block, so the
 //  tests fix it: the opening block #1 is always "Jonas (50BTC)
@@ -89,9 +91,9 @@ function renderSimulator() {
   return renderPage(<BlockchainSimulator />);
 }
 
-// `hidden: true` skips the per-element visibility check —
-// nothing on this page is hidden, and with ten blocks that
-// check is the slowest part of every query
+// Asking for hidden elements too skips the per-element
+// visibility check — nothing on this page is hidden, and with
+// ten blocks that check is the slowest part of every query
 const blockHeadings = () => screen.queryAllByRole('heading', { level: 6, hidden: true }).filter((heading) => /^Blokas #\d+\b/.test(heading.textContent));
 const blockHeading = (index) => {
   const found = blockHeadings().find((heading) => new RegExp(`^Blokas #${index}\\b`).test(heading.textContent));
@@ -144,9 +146,10 @@ function stepMiningByHand({ msPerCall = 1 } = {}) {
 
 const nextFrame = () => act(() => { vi.advanceTimersToNextFrame(); });
 
-// The running search's button: "Stabdyti · <n> bandymų"
+// The running search's button — "Stabdyti", the tries and
+// their noun in whichever form the count asks for
 const stopButton = () => screen.getByRole('button', { name: /^Stabdyti · / });
-const triesShown = () => Number(stopButton().textContent.match(/^Stabdyti · ([\d\s]+) bandymų$/)[1].replace(/\s/g, ''));
+const triesShown = () => Number(stopButton().textContent.match(/^Stabdyti · ([\d\s]+) bandym(?:as|ai|ų)$/)[1].replace(/\s/g, ''));
 
 
 
@@ -210,7 +213,8 @@ describe('The opening chain', () => {
 
   it('the minimap shows one square per block, marked and titled by its state', () => {
     renderSimulator();
-    // "Blokų grandinės<br />žemėlapis" — two lines, one heading
+    // A line break parts "Blokų grandinės" from "žemėlapis" —
+    // two lines, one heading
     expect(screen.getByRole('heading', { level: 6, name: /^Blokų grandinės\s*žemėlapis$/ })).toBeInTheDocument();
     expect(minimapSquare(0)).toHaveAttribute('title', 'Blokas #0: sugadintas');
     expect(minimapSquare(0)).toHaveTextContent('✗0');
@@ -426,7 +430,7 @@ describe('Mining', () => {
   });
 
 
-  it('counts the tries the Lithuanian way — "1 023", grouped with a no-break space', async () => {
+  it('counts the tries the Lithuanian way — "1 023 bandymai", grouped with a no-break space', async () => {
     stepMiningByHand({ msPerCall: 1 / 64 });
     const { user } = renderSimulator();
     await setDifficulty(user, 5);
@@ -434,7 +438,21 @@ describe('Mining', () => {
     await nextFrame();
     // The raw text: toHaveTextContent would fold the no-break
     // space into a plain one
-    expect(stopButton().textContent).toBe('Stabdyti · 1\u00a0023 bandymų');
+    expect(stopButton().textContent).toBe('Stabdyti · 1\u00a0023 bandymai');
+  });
+
+
+  it('declines the tries with their count — "1 bandymas", then "2 bandymai"', async () => {
+    // Ten "ms" per clock reading: every 16 ms slice tries one
+    // nonce
+    stepMiningByHand({ msPerCall: 10 });
+    const { user } = renderSimulator();
+    await setDifficulty(user, 5);
+    await user.click(pickaxe(0));
+    await nextFrame();
+    expect(stopButton().textContent).toBe('Stabdyti · 1 bandymas');
+    await nextFrame();
+    expect(stopButton().textContent).toBe('Stabdyti · 2 bandymai');
   });
 
 
@@ -690,7 +708,8 @@ describe('Copying a block\'s text', () => {
 //
 // "Užkrauti pavyzdinę blokų grandinę" replaces the whole chain
 // with the backend's pre-mined one — only a well-formed,
-// non-empty answer replaces anything.
+// non-empty answer replaces anything, and what replaces it is
+// verified block by block, never taken as stored.
 // -----------------------------------------------------------
 
 describe('The example chain', () => {
@@ -781,13 +800,19 @@ describe('The example chain', () => {
   });
 
 
-  it('takes a chain longer than the example whole — twenty blocks, numbered in order', async () => {
+  it('takes a chain longer than the example whole — twenty blocks, numbered in order, the repeated half re-linked and broken', async () => {
     given.json('get', '/api/get-example-blockchain', [...f.exampleBlockchain, ...f.exampleBlockchain]);
     const { user } = renderSimulator();
     await user.click(screen.getByRole('button', { name: LOAD_EXAMPLE }));
     await waitFor(() => expect(blockCount()).toBe(20));
-    expect(minimapSquare(19)).toHaveTextContent('✓19');
-    expect(thisHash(19)).toBe(f.exampleBlockchain[9].hash);
+    expect(minimapSquare(9)).toHaveTextContent('✓9');
+    // The second genesis does not chain onto block #9: linked to
+    // its hash, it fails its proof of work, and so does every
+    // block after it
+    expect(previousHash(10)).toBe(f.exampleBlockchain[9].hash);
+    expect(Array.from({ length: 10 }, (_, i) => state(10 + i))).toEqual(Array(10).fill(BROKEN));
+    expect(minimapSquare(19)).toHaveTextContent('✗19');
+    expect(thisHash(19)).toBe(sha(thisHash(18), f.exampleBlockchain[9].nonce, f.exampleBlockchain[9].data));
   });
 
 
@@ -800,7 +825,7 @@ describe('The example chain', () => {
   });
 
 
-  it.fails('re-verifies the loaded chain — a block whose stored hash no longer matches its text shows as broken — PINNED KNOWN BUG: the answer is shown as stored (setBlocks(data)), so a row edited in dbgate keeps its old, valid-looking hash', async () => {
+  it('re-verifies the loaded chain — a block whose stored hash no longer matches its text shows as broken, and so does every block after it', async () => {
     const tampered = structuredClone(f.exampleBlockchain);
     tampered[3].data = tampered[3].data.replace('8BTC', '80BTC');
     given.json('get', '/api/get-example-blockchain', tampered);
@@ -809,6 +834,9 @@ describe('The example chain', () => {
     expect(thisHash(3)).toBe(sha(tampered[2].hash, tampered[3].nonce, tampered[3].data));
     expect(state(3)).toBe(BROKEN);
     expect(state(9)).toBe(BROKEN);
+    expect([0, 1, 2].map(state)).toEqual([VALID, VALID, VALID]);
+    expect([4, 5, 6, 7, 8].map(state)).toEqual(Array(5).fill(BROKEN));
+    expect(previousHash(4)).toBe(thisHash(3));
   });
 });
 
@@ -848,7 +876,8 @@ describe('The minimap\'s scroll', () => {
     const scrolled = layOut(minimap);
     vi.stubGlobal('scrollY', 1000);
     fireEvent.scroll(window);
-    // 1000 / (3000 − 1000) of (900 − 500)
+    // Halfway through the page's 2000 px of scroll is halfway
+    // through the minimap's 400
     expect(scrolled.at(-1)).toBe(200);
   });
 

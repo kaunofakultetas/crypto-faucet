@@ -176,6 +176,10 @@ ERC20_TEST_CONFIGS = {
 
 
 
+
+
+
+
 ############################################################
 # make_utxo_faucet
 ############################################################
@@ -193,6 +197,10 @@ def make_utxo_faucet(configs=None):
     with mock.patch.dict(os.environ, {'FAUCET_PRIVATE_KEY': TEST_PRIVATE_KEY}):
         with mock.patch.object(UTXOFaucet, '_warm_up_networks', lambda self: None):
             return UTXOFaucet(configs or UTXO_TEST_CONFIGS)
+
+
+
+
 
 
 
@@ -221,6 +229,10 @@ def fake_electrum(faucet, network, utxos):
 
 
 
+
+
+
+
 ############################################################
 # make_evm_faucet
 ############################################################
@@ -243,6 +255,10 @@ def make_evm_faucet(configs=None, private_key=TEST_PRIVATE_KEY):
 
 
 
+
+
+
+
 ############################################################
 # make_erc20_faucet
 ############################################################
@@ -257,6 +273,10 @@ def make_erc20_faucet(evm_faucet=None, token_configs=None):
     evm = evm_faucet or make_evm_faucet()
     with mock.patch.object(ERC20Faucet, '_warm_up_tokens', lambda self: None):
         return ERC20Faucet(evm, token_configs or ERC20_TEST_CONFIGS)
+
+
+
+
 
 
 
@@ -279,6 +299,10 @@ def make_svm_faucet(configs=None, private_key=TEST_PRIVATE_KEY):
     with mock.patch.dict(os.environ, env):
         with mock.patch.object(SVMFaucet, '_warm_up_networks', lambda self: None):
             return SVMFaucet(configs or SVM_TEST_CONFIGS)
+
+
+
+
 
 
 
@@ -336,6 +360,10 @@ def fake_solana_rpc(faucet, network, balances=None, broadcast_error=None, balanc
 
 
 
+
+
+
+
 ############################################################
 # sign_svm_claim
 ############################################################
@@ -365,6 +393,10 @@ def sign_svm_claim(nonce='1785666345742', address_seed=None, signer_seed=None):
 
 
 
+
+
+
+
 ############################################################
 # make_move_faucet
 ############################################################
@@ -383,6 +415,10 @@ def make_move_faucet(configs=None, private_key=TEST_PRIVATE_KEY):
     with mock.patch.dict(os.environ, env):
         with mock.patch.object(MoveFaucet, '_warm_up_networks', lambda self: None):
             return MoveFaucet(configs or MOVE_TEST_CONFIGS)
+
+
+
+
 
 
 
@@ -438,6 +474,10 @@ def fake_sui_graphql(faucet, network, balances=None, build_error=None, execute_e
 
 
 
+
+
+
+
 ############################################################
 # sign_move_claim
 ############################################################
@@ -478,6 +518,10 @@ def sign_move_claim(nonce='1785666345742', address_seed=None, signer_seed=None):
 
 
 
+
+
+
+
 ############################################################
 # sign_claim
 ############################################################
@@ -509,6 +553,10 @@ def sign_claim(nonce='1785666345742', address_key=RECIPIENT_PRIVATE_KEY, signer_
 
 
 
+
+
+
+
 ############################################################
 # _as_exception
 ############################################################
@@ -526,6 +574,10 @@ def _as_exception(error):
     if isinstance(error, BaseException):
         return error
     return RuntimeError(error)
+
+
+
+
 
 
 
@@ -576,6 +628,10 @@ class FakeEth:
 
 
 
+
+
+
+
 ############################################################
 # fake_web3
 ############################################################
@@ -595,6 +651,10 @@ def fake_web3(faucet, network, balances=None, **kwargs):
     eth = FakeEth(w3.eth, {k.lower(): v for k, v in (balances or {}).items()}, **kwargs)
     w3.eth = eth
     return eth
+
+
+
+
 
 
 
@@ -650,6 +710,10 @@ class FakeErc20Contract:
                 return bytes.fromhex('cd' * 32)
 
         return Transfer()
+
+
+
+
 
 
 

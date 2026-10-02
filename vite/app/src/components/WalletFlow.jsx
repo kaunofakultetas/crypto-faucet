@@ -378,11 +378,9 @@ export function FadingAlert({ severity, children, onDone }) {
 // useAlerts
 // -----------------------------------------------------------
 //
-//   const { alerts, addAlert, clearAlerts } = useAlerts()
-//   addAlert('success' | 'error', message, tag?)
-//   clearAlerts()
-//
-// The outcome list behind FadingAlert: every entry carries
+// The outcome list behind FadingAlert. A page adds a success
+// or an error row with its message — a sentence, or words
+// with a link in them — and may tag it. Every entry carries
 // its own `dismiss`, which the row calls when its clock runs
 // out or its close button is pressed (pass it as onDone). The
 // optional tag lets a page with actions spread across many

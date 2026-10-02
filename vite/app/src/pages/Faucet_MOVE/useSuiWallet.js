@@ -11,6 +11,13 @@
 //  real name for the UI, and restores an already-authorised
 //  session without a popup.
 //
+//  The wallet in use is never a dead object: when it goes
+//  away (an extension disabled mid-session) the next one
+//  still announced takes over, or the page falls back to the
+//  install step — and an account always belongs to the wallet
+//  it came from, so a wallet that left takes its account with
+//  it.
+//
 //  A Sui ADDRESS is the same on every network, so there is no
 //  network hop to perform — `step` jumps from 1 (connect)
 //  straight to 3 (ready). The wallet UI still has a network
@@ -193,19 +200,29 @@ async function signClaimMessage(wallet, account) {
 // useSuiWallet (default export)
 // -----------------------------------------------------------
 //
-//   const { installed, walletName, installUrl, address,
-//           chains, wallets, selectWallet, step, connect,
-//           signMessage } = useSuiWallet()
+// Everything the MOVE page needs from the student's Sui
+// wallet. The step goes 0 (install) → 1 (connect) → 3
+// (ready); there IS no step 2, as Sui wallets need no
+// network hop. The hook reports whether a wallet was found
+// and, for the UI, the name of the one in use — or Slush,
+// with its download link, as the install suggestion when none
+// was. It lists every Sui-capable wallet the browser
+// announced, hands back the wallet object in use (inUse) so
+// the picker can tell two wallets of one name apart, and
+// selectWallet switches to another. For the connected
+// account it reports the address and the Sui chains it
+// advertises, for the page's network note. connect and
+// signMessage reject with a ready-to-display Lithuanian
+// message.
 //
-// step is 0 install → 1 connect → 3 ready (there IS no
-// step 2 — Sui wallets need no network hop). walletName is
-// the DISCOVERED wallet's own name, or Slush as the install
-// suggestion when none was found; wallets lists every
-// Sui-capable one the browser announced and selectWallet
-// picks another. chains is what the connected account
-// advertises ('sui:testnet', …), for the page's network
-// note. connect / signMessage reject with a ready-to-display
-// Lithuanian message.
+// The wallet in use is derived, not stored: the one the
+// student picked while it is still announced, else the first
+// one announced. A wallet that goes away therefore hands over
+// to the next with no extra step. The account is stored with
+// the wallet it came from and only counts while that wallet
+// is the one in use — after a switch or an unregister no
+// address of another wallet can linger, and picking the
+// wallet already in use keeps its session.
 //
 // Used by:
 //   - Page.jsx — FaucetMOVE
@@ -214,22 +231,30 @@ async function signClaimMessage(wallet, account) {
 export default function useSuiWallet() {
 
   // The Wallet Standard wallet OBJECTS (their features are the
-  // API) — every one announced, and the one in use — and the
-  // connected Sui account object: sui:signPersonalMessage
-  // wants the account, not its address
+  // API) — every one announced — and the one the student
+  // picked, which may have gone away since
   const [wallets, setWallets] = useState([]);
-  const [wallet, setWallet] = useState(null);
-  const [account, setAccount] = useState(null);
+  const [picked, setPicked] = useState(null);
+
+  // The connected Sui account object with the wallet it came
+  // from: sui:signPersonalMessage wants the account, not its
+  // address
+  const [session, setSession] = useState(null);
+
+  // Derived, never stored: the pick while it is still
+  // announced, else the first wallet announced — and an
+  // account only while its own wallet is the one in use
+  const wallet = wallets.includes(picked) ? picked : (wallets[0] ?? null);
+  const account = session && session.wallet === wallet ? session.account : null;
 
 
   // Wallet Standard discovery, both directions: catch wallets
   // that register after us (the register-wallet event), and
   // announce ourselves to wallets that registered before us
   // (the app-ready dispatch). Every Sui-capable wallet is
-  // kept; the first one announced is used until the page
-  // picks another. The unregister a wallet gets back really
-  // forgets it — an extension disabled mid-session must not
-  // stay selected as a dead object.
+  // kept. The unregister a wallet gets back really forgets
+  // it, and its account with it — an extension disabled
+  // mid-session must not stay in use as a dead object.
   useEffect(() => {
 
     const api = {
@@ -237,11 +262,10 @@ export default function useSuiWallet() {
         const found = announced.filter(isSuiWallet);
         if (found.length) {
           setWallets((previous) => [...previous, ...found.filter((w) => !previous.includes(w))]);
-          setWallet((previous) => previous ?? found[0]);
         }
         return () => {
           setWallets((previous) => previous.filter((w) => !found.includes(w)));
-          setWallet((previous) => (found.includes(previous) ? null : previous));
+          setSession((previous) => (previous && found.includes(previous.wallet) ? null : previous));
         };
       },
     };
@@ -262,19 +286,20 @@ export default function useSuiWallet() {
   // silent connect; a wallet that has not authorised this
   // origin rejects, and the student stays on the connect step.
   // The sibling hooks do the same (eth_accounts, onlyIfTrusted).
+  // A silent answer for a wallet no longer in use is dropped.
   useEffect(() => {
     if (!wallet) return undefined;
     let alive = true;
 
     const existing = suiAccountOf(wallet.accounts);
     if (existing) {
-      setAccount(existing);
+      setSession({ wallet, account: existing });
       return undefined;
     }
 
     wallet.features['standard:connect']
       .connect({ silent: true })
-      .then(({ accounts }) => { if (alive) setAccount(suiAccountOf(accounts)); })
+      .then(({ accounts }) => { if (alive) setSession({ wallet, account: suiAccountOf(accounts) }); })
       .catch(() => {});
 
     return () => { alive = false; };
@@ -291,7 +316,7 @@ export default function useSuiWallet() {
     if (!events) return undefined;
 
     return events.on('change', ({ accounts }) => {
-      if (accounts) setAccount(suiAccountOf(accounts));
+      if (accounts) setSession({ wallet, account: suiAccountOf(accounts) });
     });
   }, [wallet]);
 
@@ -301,17 +326,17 @@ export default function useSuiWallet() {
   const connect = useCallback(async () => {
     if (!wallet) throw new Error('Sui piniginė dar neįkelta. Bandykite dar kartą.');
     const acc = await connectSuiWallet(wallet);
-    setAccount(acc);
+    setSession({ wallet, account: acc });
     return acc.address;
   }, [wallet]);
 
   const signMessage = useCallback(() => signClaimMessage(wallet, account), [wallet, account]);
 
   // Another announced wallet: its session (if any) is restored
-  // by the effect above, so the account is reset here
+  // by the effect above — the old wallet's account no longer
+  // counts once the wallet in use has changed
   const selectWallet = useCallback((candidate) => {
-    setWallet(candidate);
-    setAccount(null);
+    setPicked(candidate);
   }, []);
 
 
@@ -330,6 +355,7 @@ export default function useSuiWallet() {
     address: account?.address ?? null,
     chains: suiChainsOf(account),
     wallets,
+    inUse: wallet,
     selectWallet,
     step,
     connect,

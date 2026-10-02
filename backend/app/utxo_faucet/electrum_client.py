@@ -354,7 +354,3 @@ class ElectrumClient:
 
     def list_unspent(self, scripthash: str) -> list:
         return self.request("blockchain.scripthash.listunspent", [scripthash])
-
-
-
-

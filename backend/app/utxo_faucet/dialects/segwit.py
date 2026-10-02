@@ -39,6 +39,10 @@ from .legacy import LegacyDialect
 
 
 
+
+
+
+
 ############################################################
 # SegwitDialect
 ############################################################
@@ -52,6 +56,8 @@ class SegwitDialect:
     TX_VERSION = 2
     INPUT_SIZE = 91
     OUTPUT_SIZE = 31
+
+
 
 
 
@@ -81,6 +87,8 @@ class SegwitDialect:
 
 
 
+
+
     ############################################################
     # faucet_script
     ############################################################
@@ -100,6 +108,8 @@ class SegwitDialect:
 
 
 
+
+
     ############################################################
     # faucet_address
     ############################################################
@@ -113,6 +123,8 @@ class SegwitDialect:
 
     def faucet_address(self, pub) -> str:
         return self.faucet_script(pub).address({'bech32': self.hrp})
+
+
 
 
 
@@ -142,6 +154,8 @@ class SegwitDialect:
             return self._legacy_recipients.validate_address(address)
 
         return False
+
+
 
 
 
@@ -177,6 +191,8 @@ class SegwitDialect:
 
 
 
+
+
     ############################################################
     # address_of
     ############################################################
@@ -206,6 +222,8 @@ class SegwitDialect:
             return self._legacy_recipients.address_of(script)
 
         return None
+
+
 
 
 

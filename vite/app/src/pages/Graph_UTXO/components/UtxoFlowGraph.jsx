@@ -296,18 +296,17 @@ function SpendEdge({ from, to, faucetCoin }) {
 // statusOf
 // -----------------------------------------------------------
 //
-//   statusOf({ loading, error, updating, missing, count, live })
-//     → { centred, tone, busy, text } | null
-//
-// What the canvas says about the day, most urgent first. With
-// no box drawn (count 0) the message is `centred` — loading,
-// an outage, the first crawl still collecting, transactions
-// the server did not give, or a plainly empty day; over a
-// drawing it is a pill that leaves the boxes as they were: the
-// first crawl adding to them, a failed refresh, or some
-// transactions missing. `busy`
-// adds a spinner. Counts go in parentheses — no noun has to
-// agree with a number.
+// What the canvas says about the day, most urgent first, from
+// the data hook's state and the number of boxes drawn — or
+// nothing once the day is drawn and complete. With no box
+// drawn the message is centred: loading, an outage, the
+// first crawl still collecting, transactions the server did
+// not give, or a plainly empty day. Over a drawing it is a
+// pill that leaves the boxes as they were: the first crawl
+// adding to them, a failed refresh, or some transactions
+// missing. Each message carries its tone, and a spinner while
+// something is on its way. Counts go in parentheses — no noun
+// has to agree with a number.
 //
 // Used by:
 //   - CanvasStatus (below)
@@ -467,10 +466,11 @@ function TransactionTable({ id, transactions, names, unit }) {
 //
 // network is the route's; day / today pick what is drawn
 // (Page.jsx owns the slider); unit is the network's short
-// currency name ("tBTC4") shown after every amount. Stays
-// mounted across day switches, so dragged boxes and the zoom
-// survive them. Owns which transaction's dialog is open (and
-// the box it flies out of) and which box holds keyboard focus.
+// currency name from the catalog, shown after every amount.
+// Stays mounted across day switches, so dragged boxes and the
+// zoom survive them. Owns which transaction's dialog is open
+// (and the box it flies out of) and which box holds keyboard
+// focus.
 //
 // Used by:
 //   - Page.jsx — under the title row and the legend

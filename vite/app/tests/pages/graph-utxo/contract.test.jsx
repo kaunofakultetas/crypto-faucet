@@ -16,9 +16,11 @@
 //        dialog, opened on a transaction from before the day;
 //        a failure is the dialog's own sentence
 //
-//  The variants the page cannot meet are pinned (it.fails)
-//  with what breaks: a txid that is null or not a string
-//  crashes both the drawing and the dialog (shortTxid).
+//  The page meets every variant: the data hook cleans each
+//  answer before anything reads it, so even a body whose
+//  leaves are all null, or of swapped types, leaves the page
+//  standing (what it then shows: graph-data.test.jsx and
+//  transaction-modal.test.jsx).
 // -----------------------------------------------------------
 
 import { beforeEach, expect } from 'vitest';
@@ -71,10 +73,6 @@ describeEndpointContract({
       .toHaveTextContent(/^(Vidinė serverio klaida|Nepalaikomas tinklas: x|Nerasta|Nepavyko gauti transakcijų)$/));
   },
   loading: () => screen.getByText('Kraunama…'),
-  pins: {
-    'every leaf null → page survives': 'a transaction whose txid is null crashes the whole drawing — shortTxid calls .slice on it for the box\'s name (TransactionBox.jsx:252)',
-    'types swapped (numbers as strings, strings as numbers) → page survives': 'a txid that is not a string crashes the whole drawing — shortTxid calls .slice on a number (TransactionBox.jsx:252)',
-  },
 });
 
 
@@ -180,8 +178,4 @@ describeEndpointContract({
     await screen.findByText(/^(Transakcija nerasta — serveris jos negrąžino\.|Nepavyko gauti transakcijos — bandykite dar kartą vėliau\.)$/);
   },
   loading: () => screen.getByText('Kraunama…'),
-  pins: {
-    'every leaf null → page survives': 'an input whose txid is null crashes the dialog — shortTxid calls .slice on it for the outpoint link (TransactionModal.jsx:710)',
-    'types swapped (numbers as strings, strings as numbers) → page survives': 'a txid that is not a string crashes the dialog — shortTxid calls .slice on a number for the outpoint link (TransactionModal.jsx:710)',
-  },
 });

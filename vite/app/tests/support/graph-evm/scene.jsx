@@ -10,14 +10,14 @@
 //      a known instant (2026-09-30 12:00) in a known IANA zone
 //      (UTC unless the test moves the student elsewhere) —
 //      process.env.TZ, which Node applies at once and which
-//      endGraphSlate() puts back
+//      endGraphSlate puts back
 //    - fake timers that still follow real time
 //      (shouldAdvanceTime): TanStack Query, msw and MUI keep
-//      working, while advance(ms) jumps the sweeps' and the
+//      working, while advance jumps the sweeps' and the
 //      midnight timer's clock on demand
 //    - the cast of addresses and the day's transfers the
 //      backend model (backend.js) answers from
-//    - renderGraph() and the readers of what a student sees:
+//    - renderGraph and the readers of what a student sees:
 //      the canvas (an image named with the day and the
 //      transfer count), the visually hidden table of transfers,
 //      the date bar
@@ -62,7 +62,8 @@ export const ADDR = {
   HUB: '0x5a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d',
 };
 
-// "0x87ef...ed7d" — how the graph shortens an address
+// How the graph shortens an address: its first six
+// characters and its last four, with three dots between
 export const short = (address) => `${address.slice(0, 6)}...${address.slice(-4)}`;
 
 // Unix seconds of a UTC wall-clock time on the pinned day
@@ -93,10 +94,12 @@ export const DAY_TRANSFERS = [
 // The slate — zone, clock, doubles
 // -----------------------------------------------------------
 //
-// startGraphSlate(zone) in a beforeEach, endGraphSlate() in
-// an afterEach of every graph test file. moveStudentTo(zone)
-// lets one test put the student in another IANA zone — call
-// it BEFORE freezeClock / holdClockStill, the pinned instant
+// Every graph test file starts each test with startGraphSlate
+// — the doubles reset, the zone set (UTC unless a zone is
+// given), the clock pinned — and ends it with endGraphSlate,
+// which puts the zone back. moveStudentTo lets one test put
+// the student in another IANA zone; it must come BEFORE
+// freezeClock or holdClockStill, because the pinned instant
 // is local time.
 //
 // Used by:
@@ -159,6 +162,36 @@ export async function advance(ms) {
 
 
 // -----------------------------------------------------------
+// transfersNoun
+// -----------------------------------------------------------
+//
+// The noun of the canvas's transfer count, declined by hand
+// the way a Lithuanian grammar book has it, so every graph
+// that boots also checks the page's own agreement: a count
+// ending in eleven to nineteen takes the genitive plural, one
+// ending in one the singular, one ending in two to nine the
+// plural, and one ending in zero the genitive plural again.
+//
+// Used by:
+//   - bootedNetwork (below)
+// -----------------------------------------------------------
+
+function transfersNoun(count) {
+
+  const lastTwo = count % 100;
+  const last = count % 10;
+  if (lastTwo >= 11 && lastTwo <= 19) return 'pervedimų';
+  if (last === 1) return 'pervedimas';
+  return last === 0 ? 'pervedimų' : 'pervedimai';
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // renderGraph / bootedNetwork
 // -----------------------------------------------------------
 //
@@ -166,7 +199,8 @@ export async function advance(ms) {
 // route pattern (useParams gives it :network). bootedNetwork
 // waits for the graph to build its Network — after the root's
 // first answer — and for the boot sweep that follows to have
-// drawn `transfers` edges (when given).
+// drawn `transfers` edges (when given), the canvas's name
+// counting them with the noun in agreement.
 //
 // Used by:
 //   - tests/pages/graph-evm/*.test.jsx
@@ -179,7 +213,7 @@ export function renderGraph({ network = 'sepolia', ...options } = {}) {
 export async function bootedNetwork({ transfers } = {}) {
   await waitFor(() => expect(liveNetwork()).toBeTruthy());
   if (transfers !== undefined) {
-    await waitFor(() => expect(canvas()).toHaveAccessibleName(new RegExp(`: ${transfers} pervedimai$`)));
+    await waitFor(() => expect(canvas()).toHaveAccessibleName(new RegExp(`: ${transfers} ${transfersNoun(transfers)}$`)));
   }
   return liveNetwork();
 }
@@ -194,14 +228,14 @@ export async function bootedNetwork({ transfers } = {}) {
 // Readers
 // -----------------------------------------------------------
 //
-// canvas()        — the graph area: an image named
-//                   "Transakcijų srauto grafikas, <day>: <n>
-//                   pervedimai"
-// transferRows()  — the hidden table's body as [from, to,
-//                   amount] cell texts, in drawing order
-// dayPicker()     — the "Data" dropdown of the date bar
-// outageNotice()  — the notice shown while the backend cannot
-//                   be reached, or null
+// What a student sees, read the way assistive technology
+// reads it: the canvas is the image named after the day's
+// transfer graph, its name ending in the day and the count of
+// drawn transfers; transferRows gives the hidden table's body
+// as the sender, receiver and amount texts of every row, in
+// drawing order; dayPicker is the date bar's "Data" dropdown;
+// outageNotice is the notice shown while the backend cannot
+// be reached, or null when there is none.
 //
 // Used by:
 //   - tests/pages/graph-evm/*.test.jsx

@@ -11,24 +11,26 @@
 //    - isPhantom, isConnected and publicKey (a PublicKey-like
 //      object with toBase58, or a plain string on builds that
 //      hand one out)
-//    - connect() answers the popup — approve / reject (4001) /
-//      no account / an error — and connect({ onlyIfTrusted })
-//      answers silently: approved only for a trusted origin
+//    - connect answers the popup — approve, reject (4001), no
+//      account or an error — and a connect that asks
+//      onlyIfTrusted answers silently: approved only for a
+//      trusted origin
 //    - a successful connect EMITS 'connect', like Phantom (the
 //      hook's eager reconnect reads the event, not the promise)
 //    - on / off (or removeListener) for 'connect',
-//      'disconnect' and 'accountChanged'; emit() and
-//      changeAccount() play what the student does inside the
+//      'disconnect' and 'accountChanged'; emit and
+//      changeAccount play what the student does inside the
 //      extension
-//    - request({ method: 'changeNetwork' }) answers like
-//      Phantom (-32601, it has no Solana cluster switch) unless
-//      told otherwise — or is absent altogether
-//    - signMessage(bytes, display) signs with the SELECTED
-//      account: { signature, publicKey }, the bare bytes (older
-//      builds), an empty signature, another account, a refusal
+//    - a changeNetwork request answers like Phantom (-32601,
+//      it has no Solana cluster switch) unless told otherwise
+//      — or the request method is absent altogether
+//    - signMessage signs with the SELECTED account and answers
+//      the signature with that account's public key — or, as
+//      scripted, the bare bytes (older builds), an empty
+//      signature, another account's key, a refusal
 //
-//  Every call is recorded in `calls` ({ method, args }).
-//  Nothing here imports the code under test.
+//  Every call is recorded in `calls`, with its method and its
+//  arguments. Nothing here imports the code under test.
 //
 //  Used by:
 //    - hooks/use-phantom-wallet.test.jsx
@@ -110,40 +112,42 @@ export function publicKeyOf(address, as = 'object') {
 // createPhantom
 // -----------------------------------------------------------
 //
-//   const phantom = createPhantom({ ...options })
-//   phantom.install()         — window.phantom.solana = provider
-//   phantom.installLegacy()   — ONLY window.solana (the shared
-//                               slot the hook must not read)
-//   phantom.uninstall()       — the extension is gone
+// Builds the double without installing it, for the tests
+// that inject the extension late: install puts the provider
+// at window.phantom.solana, installLegacy ONLY at
+// window.solana (the shared slot the hook must not read), and
+// uninstall takes the extension away again.
 //
-// Options (all optional):
+// Every option may be left out. account is the selected
+// account, STUDENT_SOL unless given, and keyAs shapes every
+// key the double hands out (see publicKeyOf). connected
+// starts with a live session — isConnected and publicKey set
+// before the page mounts — and trusted makes the silent
+// onlyIfTrusted connect succeed, as for a Trusted App.
 //
-//   account    — the selected account (STUDENT_SOL)
-//   keyAs      — 'object' | 'string' | 'toString' (see
-//                publicKeyOf) for every key it hands out
-//   connected  — a live session already: isConnected and
-//                publicKey set before the page mounts
-//   trusted    — connect({ onlyIfTrusted: true }) succeeds
-//                (this origin is a Trusted App)
-//   connect    — the popup's answer: 'approve' | 'reject' |
-//                'no-account' | an Error | (args) => value
-//   changeNetwork — 'missing' (-32601, Phantom today) |
-//                'confirm' | 'reject' | an Error |
-//                'absent' (no request method at all) |
-//                (params) => value
-//   sign       — 'approve' | 'raw' (the bare bytes) |
-//                'empty' | 'no-key' (no publicKey in the
-//                answer) | 'reject' | { signer: address } |
-//                an Error | (bytes, display) => value
-//   signature  — the bytes an approved signature carries
-//   listenerApi — 'off' | 'removeListener' | 'none' — how the
-//                build lets listeners go
-//   isPhantom  — the brand flag (false: a squatter)
+// connect is the popup's answer: 'approve' (the default),
+// 'reject', 'no-account', an Error to throw, or a function of
+// the call's arguments whose result is the answer.
+// changeNetwork answers the cluster switch: 'missing' (-32601,
+// Phantom today, the default), 'confirm', 'reject', an Error,
+// a function of the params, or 'absent' — no request method
+// at all. sign answers the signature popup: 'approve' (the
+// default), 'raw' (the bare bytes), 'empty', 'no-key' (no
+// publicKey in the answer), 'reject', a signer naming another
+// account, an Error, or a function of the bytes and the
+// display encoding. signature is the bytes an approved
+// signature carries; listenerApi is how the build lets
+// listeners go — 'off' (the default), 'removeListener' or
+// 'none'; isPhantom is the brand flag, turned off for a
+// squatter.
 //
-// The returned double: provider, calls, callsTo(method),
-// listening(event), emit(event, payload), changeAccount(
-// address | null), signedTexts(), install / installLegacy /
-// uninstall.
+// The double it returns holds the provider and the call
+// record; callsTo gives the arguments of every call to one
+// method, listening counts an event's listeners, emit fires
+// an event, changeAccount plays the student picking another
+// account (null is Phantom's "the new one is not trusted here
+// yet") and signedTexts decodes what the page asked Phantom
+// to sign.
 //
 // Used by:
 //   - installPhantom (below), tests that inject late
@@ -309,8 +313,8 @@ export function createPhantom(options = {}) {
 // installPhantom
 // -----------------------------------------------------------
 //
-// createPhantom(options).install() — the extension present
-// before the page mounts, the common case.
+// Creates the double and installs it at once — the extension
+// present before the page mounts, the common case.
 //
 // Used by:
 //   - hooks/use-phantom-wallet.test.jsx

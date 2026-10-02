@@ -10,15 +10,15 @@
 //  swallowed), the extension's events (connect, disconnect,
 //  accountChanged — with a key and with null) and their
 //  removal on unmount, and the three conversations:
-//  connect() with every refusal message, switchNetwork() —
-//  the genesis hash per cluster, Phantom's missing method
-//  passing as "assumed", a confirming wallet, refusals,
-//  unknown clusters, the reset on a new cluster — and
-//  signMessage() — the exact message the backend verifies,
-//  the nonce, the base58 signature, the bare-bytes answer of
-//  older builds, an empty signature, another account signing,
-//  refusals. The derived `step` is checked at every turn: it
-//  is what the page renders from.
+//  connect with every refusal message, switchNetwork — the
+//  genesis hash per cluster, Phantom's missing method passing
+//  as "assumed", a confirming wallet, refusals, unknown
+//  clusters, the reset on a new cluster — and signMessage —
+//  the exact message the backend verifies, the nonce, the
+//  base58 signature, the bare-bytes answer of older builds, an
+//  empty signature, another account signing, refusals. The
+//  derived `step` is checked at every turn: it is what the
+//  page renders from.
 // -----------------------------------------------------------
 
 import { describe, it, expect, vi } from 'vitest';
@@ -55,9 +55,9 @@ const claimMessage = (nonce) => `Pasirašykite žinutę kad patvirtintumėte jog
 //
 // mount: the hook for a faucet network's cluster ('devnet' by
 // default, null for a network without one), re-rendered with
-// { expected } to change it. refusalOf: the message an action
-// rejected with (null when it resolved), run inside act so the
-// state it sets on the way is flushed.
+// another cluster to change it. refusalOf: the message an
+// action rejected with (null when it resolved), run inside act
+// so the state it sets on the way is flushed.
 // -----------------------------------------------------------
 
 const mount = (expected = 'devnet') => renderHook(({ cluster }) => usePhantomWallet(cluster), { initialProps: { cluster: expected } });
@@ -180,7 +180,7 @@ describe('Detection', () => {
 // -----------------------------------------------------------
 //
 // A live session is read straight off the provider; anything
-// else gets ONE silent connect({ onlyIfTrusted: true }) —
+// else gets ONE silent connect that asks onlyIfTrusted —
 // approved for a Trusted App, refused (and swallowed)
 // otherwise.
 // -----------------------------------------------------------
@@ -348,7 +348,7 @@ describe("The extension's events", () => {
 
 
 // -----------------------------------------------------------
-// connect()
+// connect
 // -----------------------------------------------------------
 //
 // The popup conversation: the address it resolves with, the
@@ -416,14 +416,14 @@ describe('connect()', () => {
 
 
 // -----------------------------------------------------------
-// switchNetwork() — the cluster step
+// switchNetwork — the cluster step
 // -----------------------------------------------------------
 //
-// changeNetwork({ genesisHash }) for the faucet's cluster.
-// Phantom has no such method (-32601): the step passes as
-// "assumed" and clusterConfirmed stays false, so the page
-// keeps its Testnet Mode instructions. A wallet that performs
-// the hop confirms it.
+// A changeNetwork request with the genesis hash of the
+// faucet's cluster. Phantom has no such method (-32601): the
+// step passes as "assumed" and clusterConfirmed stays false,
+// so the page keeps its Testnet Mode instructions. A wallet
+// that performs the hop confirms it.
 // -----------------------------------------------------------
 
 describe('switchNetwork() — the cluster step', () => {
@@ -534,7 +534,7 @@ describe('switchNetwork() — the cluster step', () => {
 
 
 // -----------------------------------------------------------
-// signMessage() — the ownership proof
+// signMessage — the ownership proof
 // -----------------------------------------------------------
 //
 // The fixed Lithuanian message with a Date.now() nonce, signed

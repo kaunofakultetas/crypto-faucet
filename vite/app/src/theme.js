@@ -14,6 +14,7 @@
 
 import { createTheme } from '@mui/material/styles'
 
+
 // Central theme tokens
 export const tokens = {
   colors: {
@@ -69,5 +70,3 @@ const theme = createTheme({
 })
 
 export default theme
-
-

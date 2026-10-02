@@ -23,6 +23,10 @@ from app.move_faucet.chains import sui as sui_chain
 
 
 
+
+
+
+
 ############################################################
 # EvmConfigTests
 ############################################################
@@ -76,6 +80,10 @@ class EvmConfigTests(unittest.TestCase):
 
 
 
+
+
+
+
 ############################################################
 # Erc20ConfigTests
 ############################################################
@@ -96,6 +104,10 @@ class Erc20ConfigTests(unittest.TestCase):
                 self.assertGreater(float(config['chunk_size']), 0)
                 for address in config['deployments'].values():
                     self.assertRegex(address, r'^0x[0-9a-fA-F]{40}$')
+
+
+
+
 
 
 
@@ -134,6 +146,10 @@ class UtxoConfigTests(unittest.TestCase):
 
 
 
+
+
+
+
 ############################################################
 # SvmConfigTests
 ############################################################
@@ -160,6 +176,10 @@ class SvmConfigTests(unittest.TestCase):
     def test_ids_unique(self):
         ids = [c['id'] for c in SVM_NETWORK_CONFIGS.values()]
         self.assertEqual(len(ids), len(set(ids)))
+
+
+
+
 
 
 

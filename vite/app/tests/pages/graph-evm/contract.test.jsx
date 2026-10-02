@@ -13,26 +13,30 @@
 //    /api/evm/:network/transaction-days — today alone in the
 //        date bar, the graph works on
 //    /api/evm/:network/get-stored-transactions — the outage
-//        notice over the canvas; "0 pervedimai" while it hangs
+//        notice over the canvas; "0 pervedimų" while it hangs
 //
 //  and then the malformed answers the matrix does not reach
 //  but a backend or proxy can send: a stored-transactions 200
-//  that is no transfer list (at boot, or in the boot sweep), a
-//  transfer value that arrives as a string, a day list that is
-//  no list — the defects they expose are pinned (it.fails)
-//  with a one-line description.
+//  that is no transfer list — at boot, in the boot sweep, in a
+//  later sweep — is an outage the next sweep recovers from,
+//  and the live refresh outlives even a sweep that throws; a
+//  transfer value that arrives as a string is drawn; a day
+//  list that is no list, or holds entries without a readable
+//  date, leaves the page standing with the days it can read.
 // -----------------------------------------------------------
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
+import { HttpResponse } from 'msw';
+import { DataSet } from 'vis-data';
 import { given } from '../../support/backend/server';
 import { describeEndpointContract, settle, expectNoCrash } from '../../support/backend/contract';
 import * as f from '../../support/backend/fixtures';
-import { liveNetwork, networks } from '../../support/graph-evm/vis-network';
+import { liveNetwork } from '../../support/graph-evm/vis-network';
 import { installGraphBackend } from '../../support/graph-evm/backend';
 import {
-  startGraphSlate, endGraphSlate, advance, renderGraph, bootedNetwork, transferRows, dayPicker,
-  OUTAGE_TEXT, ADDR, NAMES, DAY_TRANSFERS, TODAY,
+  startGraphSlate, endGraphSlate, advance, renderGraph, bootedNetwork, transferRows, dayPicker, outageNotice,
+  OUTAGE_TEXT, at, ADDR, NAMES, DAY_TRANSFERS, TODAY,
 } from '../../support/graph-evm/scene';
 
 
@@ -56,7 +60,10 @@ afterEach(() => endGraphSlate());
 // its date bar, or one of its single status lines (the
 // contract's `chrome`). renderScene: the page over the day's
 // backend model (for the matrices of the endpoints the model
-// does not answer).
+// does not answer). refuseOnce: vis refusing to add one node,
+// once — it throws on a duplicate id, say — which stands in
+// for any throw inside a sweep, as no answer of the backend
+// can cause one.
 // -----------------------------------------------------------
 
 const pageStands = () => screen.queryByRole('combobox', { name: 'Data' })
@@ -71,6 +78,21 @@ const renderScene = () => {
 };
 
 const earlierButton = () => screen.queryByRole('button', { name: 'Ankstesnė diena' });
+
+// The page a captive portal answers every request with
+const PORTAL_PAGE = '<html><body><h1>Prisijunkite prie tinklo</h1></body></html>';
+
+function refuseOnce(id) {
+  const add = DataSet.prototype.add;
+  let refused = false;
+  vi.spyOn(DataSet.prototype, 'add').mockImplementation(function (data, ...rest) {
+    if (!refused && data?.id === id) {
+      refused = true;
+      throw new Error(`vis refused ${id}`);
+    }
+    return add.call(this, data, ...rest);
+  });
+}
 
 
 
@@ -146,7 +168,7 @@ describeEndpointContract({
   chrome: pageStands,
   loaded: async () => { await waitFor(() => expect(transferRows()).toHaveLength(2)); },
   failed: async () => { await screen.findByText(OUTAGE_TEXT); },
-  loading: () => screen.getByRole('img', { name: `Transakcijų srauto grafikas, ${TODAY}: 0 pervedimai` }),
+  loading: () => screen.getByRole('img', { name: `Transakcijų srauto grafikas, ${TODAY}: 0 pervedimų` }),
 });
 
 
@@ -160,7 +182,11 @@ describeEndpointContract({
 // -----------------------------------------------------------
 //
 // Shapes the matrix does not produce but a backend or a proxy
-// can: what the page does with each, and the defects pinned.
+// can, and what the page does with each: a stored-transactions
+// answer that is no transfer list is an outage wherever it
+// lands, a sweep that throws never ends the live refresh, a
+// value sent as text is drawn, and a day list the page cannot
+// read leaves today and the days it can read.
 // -----------------------------------------------------------
 
 describe('Malformed answers beyond the matrix', () => {
@@ -183,47 +209,64 @@ describe('Malformed answers beyond the matrix', () => {
   });
 
 
-  it.fails('a 200 that is no transfer list (a captive portal\'s page, an emptied object) is an outage the next sweep recovers from — PINNED KNOWN BUG: fetchTransactions returns data.transactions unchecked, boot throws on undefined.forEach, so no graph is built, no notice is shown and no sweep ever runs again', async () => {
-    const calls = given.capture('get', '/api/evm/:network/get-stored-transactions', () => (calls.length > 1 ? f.evmStoredTransactions() : {}));
+  // The malformed answers last until the test lifts them, so
+  // the root's answer and the boot sweep's are both malformed —
+  // the boot sweep asks about the faucet again at once, and a
+  // good answer there would take the notice away before it
+  // could be read
+  it.each([
+    ['an emptied object', () => HttpResponse.json({})],
+    ['a captive portal\'s page', () => new HttpResponse(PORTAL_PAGE, { status: 200, headers: { 'Content-Type': 'text/html' } })],
+    ['rows that name no sender or receiver', () => HttpResponse.json({ transactions: [{ value: 0.2, count: 1 }] })],
+  ])('a 200 that is no transfer list — %s — is an outage the next sweep recovers from', async (_, malformed) => {
+    let lifted = false;
+    const calls = given.capture('get', '/api/evm/:network/get-stored-transactions', () => (lifted ? f.evmStoredTransactions() : malformed()));
     renderGraph();
-    await waitFor(() => expect(calls).toHaveLength(1));
+    await waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(2));
     await settle(100);
     // The outage is told, over the faucet alone …
     expect(screen.queryByText(OUTAGE_TEXT)).not.toBeNull();
-    expect(liveNetwork()).toBeTruthy();
+    expect(liveNetwork().nodes().map((node) => node.id)).toEqual([ADDR.FAUCET]);
     // … and the next live sweep brings the day in
+    lifted = true;
     await advance(1_000);
     await waitFor(() => expect(transferRows()).toHaveLength(2));
+    expect(outageNotice()).toBeNull();
   });
 
 
-  it('what that malformed answer does today: an empty canvas, no notice, no Network, nothing asked again', async () => {
-    const calls = given.capture('get', '/api/evm/:network/get-stored-transactions', {});
-    const logged = vi.spyOn(console, 'error');
-    renderGraph();
-    await waitFor(() => expect(calls).toHaveLength(1));
-    await settle(100);
-    await advance(20_000);
-    expectNoCrash();
-    expect(networks).toHaveLength(0);
-    expect(screen.queryByText(OUTAGE_TEXT)).toBeNull();
-    expect(calls).toHaveLength(1);
-    expect(logged).toHaveBeenCalledWith('Graph boot failed:', expect.any(TypeError));
-  });
-
-
-  it.fails('one malformed answer during the boot sweep does not end the live refresh — PINNED KNOWN BUG: the boot sweep\'s merge throws on undefined.forEach, boot() rejects before scheduler.start(), and today\'s graph is never swept again', async () => {
+  it('one malformed answer during the boot sweep does not end the live refresh', async () => {
     const backend = installGraphBackend({ transfers: DAY_TRANSFERS, addresses: NAMES });
     backend.answerOnce(ADDR.JONAS, { error: null });
+    const logged = vi.spyOn(console, 'error');
     renderGraph();
     await bootedNetwork({ transfers: 3 });
-    const asked = backend.requests.length;
+    // The root's answer and the boot sweep's three
+    await waitFor(() => expect(backend.requests).toHaveLength(4));
+    expect(logged).toHaveBeenCalledWith('Error fetching transactions:', expect.any(Error));
     await advance(2_000);
-    expect(backend.requests.length).toBeGreaterThan(asked);
+    expect(backend.requests.length).toBeGreaterThan(4);
   });
 
 
-  it('a malformed answer in a later live sweep is logged, and the sweeps go on — one throw never ends the live refresh', async () => {
+  it('a boot sweep that throws is logged, and the live refresh starts regardless', async () => {
+    installGraphBackend({ transfers: [...DAY_TRANSFERS, { from: ADDR.JONAS, to: ADDR.PETRAS, value: 0.05, at: at(11, 0) }], addresses: NAMES });
+    // Petras is first drawn by the boot sweep, so its mirror throws
+    refuseOnce(ADDR.PETRAS);
+    const logged = vi.spyOn(console, 'error');
+    renderGraph();
+    const network = await bootedNetwork({ transfers: 3 });
+    await waitFor(() => expect(logged).toHaveBeenCalledWith('Sweep failed:', expect.any(Error)));
+    expect(network.node(ADDR.PETRAS)).toBeNull();
+
+    await advance(1_000);
+    await waitFor(() => expect(network.node(ADDR.PETRAS)).not.toBeNull());
+    await waitFor(() => expect(transferRows()).toHaveLength(4));
+    expect(liveNetwork()).toBe(network);
+  });
+
+
+  it('a malformed answer in a later live sweep is an outage like any other — logged, the graph kept, the sweeps going on', async () => {
     const backend = installGraphBackend({ transfers: DAY_TRANSFERS, addresses: NAMES });
     const logged = vi.spyOn(console, 'error');
     renderGraph();
@@ -232,36 +275,72 @@ describe('Malformed answers beyond the matrix', () => {
 
     backend.answerOnce(ADDR.EGLE, { error: null });
     await advance(1_000);
-    await waitFor(() => expect(logged).toHaveBeenCalledWith('Sweep failed:', expect.any(TypeError)));
+    await waitFor(() => expect(logged).toHaveBeenCalledWith('Error fetching transactions:', expect.any(Error)));
     const asked = backend.requests.length;
     await advance(1_000);
     await waitFor(() => expect(backend.requests.length).toBeGreaterThan(asked));
     expect(network.nodes()).toHaveLength(3);
+    expect(transferRows()).toHaveLength(3);
     expect(liveNetwork()).toBe(network);
   });
 
 
-  it.fails('a transfer value that arrives as a string ("0.2") is drawn, not crashed on — PINNED KNOWN BUG: formatTransactionLabel calls value.toFixed; boot dies silently, and when the network list answers after it the currency relabel effect throws and the page crashes', async () => {
+  it('a live sweep that throws is logged, and the sweeps go on — one throw never ends the live refresh', async () => {
+    const backend = installGraphBackend({ transfers: DAY_TRANSFERS, addresses: NAMES });
+    const logged = vi.spyOn(console, 'error');
+    renderGraph();
+    const network = await bootedNetwork({ transfers: 3 });
+    await waitFor(() => expect(backend.requests).toHaveLength(4));
+
+    // Petras is paid now, and the sweep that draws him throws
+    refuseOnce(ADDR.PETRAS);
+    backend.transfers.push({ from: ADDR.FAUCET, to: ADDR.PETRAS, value: 0.2, at: at(12, 0) });
+    await advance(1_000);
+    await waitFor(() => expect(logged).toHaveBeenCalledWith('Sweep failed:', expect.any(Error)));
+    expect(network.node(ADDR.PETRAS)).toBeNull();
+
+    await advance(1_000);
+    await waitFor(() => expect(network.node(ADDR.PETRAS)).not.toBeNull());
+    expect(liveNetwork()).toBe(network);
+  });
+
+
+  it('a transfer value that arrives as a string ("0.2") is drawn, and relabelled when the currency arrives — nothing crashes', async () => {
     given.slow('get', '/api/evm/networks', 300, f.evmNetworks);
     const calls = given.capture('get', '/api/evm/:network/get-stored-transactions', {
       transactions: f.evmStoredTransactions().transactions.map((row) => ({ ...row, value: String(row.value) })),
     });
     renderGraph();
-    await waitFor(() => expect(calls).toHaveLength(1));
+    await waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(1));
     // The network list lands after the day's answer
     await advance(400);
     await settle(100);
     expectNoCrash();
     await waitFor(() => expect(transferRows()).toContainEqual(['KNF Faucet', 'Jonas', '0.2000 SepETH (1 tx)']));
+    expect(transferRows()).toContainEqual(['Jonas', 'KNF Faucet', '0.1998 SepETH (1 tx)']);
   });
 
 
-  it.fails('a day list that is not a list of { day } entries leaves the page standing — PINNED KNOWN BUG: GraphPage maps daysData.days unchecked during render, so { days: { "2026-09-29": 2 } } throws ".map is not a function" and takes the whole page down', async () => {
+  it('a day list that is not a list of { day } entries leaves the page standing — today alone is offered', async () => {
     const calls = given.capture('get', '/api/evm/:network/transaction-days', { days: { '2026-09-29': 2 } });
     renderScene();
     await waitFor(() => expect(calls).toHaveLength(1));
     await settle(100);
     expectNoCrash();
     expect(dayPicker()).toHaveValue('2026-09-30 (šiandien)');
+    expect(earlierButton()).toBeNull();
+  });
+
+
+  it('a day list with entries the page cannot read offers the days it can read and leaves the rest out', async () => {
+    given.json('get', '/api/evm/:network/transaction-days', {
+      days: [{ count: 1, day: '2026-09-28' }, { count: 2 }, null, { count: 1, day: 12345 }, { count: 3, day: 'vakar' }],
+    });
+    const { user } = renderScene();
+    await bootedNetwork({ transfers: 3 });
+    await waitFor(() => expect(earlierButton()).toBeInTheDocument());
+    await user.click(dayPicker());
+    expect((await screen.findAllByRole('option')).map((option) => option.textContent)).toEqual(['2026-09-30 (šiandien)', '2026-09-28']);
+    expectNoCrash();
   });
 });

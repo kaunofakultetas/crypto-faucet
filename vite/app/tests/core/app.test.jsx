@@ -452,20 +452,10 @@ describe('App — family index redirects', () => {
   });
 
 
-  it.fails('/graph/utxo — the UTXO graph without a network — redirects like the others (or is not found) — PINNED KNOWN BUG: it matches /graph/:network and renders the EVM graph for a network named "utxo"', async () => {
+  it('/graph/utxo — the UTXO graph without a network — redirects through "/" like every family index', async () => {
     renderApp({ route: '/graph/utxo' });
-    await waitFor(() => {
-      const redirected = window.location.pathname === '/faucet/evm/sepolia';
-      const notFound = within(main()).queryByText('Tokio puslapio nėra.') !== null;
-      expect(redirected || notFound).toBe(true);
-    }, { timeout: 1500 });
-  });
-
-
-  it('shows what /graph/utxo does today: the EVM graph asking for a faucet named "utxo", under the UTXO graph\'s title', async () => {
-    renderApp({ route: '/graph/utxo' });
-    expect(await within(main()).findByText('Nepavyko gauti čiaupo adreso')).toBeInTheDocument();
-    expect(document.title).toBe(`UTXO transakcijos — ${SITE}`);
+    await landsOn('/faucet/evm/sepolia');
+    expect(within(main()).queryByText('Nepavyko gauti čiaupo adreso')).toBeNull();
   });
 
 
@@ -524,7 +514,7 @@ describe('App — the tab title', () => {
   });
 
 
-  it.fails('keeps the bare site name on a path that merely begins with a route\'s letters (/graphs) — PINNED KNOWN BUG: ROUTE_TITLES matches by startsWith, with no segment boundary', async () => {
+  it('keeps the bare site name on a path that merely begins with a route\'s letters (/graphs)', async () => {
     renderApp({ route: '/graphs' });
     await within(main()).findByText('Tokio puslapio nėra.');
     await settle(50);

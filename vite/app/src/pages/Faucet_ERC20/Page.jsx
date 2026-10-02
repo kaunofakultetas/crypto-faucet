@@ -5,7 +5,9 @@
 //  "I need LINK" comes before "on which chain". One page
 //  shows the token on every chain it is deployed on
 //  (GET /api/erc20/token/<symbol>), one claim card per chain,
-//  outcomes rendered inside the card that caused them.
+//  outcomes rendered inside the card that caused them — a
+//  payout with its transaction id, linked to the transaction
+//  on that chain's block explorer.
 //
 //  Two things set this page apart from the native faucets:
 //  the wallet must sit on a TOKEN chain before claiming, and
@@ -17,12 +19,21 @@
 //  hasEnoughGas + GasNoticeCard, the tokens-are-invisible-
 //  until-imported story in watchTokenInMetamask.
 //
+//  The token picker switches tokens without remounting the
+//  page, so whatever a claim leaves behind belongs to its
+//  token — useTokenActions keeps it there. A token answer the
+//  page cannot be built from is a failed read, never a crash.
+//
 //  Split into (root component last) — the step ladder and
 //  the wallet conversation are plain functions with no React
 //  in them; the root keeps state, handlers and layout:
 //
 //    TOKEN_REFRESH_MS  — token payload repoll cadence
+//    CLAIM_FAILED      — the claim's own failure sentence
+//    isPlainObject     — the shape check's building block
+//    isTokenPayload    — a token answer the page can use
 //    useToken          — the token + its deployments, polled
+//    weiOf             — a wei amount, or nothing if unreadable
 //    hasEnoughGas      — the per-chain gas verdict
 //    deriveFlow        — the five-step ladder + switch target
 //    watchTokenInMetamask — the wallet_watchAsset conversation
@@ -37,7 +48,7 @@
 //    FaucetERC20       — page state + layout (default export)
 // -----------------------------------------------------------
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
@@ -53,11 +64,66 @@ import useMetamaskWallet, { getMetamaskProvider } from '@/hooks/useMetamaskWalle
 import { WalletStepper, WalletGateButton, FadingAlert, useAlerts } from '@/components/WalletFlow';
 import AssetIcon from '@/components/AssetIcon';
 import ErrorCard from '@/components/ErrorCard';
+import PayoutMessage from '@/components/PayoutMessage';
+import { requestErrorText } from '@/utils/requestError';
+import { payoutTxid } from '@/utils/payout';
 
 
 // How often the token payload (with the faucet's per-chain
 // balances) repolls — the backend caches those ~10 s anyway
 const TOKEN_REFRESH_MS = 10000;
+
+// What a failed claim says when neither the backend nor the
+// wallet gave a reason of their own
+const CLAIM_FAILED = 'Nepavyko išsiųsti žetonų.';
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// isPlainObject
+// -----------------------------------------------------------
+//
+// A JSON object in the everyday sense — not null, not a list,
+// not a string or a number — the container the token answer
+// is built from.
+//
+// Used by:
+//   - isTokenPayload (below)
+// -----------------------------------------------------------
+
+const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// isTokenPayload
+// -----------------------------------------------------------
+//
+// Whether a token answer has the containers the page is built
+// from: an object holding the token's own object and the list
+// of its deployments, every deployment an object. An answer
+// of any other shape is a failed read — it used to crash the
+// whole page. The values inside are not checked here; the
+// pieces that show them cope with an odd one (a dash for a
+// faucet balance that is not a number, an unknown gas verdict
+// for an amount that cannot be read).
+//
+// Used by:
+//   - useToken (below) — inside the query
+// -----------------------------------------------------------
+
+const isTokenPayload = (body) => isPlainObject(body)
+  && isPlainObject(body.token)
+  && Array.isArray(body.deployments)
+  && body.deployments.every(isPlainObject);
 
 
 
@@ -69,24 +135,28 @@ const TOKEN_REFRESH_MS = 10000;
 // useToken
 // -----------------------------------------------------------
 //
-//   const { data, error, reload } = useToken(symbol, account)
-//   data → { token, faucet_address, deployments: [...] }
+// The whole page as ONE TanStack query — the token, the
+// faucet's address and every deployment — repolled on
+// TOKEN_REFRESH_MS (10 s, the backend's own balance cache
+// TTL). With a connected account the request carries the
+// address, and every deployment comes back with that
+// wallet's native balance (wallet_native_wei) — the gas
+// gate's input, fetched by the BACKEND over its own RPC
+// connections, because the public rpc_urls are not reliable
+// from a browser. A token switch changes the key and shows
+// skeletons; an account change keeps the current rows on
+// screen while the refresh lands (placeholderData,
+// same-symbol only).
 //
-// The whole page as ONE TanStack query, repolled on
-// TOKEN_REFRESH_MS (10 s — the backend's own balance cache TTL).
-// With a connected account the request carries ?address= and
-// every deployment comes back with that wallet's native
-// balance (wallet_native_wei) — the gas gate's input, fetched
-// by the BACKEND over its own RPC connections, because the
-// public rpc_urls are not reliable from a browser. A token
-// switch changes the key and shows skeletons; an account
-// change keeps the current rows on screen while the refresh
-// lands (placeholderData, same-symbol only). error holds the
-// backend's message when the query NEVER got an answer (an
-// unknown token) — a failed repoll keeps the last payload on
+// An answer without the payload's shape fails the query just
+// like an error status does. The error handed back is set
+// only when the query NEVER got an answer: the backend's own
+// message (an unknown token), or the page's sentence when
+// there is none. A failed repoll keeps the last payload on
 // screen, and a 4xx stops the interval so a stale bookmark
-// doesn't repoll forever. reload() (after a claim)
-// invalidates the query for an immediate refetch.
+// doesn't repoll forever. The reload handed back (called
+// after a claim) invalidates the query for an immediate
+// refetch.
 //
 // Used by:
 //   - FaucetERC20 (below)
@@ -107,7 +177,9 @@ function useToken(symbol, account) {
     },
     queryFn: async () => {
       const suffix = account ? `?address=${account}` : '';
-      return (await axios.get(`/api/erc20/token/${symbol}${suffix}`)).data;
+      const body = (await axios.get(`/api/erc20/token/${symbol}${suffix}`)).data;
+      if (!isTokenPayload(body)) throw new Error('Unexpected /api/erc20/token answer');
+      return body;
     },
     // Keep the previous payload only across an ACCOUNT change —
     // a different token must show skeletons, never stale rows
@@ -134,13 +206,40 @@ function useToken(symbol, account) {
 
 
 // -----------------------------------------------------------
+// weiOf
+// -----------------------------------------------------------
+//
+// A wei amount from the token answer as a BigInt, or nothing
+// when it cannot be read. The backend sends wei as a string
+// of digits — it outgrows a JavaScript number — so anything
+// else (a fraction, a word, a bare number) is unreadable
+// rather than guessed at; BigInt would throw on most of those
+// and take the page down with it.
+//
+// Used by:
+//   - hasEnoughGas (below)
+// -----------------------------------------------------------
+
+const weiOf = (value) => (typeof value === 'string' && /^\d+$/.test(value) ? BigInt(value) : null);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // hasEnoughGas
 // -----------------------------------------------------------
 //
-// Does the wallet hold the backend's min_native_wei (half
-// the native chunk) on this chain? Both numbers arrive in
-// the deployment itself. true / false / null when the
-// balance is unknown (not connected yet, RPC hiccup).
+// The gas verdict for one chain: does the connected wallet
+// hold the backend's min_native_wei (half the native chunk)
+// there? Both numbers arrive in the deployment itself, and a
+// chain without a minimum asks for nothing. The verdict is
+// unknown — neither yes nor no — while the wallet's balance
+// is (not connected yet, an RPC hiccup on the backend's side)
+// and whenever either amount cannot be read, so an odd number
+// never blocks a claim: the backend enforces the rule itself.
 //
 // Used by:
 //   - deriveFlow (below)
@@ -148,9 +247,10 @@ function useToken(symbol, account) {
 // -----------------------------------------------------------
 
 const hasEnoughGas = (deployment) => {
-  const bal = deployment.wallet_native_wei;
-  if (bal == null) return null;
-  return BigInt(bal) >= BigInt(deployment.min_native_wei ?? 0);
+  const balance = weiOf(deployment.wallet_native_wei);
+  const needed = deployment.min_native_wei == null ? 0n : weiOf(deployment.min_native_wei);
+  if (balance === null || needed === null) return null;
+  return balance >= needed;
 };
 
 
@@ -163,11 +263,8 @@ const hasEnoughGas = (deployment) => {
 // deriveFlow
 // -----------------------------------------------------------
 //
-//   const { activeStep, switchTarget, gaslessDeployments } =
-//     deriveFlow(deployments, walletStep, chainId)
-//
 // The page's five-step ladder on top of the wallet hook's
-// 0/1 (install / connect): the NETWORK step — the wallet
+// install and connect steps: the NETWORK step — the wallet
 // must sit on ONE of the token's chains, an unrelated chain
 // would hide the received tokens — then the GAS step,
 // complete once at least one chain clears the threshold.
@@ -175,11 +272,11 @@ const hasEnoughGas = (deployment) => {
 // passed — fail open, the cards and the backend still
 // enforce the rule per chain.
 //
-// switchTarget is where the network step's button switches
-// to: the chain the wallet already sits on when it's a token
-// chain, else the first chain with gas, else simply the
-// first. gaslessDeployments are the chains GasNoticeCard
-// lists — below the bar for sure, not merely unknown.
+// Besides the active step it hands back where the network
+// step's button switches to — the chain the wallet already
+// sits on when it's a token chain, else the first chain with
+// gas, else simply the first — and the chains GasNoticeCard
+// lists: below the bar for sure, not merely unknown.
 //
 // Used by:
 //   - FaucetERC20 (below) — once per render
@@ -426,7 +523,9 @@ function GasNoticeCard({ gasless }) {
 // MetaMask" (switch + import, so the tokens become visible)
 // beside the claim button. The card renders its OWN outcome
 // alerts, passed in already filtered by network, so results
-// appear right where the student clicked.
+// appear right where the student clicked. A faucet balance
+// the backend could not read — or sent as anything but a
+// number — is a dash.
 //
 // needsGas (the wallet holds less than the backend's
 // min_native_wei — half the native chunk — on this chain)
@@ -457,7 +556,7 @@ function ChainCard({ deployment, token, isCurrentChain, walletReady, needsGas, b
       <div className="my-2 flex">
         <span className="flex-1">Čiaupo balansas:</span>
         <span className="text-right">
-          {deployment.balance == null ? '—' : `${deployment.balance.toFixed(3)} ${token.symbol}`}
+          {Number.isFinite(deployment.balance) ? `${deployment.balance.toFixed(3)} ${token.symbol}` : '—'}
         </span>
       </div>
 
@@ -601,52 +700,79 @@ function LoadingSkeleton() {
 // useTokenActions
 // -----------------------------------------------------------
 //
-//   const { busy, claim, showInMetamask } =
-//     useTokenActions(symbol, wallet, data, addAlert, reload)
-//
 // What the buttons DO — the action side of the page, kept
 // apart from the layout. claim signs the ownership message
 // and asks the backend to send on ONE chain; showInMetamask
 // hops the wallet there and imports the contract. busy names
-// the network with a claim in flight — every claim button
-// disables while any one is. Outcomes become alerts tagged
-// with the chain's network, so they render inside the card
-// whose button was pressed.
+// the network with a claim in flight for the token on screen
+// — every claim button disables while any one is. Outcomes
+// become alerts tagged with the chain's network, so they
+// render inside the card whose button was pressed.
+//
+// The page stays mounted across a token switch, so a claim
+// belongs to the token it was made for: the switch clears
+// every outcome row, the new token's buttons are free at
+// once, and an answer that comes back for a token no longer
+// on screen is dropped. Coming back to the token while its
+// claim is still in flight shows it busy again, and its
+// answer then lands as usual.
 //
 // Used by:
 //   - FaucetERC20 (below)
 // -----------------------------------------------------------
 
-function useTokenActions(symbol, wallet, data, addAlert, reload) {
+function useTokenActions({ symbol, wallet, data, addAlert, clearAlerts, reload }) {
 
-  const [busy, setBusy] = useState(null);
+  // Which token and chain a claim is in flight FOR — the
+  // buttons of that token wait for it, another token's do not
+  const [claimingFor, setClaimingFor] = useState(null);
+  const busy = claimingFor?.symbol === symbol ? claimingFor.network : null;
+  const symbolRef = useRef(symbol);
+
+
+  // A token switch drops the outcome rows — they talk about
+  // the previous token — and notes the switch for any answer
+  // still in flight
+  useEffect(() => {
+    symbolRef.current = symbol;
+    clearAlerts();
+  }, [symbol, clearAlerts]);
 
 
   // Claim on ONE chain. The wallet's current chain doesn't
   // matter — the backend sends on the chain named in the URL,
-  // the signature only proves who is asking.
+  // the signature only proves who is asking. A payout names
+  // its transaction, linked on that chain's explorer; a 200
+  // that names none paid nothing out and is reported as a
+  // failed claim.
   const claim = async (deployment) => {
-    setBusy(deployment.network);
+    const thisClaim = { symbol, network: deployment.network };
+    setClaimingFor(thisClaim);
     try {
       const { nonce, signature } = await wallet.signMessage();
 
-      await axios.get(`/api/erc20/${deployment.network}/${symbol}/request`, {
+      const { data: payout } = await axios.get(`/api/erc20/${deployment.network}/${symbol}/request`, {
         params: { address: wallet.account, signature, nonce },
       });
+      const txHash = payoutTxid(payout, 'transaction_hash', CLAIM_FAILED);
 
-      addAlert(
-        'success',
-        `${data.token.chunk_size} ${symbol} išsiųsta! Jei piniginėje jų nesimato — spauskite „Rodyti MetaMask“.`,
-        deployment.network,
-      );
       reload();
+      if (symbolRef.current !== thisClaim.symbol) return;
+      addAlert('success', (
+        <PayoutMessage
+          sentence={`${data.token.chunk_size} ${symbol} išsiųsta! Jei piniginėje jų nesimato — spauskite „Rodyti MetaMask“.`}
+          txid={txHash}
+          explorer={deployment.block_explorer_urls?.[0]}
+        />
+      ), deployment.network);
     } catch (e) {
-      // Backend refusals arrive as { error } in the response
-      // body; wallet errors (sign refused, not connected) only
-      // carry a message
-      addAlert('error', e.response?.data?.error || e.message || 'Nepavyko išsiųsti žetonų.', deployment.network);
+      // The backend's refusals are shown word for word, a
+      // wallet's refusal in the wallet's words, anything else
+      // as the page's own sentence with the reason after it
+      if (symbolRef.current !== thisClaim.symbol) return;
+      addAlert('error', requestErrorText(e, CLAIM_FAILED), deployment.network);
     } finally {
-      setBusy(null);
+      setClaimingFor((current) => (current === thisClaim ? null : current));
     }
   };
 
@@ -654,8 +780,11 @@ function useTokenActions(symbol, wallet, data, addAlert, reload) {
   // Make the token visible: hop to that chain if the wallet is
   // elsewhere, then import the contract address so MetaMask
   // stops pretending the balance isn't there. MetaMask's OWN
-  // provider — bare window.ethereum may be another wallet
+  // provider — bare window.ethereum may be another wallet. A
+  // refusal that comes back after a token switch is dropped,
+  // like a claim's late answer.
   const showInMetamask = async (deployment) => {
+    const forSymbol = symbol;
     const provider = getMetamaskProvider();
     if (!provider) {
       addAlert('error', 'Pirmiausia įsidiekite MetaMask.', deployment.network);
@@ -668,6 +797,7 @@ function useTokenActions(symbol, wallet, data, addAlert, reload) {
       }
       await watchTokenInMetamask(provider, deployment, data.token);
     } catch (e) {
+      if (symbolRef.current !== forSymbol) return;
       addAlert('error', e.message || 'Nepavyko pridėti žetono į MetaMask.', deployment.network);
     }
   };
@@ -708,8 +838,8 @@ export default function FaucetERC20() {
 
   const wallet = useMetamaskWallet();
   const { data, error, reload } = useToken(symbol, wallet.account);
-  const { alerts, addAlert } = useAlerts();
-  const { busy, claim, showInMetamask } = useTokenActions(symbol, wallet, data, addAlert, reload);
+  const { alerts, addAlert, clearAlerts } = useAlerts();
+  const { busy, claim, showInMetamask } = useTokenActions({ symbol, wallet, data, addAlert, clearAlerts, reload });
 
   const gateAlerts = alerts.filter((a) => !a.tag);
   const alertsFor = (network) => alerts.filter((a) => a.tag === network);

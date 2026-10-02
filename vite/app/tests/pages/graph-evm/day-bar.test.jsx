@@ -9,11 +9,12 @@
 //  pick a day over the same list — the searchable "Data"
 //  dropdown (newest first, today marked "(šiandien)", typed
 //  fragments filter it), the − / + steppers (one used day at a
-//  time, disabled at the ends) and the slider (keyboard steps
-//  commit, a drag previews the day on the thumb and fetches
-//  only on release) — the single-day bar, a failed or empty
-//  list, the picked day's half-open LOCAL-midnight window in
-//  every request (UTC, Vilnius, the 25-hour autumn day), the
+//  time, disabled at the ends) and the slider (named "Diena"
+//  and speaking the day it stands on, keyboard steps commit, a
+//  drag previews the day on the thumb and fetches only on
+//  release) — the single-day bar, a failed or empty list, the
+//  picked day's half-open LOCAL-midnight window in every
+//  request (UTC, Vilnius, the 25-hour autumn day), the
 //  selection kept as a day through a refetched list, and the
 //  midnight tick-over: a tab watching today follows the
 //  calendar, one watching a past day stays put.
@@ -175,15 +176,21 @@ describe('The day list', () => {
   });
 
 
-  // The slider speaks its position, not the day: no name, and
-  // aria-valuenow is the index into the day list
-  it.fails('names the day slider and has it speak the day, not its index — PINNED KNOWN BUG: the slider has no accessible name and announces "3" for 2026-09-30', async () => {
-    installGraphBackend({ transfers: DAY_TRANSFERS, addresses: NAMES });
-    renderGraph();
+  // The slider's positions are indices into the day list — what
+  // it speaks is the day it stands on, today marked the way the
+  // dropdown marks it
+  it('names the day slider "Diena" and has it speak the day, not its index', async () => {
+    const backend = installGraphBackend({ transfers: DAY_TRANSFERS, addresses: NAMES });
+    const { user } = renderGraph();
     await bootedNetwork();
     await waitFor(() => expect(later()).toBeInTheDocument());
-    expect(daySlider()).toHaveAccessibleName();
-    expect(daySlider()).toHaveAttribute('aria-valuetext', expect.stringContaining(TODAY));
+    expect(daySlider()).toHaveAccessibleName('Diena');
+    expect(daySlider()).toHaveAttribute('aria-valuetext', `${TODAY} (šiandien)`);
+
+    act(() => daySlider().focus());
+    await user.keyboard('{ArrowLeft}');
+    await expectGraphOf(backend, '2026-09-29');
+    expect(daySlider()).toHaveAttribute('aria-valuetext', '2026-09-29');
   });
 });
 

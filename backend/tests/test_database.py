@@ -23,6 +23,10 @@ from app.database.db_init import init_db_tables
 
 
 
+
+
+
+
 ############################################################
 # TempDbCase
 ############################################################
@@ -48,6 +52,10 @@ class TempDbCase(unittest.TestCase):
                 os.unlink(self.db_path + suffix)
             except FileNotFoundError:
                 pass
+
+
+
+
 
 
 
@@ -86,6 +94,10 @@ class SchemaTests(TempDbCase):
             ids = [row[0] for row in conn.execute('SELECT id FROM Graph_Transactions ORDER BY id')]
 
         self.assertEqual(ids, [1, 2, 4])                    # AUTOINCREMENT never reuses an id
+
+
+
+
 
 
 

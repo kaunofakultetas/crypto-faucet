@@ -25,14 +25,12 @@ import { useRef, useState } from 'react';
 // useBackgroundPan (default export)
 // -----------------------------------------------------------
 //
-//   const { panning, panHandlers } = useBackgroundPan(scrollerRef)
-//
-//   panning     — a pan is in progress (for the grabbing cursor)
-//   panHandlers — pointer handlers to spread on the scroller
-//
-// Spread panHandlers on the scroller and switch its cursor on
-// `panning`: a press on empty canvas starts the pan, a move
-// scrolls, releasing (or a cancelled pointer) ends it.
+// Panning by dragging the empty canvas. The caller spreads
+// panHandlers — the pointer handlers — on the scroller it
+// passed in, and shows the grabbing cursor while `panning`
+// holds: a mouse press on empty canvas starts the pan, a
+// move scrolls, and the release — or a cancelled pointer —
+// ends it.
 //
 // Used by:
 //   - UtxoFlowGraph.jsx — on the canvas' scrolling element

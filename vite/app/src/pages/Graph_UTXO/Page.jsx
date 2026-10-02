@@ -8,7 +8,8 @@
 //  from the network's Electrum server (see
 //  hooks/useTransactionGraph.js). The network's display names
 //  come from the /api/utxo/networks catalog (cache shared with
-//  the faucet page), so amounts read "tBTC4" on btc4.
+//  the faucet page): the title carries the network's full
+//  name, and every amount its own unit.
 //
 //  On top, the title and — in the middle of the row — the day
 //  slider over the days the faucet has mined transactions on,

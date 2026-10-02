@@ -169,8 +169,9 @@ export const askedFor = (calls, day) => calls.filter((call) => call.query.from =
 
 export const shortOf = (txid) => `${txid.slice(0, 6)}…${txid.slice(-4)}`;
 
-// hidden: true — the readers of the drawing's geometry must
-// work while a dialog hides the page from assistive tech
+// Found with hidden elements included — the readers of the
+// drawing's geometry must work while a dialog hides the page
+// from assistive tech
 export const graphGroup = () => screen.getByRole('group', { name: GRAPH_NAME, hidden: true });
 export const scroller = () => graphGroup().parentElement;
 export const header = () => scroller().firstElementChild;
@@ -312,12 +313,13 @@ export function edges() {
 // Geometry
 // -----------------------------------------------------------
 //
-// installViewport(width, height) — call BEFORE rendering: the
+// installViewport must run BEFORE rendering: the
 // ResizeObserver the zoom creates becomes a double that gives
-// every element it observes that client size and reports it
-// at once; resize(w, h) reports a new size later.
-// roundScrolling(element) makes the element keep whole-pixel
-// scroll offsets, as a browser does.
+// every element it observes the view's client size (800 by
+// 600 unless the test names another) and reports it at once;
+// the resize function it hands back reports a new size later.
+// roundScrolling makes an element keep whole-pixel scroll
+// offsets, as a browser does.
 // -----------------------------------------------------------
 
 export function installViewport(width = 800, height = 600) {
@@ -387,7 +389,8 @@ export function roundScrolling(element) {
 // them (pointer events with the pointer's id). fireEvent
 // returns false when the handler prevented the default.
 // dragBy presses at `from`, moves in `steps` equal steps and
-// releases — unless `release: false` leaves it held.
+// releases — unless its `release` option is turned off, which
+// leaves it held.
 // -----------------------------------------------------------
 
 export function press(target, { x = 100, y = 100, pointerId = 1, button = 0, pointerType = 'mouse' } = {}) {

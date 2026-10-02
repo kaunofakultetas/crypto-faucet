@@ -17,11 +17,10 @@
 //                           PATTERN (`path`) so useParams gives
 //                           it its :network / :token
 //
-//  renderPage(ui, opts)   — the frame above around any element
-//  renderApp({ route })   — the REAL App.jsx (its own
-//                           BrowserRouter, navbar, footer, error
-//                           boundaries, every route), started at
-//                           `route` through the History API
+//  renderPage puts the frame above around any element;
+//  renderApp mounts the REAL App.jsx instead — its own
+//  BrowserRouter, navbar, footer, error boundaries and every
+//  route — started at a route through the History API.
 //
 //  Used by:
 //    - every component and page test
@@ -143,17 +142,18 @@ function Providers({ client, children }) {
 // renderPage
 // -----------------------------------------------------------
 //
-// Renders `ui` inside the production frame (see the header)
-// and returns Testing Library's result plus the query client
-// and a userEvent instance. The frame is Testing Library's
-// `wrapper`, so rerender(nextUi) keeps it — and the page's
-// state — and only swaps the element. Options:
+// Renders an element inside the production frame (see the
+// header) and returns Testing Library's result plus the query
+// client and a userEvent instance. The frame is Testing
+// Library's `wrapper`, so a rerender keeps it — and the page's
+// state — and only swaps the element.
 //
-//   route   — the memory router's initial entry ('/')
-//   path    — the route pattern the element is mounted on
-//             ('/faucet/evm/:network'); without it the element
-//             is rendered directly inside the router
-//   client  — a prepared QueryClient (default: makeQueryClient())
+// `route` is the memory router's initial entry, "/" unless
+// the test names another. `path` is the route pattern the
+// element is mounted on, so useParams reads its params from
+// the route; without it the element is rendered directly
+// inside the router. `client` is a prepared QueryClient — a
+// fresh makeQueryClient one otherwise.
 //
 // Used by:
 //   - component and page tests

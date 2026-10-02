@@ -73,19 +73,17 @@ const clampScale = (value) => Math.min(ZOOM_CONFIG.MAX_SCALE, Math.max(ZOOM_CONF
 // useZoom (default export)
 // -----------------------------------------------------------
 //
-//   const { scale, margin, setZoom, zoomIn, zoomOut, goHome } =
-//     useZoom(scrollerRef)
-//
-//   scale     — the zoom: canvas units × scale = screen pixels
-//   margin    — { x, y }: the whitespace (px) left of / above
-//               the drawing, and again right of / below it
-//   setZoom(value)    — zoom to value, around the view's middle
-//   zoomIn / zoomOut  — one BUTTON_STEP, around the middle
-//   goHome()  — scroll the drawing's top-left corner to the
-//               view's top-left, under the pinned row
-//
-// scrollerRef is the scrolling element around the canvas; the
-// wheel listener sits on it.
+// The zoom of the canvas and the actions that change it. The
+// caller gets `scale` — a length in canvas units times the
+// scale is screen pixels — and `margin`, the whitespace in px:
+// one view wide left and right of the drawing, one view tall
+// above and below it. Then the actions: setZoom zooms to the
+// scale it is given, zoomIn and zoomOut move one BUTTON_STEP
+// — all three around the view's middle — and goHome scrolls
+// the drawing's top-left corner to the view's top-left, just
+// under the pinned row. The wheel needs no action: the hook
+// listens on the scroller it is handed (the scrolling element
+// around the canvas) and zooms around the cursor itself.
 //
 // Used by:
 //   - UtxoFlowGraph.jsx

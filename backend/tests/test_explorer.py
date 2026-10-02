@@ -115,6 +115,10 @@ def scripted(replies, calls=None):
 
 
 
+
+
+
+
 ############################################################
 # ExplorerTestCase
 ############################################################
@@ -172,6 +176,10 @@ class ExplorerTestCase(unittest.TestCase):
     def stored_tx_count(self):
         with get_db_connection(self.db_path) as conn:
             return conn.execute('SELECT COUNT(*) FROM Graph_Transactions').fetchone()[0]
+
+
+
+
 
 
 
@@ -253,6 +261,10 @@ class ExplorerPollutionTests(ExplorerTestCase):
                 'testchain', hub, 1750000000, 99999999999)
         self.assertEqual(status, 200)
         refresh.assert_not_called()
+
+
+
+
 
 
 
@@ -397,6 +409,10 @@ class ExplorerFetchGateTests(ExplorerTestCase):
 
 
 
+
+
+
+
 ############################################################
 # ExplorerServeTests
 ############################################################
@@ -520,6 +536,9 @@ class ExplorerServeTests(ExplorerTestCase):
 
 
 
+
+
+
 ############################################################
 # ExplorerInputTests
 ############################################################
@@ -597,6 +616,10 @@ class ExplorerInputTests(ExplorerTestCase):
 
 
 
+
+
+
+
 ############################################################
 # AddressNameTests
 ############################################################
@@ -636,6 +659,9 @@ class AddressNameTests(ExplorerTestCase):
         self.explorer.set_address_name(FAUCET, 'second')
         self.assertEqual(self.stored_name(FAUCET), 'second')
         self.assertEqual(self.row_count(), 1)
+
+
+
 
 
 
@@ -729,6 +755,10 @@ class ExplorerRefreshTests(ExplorerTestCase):
 
 
 
+
+
+
+
 ############################################################
 # ExplorerClassificationTests
 ############################################################
@@ -774,6 +804,10 @@ class ExplorerClassificationTests(ExplorerTestCase):
         flows = self.flows(FAUCET, self.DAY - 10, self.DAY + 10)
 
         self.assertEqual(sum(flow['value'] for flow in flows), 0)
+
+
+
+
 
 
 

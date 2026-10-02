@@ -33,6 +33,10 @@ app = Flask(__name__)
 
 
 
+
+
+
+
 ############################################################
 # The validated config maps
 ############################################################
@@ -169,7 +173,3 @@ app.register_blueprint(bp_icons, url_prefix='')
 if __name__ == '__main__':
     APP_DEBUG = os.getenv('APP_DEBUG', 'false').lower() == 'true'
     app.run(host='0.0.0.0', port=8000, debug=APP_DEBUG)
-
-
-
-

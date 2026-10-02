@@ -89,6 +89,10 @@ FILLER = [{'tx_hash': f'{i:064x}', 'height': 100 + i} for i in range(HUB_HISTORY
 
 
 
+
+
+
+
 ############################################################
 # header
 ############################################################
@@ -103,6 +107,10 @@ FILLER = [{'tx_hash': f'{i:064x}', 'height': 100 + i} for i in range(HUB_HISTORY
 def header(height):
     stamp = TIMES.get(height, NOW - 10 * 86400 + height)
     return bytes(68) + stamp.to_bytes(4, 'little') + bytes(8)
+
+
+
+
 
 
 
@@ -155,6 +163,10 @@ class FakeGraphElectrum:
 
 
 
+
+
+
+
 ############################################################
 # p2wpkh / make_tx
 ############################################################
@@ -182,6 +194,10 @@ def make_tx(inputs, outputs, coinbase=False, witness=False):
         for inp in tx.vin:
             inp.witness = Witness([b'\x30' * 71, b'\x02' * 33])
     return tx
+
+
+
+
 
 
 
@@ -255,6 +271,10 @@ class GraphWorld:
 
 
 
+
+
+
+
 ############################################################
 # FakeWatcher
 ############################################################
@@ -276,6 +296,10 @@ class FakeWatcher:
 
     def watch(self, scripthashes):
         self.watched |= set(scripthashes)
+
+
+
+
 
 
 
@@ -302,6 +326,10 @@ def recording_threads(started):
             started.append(self.args)
 
     return SimpleNamespace(Thread=RecordingThread)
+
+
+
+
 
 
 
@@ -369,6 +397,10 @@ class ExplorerTestCase(unittest.TestCase):
 
 
 
+
+
+
+
 ############################################################
 # DialectTests
 ############################################################
@@ -414,6 +446,10 @@ class DialectTests(unittest.TestCase):
             self.assertIsNone(dialect.address_of(b'\x21' + b'\x02' * 33 + b'\xac'))
             self.assertIsNone(dialect.address_of(b'\x00\x1e' + b'\x01' * 30))
         self.assertIsNone(self.faucet.network_dialect('doge3').address_of(p2wpkh(0x05).data))
+
+
+
+
 
 
 
@@ -469,6 +505,10 @@ class HelperTests(unittest.TestCase):
             for name in ('UTC', 'Etc/UTC', ' Etc/Zulu '):
                 self.assertIs(explorer_module._zone_of(name), timezone.utc)
             self.assertEqual(str(explorer_module._zone_of('Europe/Vilnius')), 'Europe/Vilnius')
+
+
+
+
 
 
 
@@ -662,6 +702,10 @@ class CrawlTests(ExplorerTestCase):
 
 
 
+
+
+
+
 ############################################################
 # ServeTests
 ############################################################
@@ -766,6 +810,10 @@ class ServeTests(ExplorerTestCase):
 
 
 
+
+
+
+
 ############################################################
 # WatchTests
 ############################################################
@@ -847,6 +895,10 @@ class WatchTests(ExplorerTestCase):
             self.assertEqual(len(started), 1)
             self.explorer._crawl('btc4', *TODAY, True)                # it ends
         self.assertEqual(len(started), 2)
+
+
+
+
 
 
 

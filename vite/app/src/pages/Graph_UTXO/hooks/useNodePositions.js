@@ -27,7 +27,12 @@
 //  otherwise feed back into the drag. A press that never
 //  travels CLICK_SLOP is a click instead: it opens the
 //  transaction's dialog (so do Enter and Space on a focused
-//  box) and moves nothing.
+//  box) and moves nothing. Only one press runs at a time, so
+//  every press must end — on its release, on the browser
+//  cancelling it, on its box losing the pointer capture, or
+//  on its box leaving the day under it (a poll drops a
+//  replaced transaction from the mempool); a press that
+//  outlived its box would refuse every press after it.
 //
 //  Only the boxes a drag moved are kept — in the browser's
 //  localStorage, per network, written when a drag ends; so a
@@ -41,7 +46,7 @@
 //  React in them, then the hook:
 //
 //    columnKeyOf       — a transaction's column
-//    buildColumns      — blocks → columns, mempool last
+//    buildColumns      — the columns, the mempool last
 //    rowTop            — where row N starts in a box
 //    rowCenterY        — where row N's port sits in a box
 //    transactionHeight — a box's height from its rows
@@ -186,15 +191,13 @@ export function transactionHeight(tx) {
 // initialPositions
 // -----------------------------------------------------------
 //
-//   initialPositions(columns, transactions)
-//     → txid → { x (from its column's origin), y }
-//
-// The first layout: each column stacks its transactions top
-// to bottom in list order. A transaction spending one in the
-// SAME column (a chain mined in one block, or waiting
-// together in the mempool) starts to the right of its
-// parent, so the chain reads left to right and the block is
-// born wide enough to show it.
+// The first layout, as every box's spot by txid — its x
+// counted from its column's origin, and its y. Each column
+// stacks its transactions top to bottom in list order. A
+// transaction spending one in the SAME column (a chain mined
+// in one block, or waiting together in the mempool) starts to
+// the right of its parent, so the chain reads left to right
+// and the block is born wide enough to show it.
 //
 // Used by:
 //   - useNodePositions (below) — the spot of every box no
@@ -234,24 +237,23 @@ function initialPositions(columns, transactions) {
 // measureCanvas
 // -----------------------------------------------------------
 //
-//   measureCanvas(columns, transactions, positions)
-//     → { columns: [{ ...column, x, width, origin }], width,
-//         top, height }
-//
-// Every column as wide as its boxes need, padding on both
+// The drawing's measurements: every column again, now with
+// its left edge (x), its width and the origin its boxes' x
+// counts from, and the drawing's width, top edge and height.
+// Every column is as wide as its boxes need, padding on both
 // sides, never narrower than one box — a box left of the
 // padding widens its column to the LEFT, one past the right
-// edge to the right — and the columns laid side by side from
-// 0: x is a column's left edge, origin where its boxes' x
-// counts from (x itself until a box went left of the
-// padding). So a block growing rightward pushes the later
-// blocks along, and one growing leftward moves its own origin
-// and everything after it right — which the drag's scroll
-// turns, on screen, into the earlier blocks sliding left.
-// Vertically the drawing reaches from its highest box to its
-// lowest: `top` is 0 until a box is raised above the first
-// layout's top row, then negative — the drawing's top edge in
-// canvas units, where UtxoFlowGraph starts drawing.
+// edge to the right — and the columns sit side by side from
+// 0. The origin is the column's left edge itself until a box
+// went left of the padding. So a block growing rightward
+// pushes the later blocks along, and one growing leftward
+// moves its own origin and everything after it right — which
+// the drag's scroll turns, on screen, into the earlier blocks
+// sliding left. Vertically the drawing reaches from its
+// highest box to its lowest: `top` is 0 until a box is raised
+// above the first layout's top row, then negative — the
+// drawing's top edge in canvas units, where UtxoFlowGraph
+// starts drawing.
 //
 // Used by:
 //   - useNodePositions (below) — on every render
@@ -323,10 +325,10 @@ function withMoved(dropped, moved) {
 // loadDropped
 // -----------------------------------------------------------
 //
-// A network's saved positions, txid → { x, y }. Storage can
-// be missing, blocked (a private window) or hold anything —
-// every failure reads as nothing saved, and an entry without
-// two finite numbers is skipped.
+// A network's saved positions: each dropped box's x and y by
+// its txid. Storage can be missing, blocked (a private
+// window) or hold anything — every failure reads as nothing
+// saved, and an entry without two finite numbers is skipped.
 //
 // Used by:
 //   - useNodePositions (below) — on mount and on a network
@@ -382,25 +384,23 @@ function saveDropped(network, dropped) {
 // useNodePositions (default export)
 // -----------------------------------------------------------
 //
-//   const { canvas, positions, draggingTxid, bindBox } =
-//     useNodePositions({ network, blocks, transactions, live,
-//                        scale, scrollerRef, onOpen })
+// The boxes' layout and their pointer wiring. The caller gets
+// `canvas`, the drawing as measureCanvas measures it;
+// `positions`, every box's spot by txid; `draggingTxid`, the
+// box being pressed or dragged, null while there is none; and
+// bindBox, which hands out the pointer and key handlers to
+// spread on one box.
 //
-//   canvas        — measured columns (x, width, origin) + the
-//                   drawing's width, top edge and height
-//   positions     — txid → { x (from its column's origin), y }
-//   draggingTxid  — the box being pressed or dragged, or null
-//   bindBox(txid) — pointer + key handlers to spread on that
-//                   box
-//
-// network picks the saved positions; blocks / transactions
-// are the day's; live adds the mempool column; scale is the
-// zoom; scrollerRef is the scrolling element around the
-// canvas; onOpen(txid, rect) runs on a click or Enter / Space,
-// with the box's screen rectangle for the dialog to fly out
-// of. Dropped positions outlive a day switch and a reload
-// (they are kept by txid), so coming back to a day finds it as
-// it was left.
+// The network picks the saved positions; the day's blocks and
+// transactions are laid out, with a mempool column while the
+// window is live; the zoom scale turns screen pixels into
+// canvas units; and the scroller around the canvas is what a
+// drag scrolls along as the drawing grows. onOpen runs on a
+// click, or Enter / Space on a focused box, with the txid and
+// the box's screen rectangle for the dialog to fly out of.
+// Dropped positions outlive a day switch and a reload (they
+// are kept by txid), so coming back to a day finds it as it
+// was left.
 //
 // Used by:
 //   - UtxoFlowGraph.jsx
@@ -435,6 +435,19 @@ export default function useNodePositions({ network, blocks, transactions, live, 
   // no drag runs, or the box has left the day's data
   const draggedColumn = (draggingTxid && columnOf[draggingTxid]) || null;
   const draggedOrigin = draggedColumn ? originOf(draggedColumn) : null;
+
+
+  // A press whose box has left the day — a poll dropped it
+  // from the mempool, or the day changed under it — lost its
+  // pointer capture with the box, so no release will ever
+  // reach it: it ends here. This runs before the scroll-follow
+  // below, which must not move the view for a drag now gone
+  useLayoutEffect(() => {
+    if (draggingTxid !== null && !columnOf[draggingTxid]) {
+      dragRef.current = null;
+      setDraggingTxid(null);
+    }
+  }, [draggingTxid, columnOf]);
 
 
   // A drag grew the drawing at its top, or moved its box's
@@ -491,7 +504,9 @@ export default function useNodePositions({ network, blocks, transactions, live, 
 
 
   // Only the pointer that started the press may end it; a
-  // press that never moved the box was a click and opens it
+  // press that never moved the box was a click and opens it.
+  // A lost pointer capture ends the press too, but opens
+  // nothing: wherever that release goes, it is not this box
   const endPress = (event) => {
     const drag = dragRef.current;
     if (drag?.pointerId !== event.pointerId) return;
@@ -547,6 +562,7 @@ export default function useNodePositions({ network, blocks, transactions, live, 
 
     onPointerUp: endPress,
     onPointerCancel: endPress,
+    onLostPointerCapture: endPress,
 
     // Enter or Space on a focused box opens it too; Space
     // would otherwise scroll the page

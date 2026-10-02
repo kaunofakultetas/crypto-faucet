@@ -28,7 +28,8 @@ import { Box } from '@mui/material';
 // ErrorCard (default export)
 // -----------------------------------------------------------
 //
-//   <ErrorCard>Nežinomas tinklas: {network}</ErrorCard>
+// The card itself: whatever the page passes in, centred in
+// red on the page's usual card surface.
 //
 // Used by:
 //   - see the file header

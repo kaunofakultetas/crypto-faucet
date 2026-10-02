@@ -574,7 +574,7 @@ class SVMFaucet:
         # STEP 2: signature check. This is the exact message the
         # frontend asks Phantom to sign — any mismatch (different
         # nonce, different wording) fails verification.
-        # ======================================================
+        # =======================================================
         # The exact bytes the wallet signed — the wording (its missing
         # commas included) is the contract with the frontend hook that
         # builds the same string; never reword it on one side alone.
@@ -587,7 +587,7 @@ class SVMFaucet:
         # holds a chunk, the cooldown slot must be free, and the
         # faucet must still have the chunk plus the signature fee.
         # Every failure path after the claim releases the slot.
-        # =======================================================
+        # ========================================================
         try:
             user_lamports = client.get_balance(to_address)
         except Exception:
@@ -627,7 +627,7 @@ class SVMFaucet:
         # can never be prepared in advance the way an EVM nonce
         # can. setdefault is atomic under the GIL, so the lock map
         # needs no lock of its own.
-        # =======================================================
+        # ========================================================
         try:
             with self._send_locks.setdefault(network, threading.Lock()):
                 blockhash = Hash.from_string(client.get_latest_blockhash())

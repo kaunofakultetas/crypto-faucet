@@ -4,24 +4,31 @@
 //  The token faucet end to end against the backend double and
 //  the MetaMask double: the skeleton, an unknown (or hostile)
 //  :token and the backend's other failures (a 4xx stops the
-//  polling, a 5xx recovers), the title, one claim card per
-//  deployment (its chain, the amount, the faucet balance or a
-//  dash, the contract with its copy button, the "piniginėje"
-//  chip), a token deployed nowhere, the return address; the
-//  five-step flow — install, connect, a TOKEN chain (the switch
-//  target, a chain MetaMask must add from the deployment), gas
-//  (wallet_native_wei against min_native_wei, the notice card
-//  with its links to the native faucets, fail-open when the
-//  balance is unknown) and the claim; claiming on one chain —
-//  the signed request, the outcome inside the card that was
-//  pressed, the reload, every button waiting while one claim
-//  is in flight, the backend's refusals word for word, a
-//  dropped connection, a declined signature; "Rodyti MetaMask"
-//  (wallet_watchAsset, the hop to that chain first, every
-//  refusal in its card); the student's moves inside MetaMask;
-//  the 10 s poll; a token switch; and the backend contract
-//  matrices for /api/erc20/token/:symbol (with and without a
-//  connected wallet) and the payout's failure answers.
+//  polling, a 5xx recovers), an answer the page cannot be
+//  built from (the error card, never a crash); the title, one
+//  claim card per deployment (its chain, the amount, the
+//  faucet balance or a dash, the contract with its copy
+//  button, the "piniginėje" chip), a token deployed nowhere,
+//  the return address; the five-step flow — install, connect,
+//  a TOKEN chain (the switch target, a chain MetaMask must add
+//  from the deployment), gas (wallet_native_wei against
+//  min_native_wei, the notice card with its links to the
+//  native faucets, fail-open when an amount is unknown or
+//  unreadable) and the claim; claiming on one chain — the
+//  signed request, the outcome inside the card that was
+//  pressed (a payout with its transaction linked on that
+//  chain's explorer, a 200 that names none), the reload, every
+//  button waiting while one claim is in flight, the backend's
+//  refusals word for word, a dropped connection and a proxy's
+//  error page in Lithuanian, a declined signature; "Rodyti
+//  MetaMask" (wallet_watchAsset, the hop to that chain first,
+//  every refusal in its card); the student's moves inside
+//  MetaMask (a lost chain read and an unannounced switch
+//  repaired by the chain tick); the 10 s poll; a token switch
+//  (a claim's state and outcomes stay with its token); and the
+//  backend contract matrices for /api/erc20/token/:symbol
+//  (with and without a connected wallet) and the payout's
+//  failure answers.
 //
 //  Every test gets a fresh copy of the page and its wallet
 //  hook (vi.resetModules) — the hook caches the first MetaMask
@@ -45,6 +52,12 @@ import {
 const CLAIM_MESSAGE = 'Pasirašykite žinutę kad patvirtintumėte jog naudojate šią piniginę. Nonce: ';
 const SUCCESS = '5 LINK išsiųsta! Jei piniginėje jų nesimato — spauskite „Rodyti MetaMask“.';
 const STATE_WORDS = /^(atlikta|dabartinis žingsnis|dar neatlikta)$/;
+
+// The payout's transaction, and the page's own sentences for
+// a failed claim and a token it could not read
+const TX_HASH = f.erc20Payout().transaction_hash;
+const CLAIM_FAILED = 'Nepavyko išsiųsti žetonų.';
+const TOKEN_FAILED = 'Nepavyko gauti žetono informacijos';
 
 // The ERC-20 backend's own refusals (erc20_faucet.py)
 const TOKEN_COOLDOWN = 'Žetonai jums jau išsiųsti. Daugiau galėsite pasiimti už 3500 sek.';
@@ -102,9 +115,11 @@ beforeEach(async () => {
 // says otherwise, null without an address) and any per-chain
 // `patch` — and returns the call record. cardOf finds a
 // chain's card: the chain's name heads it (the name, its row,
-// the card). freezePolls fakes ONLY setInterval, like the EVM
-// page test: the 10 s poll stands still until advanced, while
-// requests and findBy* run on real time.
+// the card); payoutAlert finds a success alert — in one card,
+// or anywhere — by the sentence that opens it. freezePolls
+// fakes ONLY setInterval, like the EVM page test: the 10 s
+// poll and the wallet's chain tick stand still until
+// advanced, while requests and findBy* run on real time.
 // -----------------------------------------------------------
 
 function serveToken({ chains = ['sepolia'], gas = {}, patch = {} } = {}) {
@@ -154,6 +169,8 @@ const cardOf = (fullName) => screen.getByText(fullName, { selector: 'span' }).pa
 const valueIn = (card, label) => within(card).getByText(label).nextElementSibling;
 const claimIn = (card, symbol = 'LINK') => within(card).getByRole('button', { name: `Gauti ${symbol}` });
 const showIn = (card) => within(card).getByRole('button', { name: 'Rodyti MetaMask' });
+const payoutAlert = async (card) =>
+  (await (card ? within(card) : screen).findByText(SUCCESS, { exact: false })).closest('[role="alert"]');
 
 const currentStep = () => document.querySelector('[aria-current="step"]');
 const stepStates = () => screen.getAllByText(STATE_WORDS).map((word) => word.textContent);
@@ -241,6 +258,37 @@ describe("Loading and the backend's failures", () => {
   });
 
 
+  it.each([
+    ['a bare string', 'netikėtas atsakymas'],
+    ['a number', 42],
+    ['a list', [f.erc20Token('LINK')]],
+    ['JSON null', null],
+    ['an empty object', {}],
+    ['a token without its deployments', { ...f.erc20Token('LINK'), deployments: undefined }],
+    ['deployments that are no list', { ...f.erc20Token('LINK'), deployments: { sepolia: f.erc20Token('LINK').deployments[0] } }],
+    ['a deployment that is null', { ...f.erc20Token('LINK'), deployments: [null] }],
+    ['a token that is a bare string', { ...f.erc20Token('LINK'), token: 'LINK' }],
+  ])('says the same for a token answer that is %s — never a crash, never an endless skeleton', async (_, body) => {
+    given.json('get', '/api/erc20/token/:symbol', body);
+    renderTokenFaucet();
+    expect(await screen.findByText(TOKEN_FAILED)).toBeInTheDocument();
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+
+  it('keeps asking after an answer it cannot use — the token shows once the backend sends it whole', async () => {
+    freezePolls();
+    given.sequence('get', '/api/erc20/token/:symbol', [
+      { body: { token: f.erc20Token('LINK').token } },
+      { body: f.erc20Token('LINK') },
+    ]);
+    renderTokenFaucet();
+    expect(await screen.findByText(TOKEN_FAILED)).toBeInTheDocument();
+    await act(() => vi.advanceTimersByTimeAsync(10000));
+    expect(await pageLoaded()).toBeInTheDocument();
+  });
+
+
   it("shows a 5xx's own message and keeps asking — the page recovers once the backend is back", async () => {
     freezePolls();
     given.sequence('get', '/api/erc20/token/:symbol', [
@@ -316,6 +364,19 @@ describe('The page — title, chain cards, return address', () => {
     renderTokenFaucet();
     await pageLoaded();
     expect(valueIn(cardOf('Ethereum Sepolia'), 'Čiaupo balansas:')).toHaveTextContent('—');
+  });
+
+
+  it.each([
+    ['a numeric string', '145'],
+    ['a word', 'daug'],
+    ['an object', { amount: 145 }],
+  ])('shows a dash, not a crash, for a faucet balance sent as %s — the other cards unharmed', async (_, balance) => {
+    serveToken({ chains: ['sepolia', 'hoodi'], patch: { sepolia: { balance } } });
+    renderTokenFaucet();
+    await pageLoaded();
+    expect(valueIn(cardOf('Ethereum Sepolia'), 'Čiaupo balansas:')).toHaveTextContent('—');
+    expect(valueIn(cardOf('Ethereum Hoodi'), 'Čiaupo balansas:')).toHaveTextContent('90.500 LINK');
   });
 
 
@@ -548,6 +609,30 @@ describe('The five-step flow', () => {
   });
 
 
+  it.each([
+    ['a fraction', '0.05'],
+    ['a word', 'daug'],
+    ['a bare number', 50000000000000000],
+    ['a negative amount', '-1'],
+  ])('fails open the same way on a native balance it cannot read — %s — never a crash', async (_, wei) => {
+    serveToken({ gas: { sepolia: wei } });
+    installMetamask({ connected: true });
+    renderTokenFaucet();
+    await readyToClaim();
+    expect(screen.queryByText('Trūksta tinklo kriptovaliutos')).toBeNull();
+    expect(currentStep()).toHaveTextContent('Atsisiųsti Chainlink žetoną');
+  });
+
+
+  it('fails open on a minimum it cannot read — the claim is enabled', async () => {
+    serveToken({ gas: { sepolia: POOR }, patch: { sepolia: { min_native_wei: 'daug' } } });
+    installMetamask({ connected: true });
+    renderTokenFaucet();
+    await readyToClaim();
+    expect(screen.queryByText('Trūksta tinklo kriptovaliutos')).toBeNull();
+  });
+
+
   it('asks for no gas on a chain without min_native_wei', async () => {
     serveToken({ gas: { sepolia: '0' }, patch: { sepolia: { min_native_wei: undefined } } });
     installMetamask({ connected: true });
@@ -577,7 +662,9 @@ describe('The five-step flow', () => {
 //
 // Sign, then GET /api/erc20/<network>/<symbol>/request on the
 // chain whose button was pressed; the outcome inside that
-// card; every claim button waits while one is in flight.
+// card — a payout with its transaction, linked on that
+// chain's block explorer; every claim button waits while one
+// is in flight.
 // -----------------------------------------------------------
 
 describe('Claiming a token', () => {
@@ -588,7 +675,7 @@ describe('Claiming a token', () => {
     const { user } = renderTokenFaucet();
     const card = await readyToClaim();
     await user.click(claimIn(card));
-    await within(card).findByText(SUCCESS);
+    await payoutAlert(card);
 
     expect(payouts).toHaveLength(1);
     const { nonce } = payouts[0].query;
@@ -598,7 +685,7 @@ describe('Claiming a token', () => {
   });
 
 
-  it("claims on the chain whose button was pressed, whatever chain the wallet is on, and tells the student in that card", async () => {
+  it("claims on the chain whose button was pressed, whatever chain the wallet is on, and tells the student in that card — the transaction on that chain's explorer", async () => {
     serveToken({ chains: ['sepolia', 'hoodi'] });
     const payouts = given.capture('get', '/api/erc20/:network/:symbol/request', f.erc20Payout('LINK', 'hoodi'));
     installMetamask({ connected: true });
@@ -608,10 +695,57 @@ describe('Claiming a token', () => {
     await user.click(claimIn(hoodi));
 
     const alert = await within(hoodi).findByRole('alert');
-    expect(alert.textContent).toBe(SUCCESS);
+    expect(alert.textContent).toBe(`${SUCCESS} Transakcija: ${TX_HASH}`);
     expect(within(alert).getByTestId('SuccessOutlinedIcon')).toBeInTheDocument();
+    expect(within(alert).getByRole('link', { name: TX_HASH })).toHaveAttribute('href', `https://light-hoodi.beaconcha.in/tx/${TX_HASH}`);
     expect(payouts[0].params).toEqual({ network: 'hoodi', symbol: 'LINK' });
     expect(within(cardOf('Ethereum Sepolia')).queryByRole('alert')).toBeNull();
+  });
+
+
+  it("links the transaction to its page on the chain's block explorer, opened in a new tab", async () => {
+    installMetamask({ connected: true });
+    const { user } = renderTokenFaucet();
+    const card = await readyToClaim();
+    await user.click(claimIn(card));
+    const alert = await payoutAlert(card);
+    expect(alert.textContent).toBe(`${SUCCESS} Transakcija: ${TX_HASH}`);
+    const link = within(alert).getByRole('link', { name: TX_HASH });
+    expect(link).toHaveAttribute('href', `https://sepolia.etherscan.io/tx/${TX_HASH}`);
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
+
+  it('names the transaction as plain text on a chain without an explorer configured', async () => {
+    serveToken({ patch: { sepolia: { block_explorer_urls: [] } } });
+    installMetamask({ connected: true });
+    const { user } = renderTokenFaucet();
+    const card = await readyToClaim();
+    await user.click(claimIn(card));
+    const alert = await payoutAlert(card);
+    expect(alert.textContent).toBe(`${SUCCESS} Transakcija: ${TX_HASH}`);
+    expect(within(alert).queryByRole('link')).toBeNull();
+  });
+
+
+  it.each([
+    ['no transaction id', { message: 'LINK sent successfully', amount: 5.0, token: 'LINK', network: 'sepolia' }],
+    ['a null transaction id', { ...f.erc20Payout(), transaction_hash: null }],
+    ['a numeric transaction id', { ...f.erc20Payout(), transaction_hash: 12345 }],
+    ['an empty transaction id', { ...f.erc20Payout(), transaction_hash: '' }],
+    ['a bare string for a body', 'LINK sent successfully'],
+    ['JSON null for a body', null],
+  ])('reports a 200 with %s as a failed claim inside the card, not a payout', async (_, body) => {
+    given.json('get', '/api/erc20/:network/:symbol/request', body);
+    installMetamask({ connected: true });
+    const { user } = renderTokenFaucet();
+    const card = await readyToClaim();
+    await user.click(claimIn(card));
+    const alert = await within(card).findByRole('alert');
+    expect(alert.textContent).toBe(CLAIM_FAILED);
+    expect(within(alert).getByTestId('ErrorOutlineIcon')).toBeInTheDocument();
+    await waitFor(() => expect(claimIn(cardOf('Ethereum Sepolia'))).not.toHaveAttribute('aria-disabled'));
   });
 
 
@@ -653,7 +787,7 @@ describe('Claiming a token', () => {
     fireEvent.click(other);
     await act(async () => signature.release());
 
-    await within(sepolia).findByText(SUCCESS);
+    await payoutAlert(sepolia);
     expect(metamask.callsTo('personal_sign')).toHaveLength(1);
     expect(payouts).toHaveLength(1);
     expect(claimIn(cardOf('Ethereum Hoodi'))).not.toHaveAttribute('aria-disabled');
@@ -695,13 +829,23 @@ describe('Claiming a token', () => {
   });
 
 
-  it.fails('explains a dropped connection in Lithuanian — PINNED KNOWN BUG: the card shows axios\'s English "Network Error"; the page\'s Lithuanian fallback is unreachable', async () => {
+  it("explains a dropped connection in Lithuanian inside the card — the page's own sentence and a word about the connection", async () => {
     given.networkError('get', '/api/erc20/:network/:symbol/request');
     installMetamask({ connected: true });
     const { user } = renderTokenFaucet();
     const card = await readyToClaim();
     await user.click(claimIn(card));
-    expect((await within(card).findByRole('alert')).textContent).toMatch(/^Nepavyko išsiųsti žetonų/);
+    expect((await within(card).findByRole('alert')).textContent).toBe(`${CLAIM_FAILED} Patikrinkite interneto ryšį.`);
+  });
+
+
+  it("explains a proxy's error page in Lithuanian inside the card — the page's own sentence and the status it answered with", async () => {
+    given.html('get', '/api/erc20/:network/:symbol/request');
+    installMetamask({ connected: true });
+    const { user } = renderTokenFaucet();
+    const card = await readyToClaim();
+    await user.click(claimIn(card));
+    expect((await within(card).findByRole('alert')).textContent).toBe(`${CLAIM_FAILED} Serveris grąžino klaidą (502).`);
   });
 
 
@@ -724,7 +868,7 @@ describe('Claiming a token', () => {
     act(() => metamask.changeAccounts([OTHER_ACCOUNT]));
     await waitFor(() => expect(connectedLine()).toHaveTextContent(OTHER_ACCOUNT));
     await user.click(claimIn(cardOf('Ethereum Sepolia')));
-    await screen.findByText(SUCCESS);
+    await payoutAlert();
     expect(payouts[0].query.address).toBe(OTHER_ACCOUNT);
   });
 });
@@ -774,6 +918,9 @@ describe('"Rodyti MetaMask" — importing the token', () => {
 
 
   it("hops first when MetaMask's chain read failed — an unknown chain is never taken for the card's", async () => {
+    // The chain tick would repair the read on its own a second
+    // later — frozen, so the student's click comes first
+    freezePolls();
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     const metamask = installMetamask({ connected: true })
       .fail('eth_chainId', rpcError(-32603, 'Disconnected from MetaMask background.'), { once: true });
@@ -853,6 +1000,10 @@ describe('"Rodyti MetaMask" — importing the token', () => {
 describe("The student's moves inside MetaMask while on the page", () => {
 
   it('lets the network step repair a failed first chain read — the switch finds MetaMask already there', async () => {
+    // The chain tick would repair the read on its own a second
+    // later (next test) — frozen, so the student's click comes
+    // first
+    freezePolls();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const metamask = installMetamask({ connected: true })
       .fail('eth_chainId', rpcError(-32603, 'Disconnected from MetaMask background.'), { once: true });
@@ -868,7 +1019,7 @@ describe("The student's moves inside MetaMask while on the page", () => {
   });
 
 
-  it.fails('repairs a failed first chain read on its own, as the balance tick does on the EVM page — PINNED KNOWN BUG: with no expected chain nothing re-reads it, so the page keeps asking to switch to the chain the wallet is already on', async () => {
+  it('repairs a failed first chain read on its own, as the balance tick does on the EVM page — the switch step goes, the claim opens', async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     installMetamask({ connected: true })
@@ -879,6 +1030,21 @@ describe("The student's moves inside MetaMask while on the page", () => {
     await settle(100);
     expect(screen.queryByRole('button', { name: 'Persijungti į Ethereum Sepolia tinklą' })).toBeNull();
     expect(claimIn(cardOf('Ethereum Sepolia'))).toBeEnabled();
+  });
+
+
+  it('catches a chain switch MetaMask did not announce (no chainChanged) on the next tick — the chip moves', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    serveToken({ chains: ['sepolia', 'hoodi'] });
+    const metamask = installMetamask({ connected: true, chains: [MAINNET, SEPOLIA, HOODI] });
+    renderTokenFaucet();
+    await readyToClaim();
+    expect(within(cardOf('Ethereum Sepolia')).getByText('piniginėje')).toBeInTheDocument();
+
+    metamask.changeChain(HOODI, { silently: true });
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(await within(cardOf('Ethereum Hoodi')).findByText('piniginėje')).toBeInTheDocument();
+    expect(within(cardOf('Ethereum Sepolia')).queryByText('piniginėje')).toBeNull();
   });
 
 
@@ -946,6 +1112,12 @@ describe("The student's moves inside MetaMask while on the page", () => {
 // -----------------------------------------------------------
 // The token poll and a token switch
 // -----------------------------------------------------------
+//
+// The 10 s poll, and the picker moving the page from LINK to
+// FOLD without remounting it: the new token's skeleton, then
+// its cards, while a LINK claim's state, answer and outcome
+// rows stay with LINK.
+// -----------------------------------------------------------
 
 describe('The token poll and a token switch', () => {
 
@@ -989,7 +1161,7 @@ describe('The token poll and a token switch', () => {
   });
 
 
-  it.fails("keeps FOLD's claim buttons free while a LINK claim is still in flight — PINNED KNOWN BUG: `busy` survives the token switch, so FOLD's Sepolia card says \"Siunčiama…\" and every FOLD button waits for LINK's request", async () => {
+  it("keeps FOLD's claim buttons free while a LINK claim is still in flight", async () => {
     server.use(http.get(url('/api/erc20/:network/:symbol/request'), () => new Promise(() => {})));
     installMetamask({ connected: true });
     const { user } = renderWithRoutes();
@@ -1005,7 +1177,7 @@ describe('The token poll and a token switch', () => {
   });
 
 
-  it.fails("drops a LINK claim's late answer after a switch to FOLD — PINNED KNOWN BUG: \"5 LINK išsiųsta!\" lands in FOLD's Ethereum Sepolia card", async () => {
+  it("drops a LINK claim's late answer after a switch to FOLD — nothing lands in FOLD's cards", async () => {
     let answer = null;
     server.use(http.get(url('/api/erc20/:network/:symbol/request'), () => new Promise((resolve) => { answer = resolve; })));
     installMetamask({ connected: true });
@@ -1018,11 +1190,12 @@ describe('The token poll and a token switch', () => {
     await pageLoaded('Interfold');
     await act(async () => answer(HttpResponse.json(f.erc20Payout())));
     await settle(100);
-    expect(screen.queryByText(SUCCESS)).toBeNull();
+    expect(screen.queryByText(SUCCESS, { exact: false })).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 
 
-  it.fails("clears LINK's outcome alerts when the student picks another token — PINNED KNOWN BUG: the page never clears its alerts, LINK's refusal stays in FOLD's Ethereum Sepolia card", async () => {
+  it("clears LINK's outcome alerts when the student picks another token", async () => {
     given.error('get', '/api/erc20/:network/:symbol/request', TOKEN_COOLDOWN, 429);
     installMetamask({ connected: true });
     const { user } = renderWithRoutes();
@@ -1033,6 +1206,44 @@ describe('The token poll and a token switch', () => {
     await user.click(screen.getByRole('link', { name: 'FOLD' }));
     await pageLoaded('Interfold');
     expect(screen.queryByText(TOKEN_COOLDOWN)).toBeNull();
+  });
+
+
+  it('shows the LINK claim still in flight — and its answer — when the student comes back to LINK', async () => {
+    let answer = null;
+    server.use(http.get(url('/api/erc20/:network/:symbol/request'), () => new Promise((resolve) => { answer = resolve; })));
+    installMetamask({ connected: true });
+    const { user } = renderWithRoutes();
+    const card = await readyToClaim();
+    await user.click(claimIn(card));
+    await waitFor(() => expect(answer).not.toBeNull());
+
+    await user.click(screen.getByRole('link', { name: 'FOLD' }));
+    await pageLoaded('Interfold');
+    await user.click(screen.getByRole('link', { name: 'LINK' }));
+    await pageLoaded();
+    expect(await within(cardOf('Ethereum Sepolia')).findByRole('button', { name: 'Siunčiama…' })).toHaveAttribute('aria-busy', 'true');
+
+    await act(async () => answer(HttpResponse.json(f.erc20Payout())));
+    expect(await payoutAlert(cardOf('Ethereum Sepolia'))).toHaveTextContent(`${SUCCESS} Transakcija: ${TX_HASH}`);
+    await waitFor(() => expect(claimIn(cardOf('Ethereum Sepolia'))).not.toHaveAttribute('aria-disabled'));
+  });
+
+
+  it('drops a "Rodyti MetaMask" refusal that comes back after a switch to FOLD', async () => {
+    const metamask = installMetamask({ connected: true });
+    const popup = metamask.hold('wallet_watchAsset');
+    const { user } = renderWithRoutes();
+    const card = await readyToClaim();
+    await user.click(showIn(card));
+    await waitFor(() => expect(popup.called).toBe(true));
+
+    await user.click(screen.getByRole('link', { name: 'FOLD' }));
+    await pageLoaded('Interfold');
+    await act(async () => popup.decline());
+    await settle(100);
+    expect(screen.queryByText(USER_REJECTED)).toBeNull();
+    expect(screen.queryByRole('alert')).toBeNull();
   });
 });
 
@@ -1047,14 +1258,13 @@ describe('The token poll and a token switch', () => {
 // -----------------------------------------------------------
 //
 // The token payload drives the whole page: its failures are
-// the error card, its malformed bodies must not crash — once
-// with no wallet (no gas numbers) and once with a connected
+// the error card — a body of the wrong shape is one of them
+// (see "Loading and the backend's failures") — and odd
+// values inside a well-shaped body must not crash, once with
+// no wallet (no gas numbers) and once with a connected
 // wallet, whose wallet_native_wei feeds the gas gate. The
 // payout's failure answers must reach the card as an alert.
 // -----------------------------------------------------------
-
-const TOKEN_CRASH = 'a token answer without `deployments` crashes the page — deriveFlow(undefined) in FaucetERC20';
-const BALANCE_TYPE_CRASH = 'a deployment balance sent as a string crashes its card — deployment.balance.toFixed() in ChainCard';
 
 describeEndpointContract({
   path: '/api/erc20/token/:symbol',
@@ -1066,13 +1276,6 @@ describeEndpointContract({
     await screen.findByText(/^(Vidinė serverio klaida|Nepalaikomas tinklas: x|Nerasta|Nepavyko gauti žetono informacijos)$/);
   },
   loading: () => screen.getByRole('status'),
-  pins: {
-    'a JSON string → page survives': TOKEN_CRASH,
-    'a JSON number → page survives': TOKEN_CRASH,
-    'wrong container (object for a list, list for an object) → page survives': TOKEN_CRASH,
-    'every field missing → page survives': TOKEN_CRASH,
-    'types swapped (numbers as strings, strings as numbers) → page survives': BALANCE_TYPE_CRASH,
-  },
 });
 
 
@@ -1092,10 +1295,6 @@ describe('with a connected wallet', () => {
     },
     chrome: pageStands,
     loaded: async () => { await readyToClaim(); },
-    pins: {
-      'types swapped (numbers as strings, strings as numbers) → page survives': BALANCE_TYPE_CRASH,
-      'hostile strings (unicode + markup) → rendered as text, never as elements': 'a wallet_native_wei that is not an integer string crashes the page — BigInt() in hasEnoughGas',
-    },
   });
 });
 

@@ -49,7 +49,7 @@ const CODE = sourceFiles().map(({ file, code }) => ({ file, code: withoutComment
 // The page routes: a component, not a redirect or a layout
 const PAGE_ROUTES = appRoutes().filter((route) => route.element && route.element !== 'Navigate' && !route.index && route.path !== '*');
 
-// '/faucet/evm/:network' → '/faucet/evm/x'
+// A route pattern made concrete: every :param becomes "x"
 const samplePath = (path) => path.replace(/:\w+/g, 'x');
 
 
@@ -107,11 +107,12 @@ function callArguments(code, open) {
 // networkCalls
 // -----------------------------------------------------------
 //
-// Every axios.<method>(…) and fetch(…) in src/ as
-// { file, method, url | expression }: a literal or template
-// URL becomes its path with template expressions turned into
-// ":param" and the query string dropped; anything else is
-// kept as the expression the URL comes from.
+// Every axios call and every fetch in src/, each with its
+// file, its HTTP method (GET unless the call names another)
+// and its URL: a literal or template URL becomes its path,
+// with template expressions turned into ":param" and the
+// query string dropped; any other URL is kept as the
+// expression it comes from.
 // -----------------------------------------------------------
 
 const CALL_RE = /\baxios\.(get|post|put|patch|delete|head|options)\(|(?<![\w.$])fetch\(/g;
@@ -170,13 +171,14 @@ const PUBLIC_RPC_READERS = {
 // storageKeyPrefixes
 // -----------------------------------------------------------
 //
-// Every localStorage.setItem(key, …) in src/, the key resolved
+// The key of every localStorage.setItem call in src/, resolved
 // to the literal it starts with: a string, a template's head,
-// a constant (in the file, or a `NAME: '…'` table entry
-// anywhere in src/), the left side of a "+", or — for a
-// function parameter — the literal first arguments of that
-// function's calls. An unreadable key throws, so a new kind of
-// writer fails the rule loudly instead of slipping past it.
+// a constant (in the file — or, for a key read off a table,
+// that table's entry anywhere in src/), the left side of a
+// "+", or — for a function parameter — the literal first
+// arguments of that function's calls. An unreadable key
+// throws, so a new kind of writer fails the rule loudly
+// instead of slipping past it.
 // -----------------------------------------------------------
 
 function resolveKey(expression, file, code) {
@@ -391,7 +393,7 @@ describe('structural rules — the route table', () => {
     for (const tag of navigates) expect(tag, tag).toMatch(/\sreplace(\s|\/)/);
 
     const indexRedirects = appRoutes().filter((route) => route.index && route.element === 'Navigate');
-    expect(indexRedirects.map((route) => route.path)).toEqual(['/faucet', '/faucet/evm', '/faucet/svm', '/faucet/move', '/faucet/erc20', '/faucet/utxo', '/graph']);
+    expect(indexRedirects.map((route) => route.path)).toEqual(['/faucet', '/faucet/evm', '/faucet/svm', '/faucet/move', '/faucet/erc20', '/faucet/utxo', '/graph', '/graph/utxo']);
     for (const route of indexRedirects) expect(route.redirectTo, route.path).toBe('/');
   });
 
@@ -407,11 +409,12 @@ describe('structural rules — the route table', () => {
   });
 
 
-  it.fails('no path prefix of a routed page is swallowed by a sibling\'s :param — typed on its own it redirects or is not found — PINNED KNOWN BUG: /graph/utxo matches /graph/:network (see core/app.test.jsx)', () => {
+  it('no path prefix of a routed page is swallowed by a sibling\'s :param — typed on its own it redirects or is not found', () => {
     const routes = appRoutes();
     const patternOf = (path) => new RegExp(`^${path.replace(/:\w+/g, '[^/]+')}$`);
 
-    // Every all-static prefix: '/graph/utxo/:network' → '/graph', '/graph/utxo'
+    // Every shorter prefix of a page route that holds only
+    // static segments — it stops before the first :param
     const prefixes = new Set();
     for (const route of PAGE_ROUTES) {
       const segments = route.path.split('/').filter(Boolean);
@@ -472,7 +475,7 @@ describe('structural rules — what the SPA remembers', () => {
   });
 
 
-  it.fails('ErrorBoundary\'s "clear remembered data" covers every key the SPA writes — PINNED KNOWN BUG: CACHE_KEY_PREFIXES misses "utxo-graph-positions:"', () => {
+  it('ErrorBoundary\'s "clear remembered data" covers every key the SPA writes', () => {
     const cleared = clearedPrefixes();
     const uncovered = [...new Set(storageKeyPrefixes())].filter((key) => !cleared.some((prefix) => key.startsWith(prefix)));
     expect(uncovered).toEqual([]);

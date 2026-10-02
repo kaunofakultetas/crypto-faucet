@@ -1,10 +1,11 @@
 // -----------------------------------------------------------
 //  [*] Pages — Not Found (every unmatched route)
 //
-//  The catch-all: a mistyped URL, a stale bookmark or a
-//  truncated faucet path (/faucet/evm with no network) used
-//  to render an empty grey page under a fully dressed navbar.
-//  This says what happened and offers the way back.
+//  The catch-all for a mistyped URL or a stale bookmark,
+//  which used to render an empty grey page under a fully
+//  dressed navbar. This says what happened and offers the way
+//  back. A family path cut short before its key never gets
+//  here — App.jsx sends it through "/" like a fresh visit.
 // -----------------------------------------------------------
 
 import { Link } from 'react-router-dom';
@@ -20,6 +21,10 @@ import { Box, Button } from '@mui/material';
 // -----------------------------------------------------------
 // NotFoundPage (default export)
 // -----------------------------------------------------------
+//
+// The card: a big 404, one sentence, and the three places a
+// student most likely meant to go — the faucet, the
+// simulator and the presentations.
 //
 // Used by:
 //   - App.jsx — route "*"

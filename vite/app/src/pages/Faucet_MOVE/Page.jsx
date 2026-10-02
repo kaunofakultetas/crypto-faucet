@@ -11,11 +11,13 @@
 //  Standard and the page shows its real name.
 //
 //  Claiming signs a nonce the backend verifies before sending
-//  (GET /api/move/<network>/request). The student's own
-//  balance is read straight from the network's public GraphQL
-//  endpoint (from the catalog payload). The faucet's return
-//  address renders as text + QR — hex is case-insensitive,
-//  but it is kept as the backend prints it.
+//  (GET /api/move/<network>/request); the success alert names
+//  the payout's transaction, linked to the network's
+//  explorer. The student's own balance is read straight from
+//  the network's public GraphQL endpoint (from the catalog
+//  payload). The faucet's return address renders as text +
+//  QR — hex is case-insensitive, but it is kept as the
+//  backend prints it.
 //
 //  One thing the wallet will not do for the student: a Sui
 //  address is the same on every network, but the wallet UI
@@ -24,10 +26,17 @@
 //  a note on screen naming the network to select, amber when
 //  the wallet says it is on another one.
 //
+//  No answer of the backend leaves the page hanging: a network
+//  list without its map gets the list's failure card, faucet
+//  info that never arrived (or arrived in another shape) a
+//  failure notice on a page whose wallet steps still work, and
+//  a failed claim a Lithuanian sentence.
+//
 //  Split into (root component last):
 //
 //    MOVE_REFRESH_MS   — balance repoll cadence
 //    NETWORK_LABELS    — flavour key → the wallet's label
+//    CLAIM_FAILED      — the claim's own failure sentence
 //    mistToCoins       — the only unit maths on this page
 //    useNetworks       — the MOVE network map (own fetch)
 //    useFaucetInfo     — faucet address + balance, polled
@@ -36,6 +45,7 @@
 //    LoadingSkeleton   — full-page skeleton layout
 //    WalletPicker      — a choice when two Sui wallets announce
 //    NetworkNote       — which network to select in the wallet
+//    FaucetRows        — the faucet's numbers, or its failure
 //    ReturnAddressCard — return address + QR
 //    FaucetMOVE        — page state + layout (default export)
 // -----------------------------------------------------------
@@ -46,12 +56,15 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import QRCode from 'react-qr-code';
 import axios from 'axios';
 
-import { Button, Box, Skeleton, Stack, CircularProgress } from '@mui/material';
+import { Alert, Button, Box, Skeleton, Stack, CircularProgress } from '@mui/material';
 import PaidIcon from '@mui/icons-material/Paid';
 
 import AssetIcon from '@/components/AssetIcon';
 import ErrorCard from '@/components/ErrorCard';
+import PayoutMessage from '@/components/PayoutMessage';
 import { WalletStepper, WalletGateButton, FadingAlert, useAlerts } from '@/components/WalletFlow';
+import { requestErrorText } from '@/utils/requestError';
+import { payoutTxid } from '@/utils/payout';
 
 import useSuiWallet from './useSuiWallet';
 
@@ -62,6 +75,11 @@ const MOVE_REFRESH_MS = 5000;
 // The wallet UI's own network labels, by the config's flavour
 // key — what the student has to click on in the selector
 const NETWORK_LABELS = { mainnet: 'Mainnet', testnet: 'Testnet', devnet: 'Devnet' };
+
+// What a failed claim says when neither the wallet nor the
+// backend had words of their own — requestErrorText adds the
+// reason after it
+const CLAIM_FAILED = 'Nepavyko išsiųsti kriptovaliutos.';
 
 
 // MIST are integers; the chain's decimals come from the
@@ -79,13 +97,15 @@ const mistToCoins = (mist, decimals) => mist / 10 ** decimals;
 // useNetworks
 // -----------------------------------------------------------
 //
-//   const { networks, failed } = useNetworks()
-//
 // The MOVE network map, the page's own fetch — the navbar
 // reads the bundled /api/faucet/catalog instead, so nothing
-// shares this cache entry. failed is true only when the map
-// NEVER arrived — a failed refresh of a map already on
-// screen keeps it.
+// shares this cache entry. The hook hands back the map and
+// whether it failed, which is true only when the map NEVER
+// arrived — a failed refresh of a map already on screen
+// keeps it. An answer without a networks map (a proxy's page
+// with HTTP 200, an empty object) is a failed fetch too, so
+// the page says the list is missing instead of waiting for
+// it on a skeleton.
 //
 // Used by:
 //   - FaucetMOVE (below)
@@ -94,7 +114,12 @@ const mistToCoins = (mist, decimals) => mist / 10 ** decimals;
 function useNetworks() {
   const { data, isError } = useQuery({
     queryKey: ['move-networks'],
-    queryFn: async () => (await axios.get('/api/move/networks')).data,
+    queryFn: async () => {
+      const list = (await axios.get('/api/move/networks')).data;
+      const map = list?.networks;
+      if (!map || typeof map !== 'object' || Array.isArray(map)) throw new Error('no networks map in the answer');
+      return list;
+    },
     staleTime: 5 * 60 * 1000,
   });
 
@@ -112,28 +137,39 @@ function useNetworks() {
 // useFaucetInfo
 // -----------------------------------------------------------
 //
-//   const faucetInfo = useFaucetInfo(network, ready)
+// The faucet's address and balance (with the payout size),
+// repolled every 5 s. The backend caches it ~10 s and drops
+// that cache after a payout. `ready` gates the poll on the
+// catalog knowing this network, so an unknown :network in the
+// URL doesn't repoll a 400 forever.
 //
-// The faucet's address and balance ({ address, balance,
-// symbol, chunk_size }), repolled every 5 s. The backend
-// caches it ~10 s and drops that cache after a payout.
-// `ready` gates the poll on the catalog knowing this network,
-// so an unknown :network in the URL doesn't repoll a 400
-// forever.
+// The hook hands back the info — null until the first answer
+// — and whether it failed. Only a read that NEVER succeeded
+// is a failure; a failed repoll keeps the last numbers on
+// screen. An answer without an address or without its two
+// numbers counts as a failed read too, rather than a blank
+// number or a QR code of nothing. The poll goes on after a
+// failure, so the page recovers by itself.
 //
 // Used by:
 //   - FaucetMOVE (below)
 // -----------------------------------------------------------
 
 function useFaucetInfo(network, ready) {
-  const { data = null } = useQuery({
+  const { data, isLoadingError } = useQuery({
     queryKey: ['move-faucet-balance', network],
-    queryFn: async () => (await axios.get(`/api/move/${network}/faucet-balance`)).data,
+    queryFn: async () => {
+      const info = (await axios.get(`/api/move/${network}/faucet-balance`)).data;
+      const complete = typeof info?.address === 'string' && info.address
+        && Number.isFinite(info.balance) && Number.isFinite(info.chunk_size);
+      if (!complete) throw new Error('not a faucet balance answer');
+      return info;
+    },
     enabled: Boolean(ready),
     refetchInterval: MOVE_REFRESH_MS,
   });
 
-  return data;
+  return { faucetInfo: data ?? null, failed: isLoadingError };
 }
 
 
@@ -146,18 +182,19 @@ function useFaucetInfo(network, ready) {
 // useWalletBalance
 // -----------------------------------------------------------
 //
-//   const { mist, failed } = useWalletBalance(rpcUrl,
-//     coinType, address)
-//
-// The student's OWN balance, read with one GraphQL query
-// against the PUBLIC endpoint from the network payload —
-// never the backend's own RPC. The Sui SDKs would pull a
+// The student's OWN balance in MIST, read with one GraphQL
+// query against the PUBLIC endpoint from the network payload
+// — never the backend's own RPC. The Sui SDKs would pull a
 // mountain of library to wrap this one POST. Only polls once
-// an address is connected.
+// an address is connected. The hook hands back the MIST (null
+// until the first answer) and whether the last read failed.
 //
-// A GraphQL error arrives with HTTP 200, so it is rethrown
-// here to reach `failed` — the page shows a dash rather than
-// a zero or a permanent "Kraunama…".
+// A GraphQL error arrives with HTTP 200, and so does a
+// proxy's page that is no GraphQL answer at all; both are
+// thrown here to reach `failed` — the page shows a dash
+// rather than a made-up zero or a permanent "Kraunama…". A
+// real GraphQL answer that names no balance is a wallet that
+// never held the coin: a true zero.
 //
 // Used by:
 //   - FaucetMOVE (below)
@@ -175,7 +212,14 @@ function useWalletBalance(rpcUrl, coinType, address) {
         variables: { a: address, t: coinType },
       });
       if (data?.errors) throw new Error(data.errors[0]?.message || 'Sui GraphQL error');
-      return Number(data?.data?.address?.balance?.totalBalance ?? 0);
+      if (!data?.data || typeof data.data !== 'object') throw new Error('Sui GraphQL answered without data');
+
+      // No balance entry in a real answer: the coin was never held
+      const total = data.data.address?.balance?.totalBalance;
+      if (total == null) return 0;
+      const mist = Number(total);
+      if (!Number.isFinite(mist)) throw new Error('Sui GraphQL answered an unreadable balance');
+      return mist;
     },
   });
 
@@ -193,7 +237,8 @@ function useWalletBalance(rpcUrl, coinType, address) {
 // -----------------------------------------------------------
 //
 // The page as grey bones, shown until the network catalog and
-// the faucet info have arrived.
+// the faucet info have arrived — or the faucet info has
+// failed, which the page itself then says.
 //
 // Used by:
 //   - FaucetMOVE (below)
@@ -246,21 +291,26 @@ function LoadingSkeleton() {
 // Shown only when the browser announced MORE than one
 // Sui-capable wallet (Slush beside a Sui-capable Phantom):
 // the hook talks to the first one announced, which the
-// student did not choose — this row lets them.
+// student did not choose — this row lets them. Two wallets
+// can carry the same name, so the one in use is found by
+// identity, never by name.
 //
 // Used by:
 //   - FaucetMOVE (below) — above the gate button
 // -----------------------------------------------------------
 
-function WalletPicker({ wallets, current, onSelect }) {
+function WalletPicker({ wallets, inUse, onSelect }) {
   return (
     <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
       <span className="text-gray-700">Piniginė:</span>
-      {wallets.map((candidate) => (
+      {/* A wallet carries no id and its name can repeat, so a
+          button is keyed by its place in the list — the
+          buttons hold no state a shift could carry over */}
+      {wallets.map((candidate, index) => (
         <Button
-          key={candidate.name}
+          key={index}
           size="small"
-          variant={candidate.name === current ? 'contained' : 'outlined'}
+          variant={candidate === inUse ? 'contained' : 'outlined'}
           onClick={() => onSelect(candidate)}
         >
           {candidate.name}
@@ -324,6 +374,46 @@ function NetworkNote({ walletName, network, chains }) {
 
 
 // -----------------------------------------------------------
+// FaucetRows
+// -----------------------------------------------------------
+//
+// The faucet's two lines in the balance card — what one claim
+// pays and what the faucet holds — or, when its info could not
+// be read, the page's failure notice in their place, as the
+// UTXO page shows it.
+//
+// Used by:
+//   - FaucetMOVE (below) — the balance card
+// -----------------------------------------------------------
+
+function FaucetRows({ faucetInfo, failed, shortName }) {
+
+  if (failed) {
+    return <Alert severity="error" sx={{ my: 1 }}>Nepavyko gauti čiaupo informacijos</Alert>;
+  }
+
+
+  return (
+    <>
+      <div className="my-2 flex">
+        <span className="flex-1">Išsiųsime jums:</span>
+        <span className="text-right">{parseFloat(faucetInfo.chunk_size).toFixed(3)} {shortName}</span>
+      </div>
+      <div className="my-2 flex">
+        <span className="flex-1">Čiaupo balansas:</span>
+        <span className="text-right">{parseFloat(faucetInfo.balance).toFixed(3)} {shortName}</span>
+      </div>
+    </>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // ReturnAddressCard
 // -----------------------------------------------------------
 //
@@ -360,7 +450,10 @@ function ReturnAddressCard({ shortName, address }) {
 //
 // The page: the discovered Sui wallet wired into the stepper
 // (three steps — no network hop exists), the balance rows,
-// the claim button and the alerts.
+// the claim button and the alerts. Faucet info that could not
+// be read does not hold the page back — the student still
+// installs, picks and connects a wallet; only the claim waits
+// for the info, as on the UTXO page.
 //
 // Used by:
 //   - App.jsx — route /faucet/move/:network
@@ -376,7 +469,7 @@ export default function FaucetMOVE() {
   const graphqlUrl = networkInfo?.rpc_urls?.[0] ?? null;
   const wallet = useSuiWallet();
 
-  const faucetInfo = useFaucetInfo(network, networkInfo);
+  const { faucetInfo, failed: faucetFailed } = useFaucetInfo(network, networkInfo);
   const walletBalance = useWalletBalance(graphqlUrl, networkInfo?.coin_type, wallet.address);
 
   const { alerts, addAlert, clearAlerts } = useAlerts();
@@ -402,28 +495,37 @@ export default function FaucetMOVE() {
 
   // Sign the ownership message and let the backend verify it
   // before paying out — no transaction on the student's side.
-  // An answer that arrives after a network switch is dropped:
-  // it belongs to the chain it was issued for.
+  // The success alert names the transaction (payoutTxid); a
+  // failure reads in Lithuanian whatever broke — the wallet's
+  // own words for a refusal inside it, the backend's sentence
+  // for its refusals, the page's sentence with the reason
+  // after it for anything else (requestErrorText). An answer
+  // that arrives after a network switch is dropped: it
+  // belongs to the chain it was issued for.
   const claim = async () => {
     const forNetwork = network;
     setClaimingFor(forNetwork);
     try {
       const { nonce, signature } = await wallet.signMessage();
 
-      await axios.get(`/api/move/${forNetwork}/request`, {
+      const { data } = await axios.get(`/api/move/${forNetwork}/request`, {
         params: { address: wallet.address, signature, nonce },
       });
+      const txid = payoutTxid(data, 'transaction_id', CLAIM_FAILED);
 
       queryClient.invalidateQueries({ queryKey: ['move-faucet-balance', forNetwork] });
       queryClient.invalidateQueries({ queryKey: ['move-wallet-balance', graphqlUrl, wallet.address] });
       if (networkRef.current !== forNetwork) return;
-      addAlert('success', `${networkInfo.full_name} išsiųstas į jūsų piniginę.`);
+      addAlert('success', (
+        <PayoutMessage
+          sentence={`${networkInfo.full_name} išsiųstas į jūsų piniginę.`}
+          txid={txid}
+          explorer={networkInfo.block_explorer_urls?.[0]}
+        />
+      ));
     } catch (e) {
-      // Backend refusals arrive as { error } in the response
-      // body; wallet errors (signature refused) only carry a
-      // message
       if (networkRef.current !== forNetwork) return;
-      addAlert('error', e.response?.data?.error || e.message || 'Nepavyko išsiųsti kriptovaliutos.');
+      addAlert('error', requestErrorText(e, CLAIM_FAILED));
     } finally {
       setClaimingFor((current) => (current === forNetwork ? null : current));
     }
@@ -438,7 +540,9 @@ export default function FaucetMOVE() {
     return <ErrorCard>Nežinomas tinklas: {network}</ErrorCard>;
   }
 
-  if (!networkInfo || !faucetInfo) {
+  // A faucet info that failed is no reason to wait: the page
+  // shows its notice instead of the numbers
+  if (!networkInfo || (!faucetInfo && !faucetFailed)) {
     return <LoadingSkeleton />;
   }
 
@@ -451,6 +555,11 @@ export default function FaucetMOVE() {
     if (walletBalance.mist == null) return 'Kraunama…';
     return `${mistToCoins(walletBalance.mist, networkInfo.decimals).toFixed(3)} ${networkInfo.short_name}`;
   };
+
+
+  // The claim takes no click while one is in flight, nor while
+  // the faucet info could not be read
+  const claimBlocked = claiming || faucetFailed;
 
 
   // Three steps — Sui wallets need no network hop, so
@@ -495,18 +604,11 @@ export default function FaucetMOVE() {
           <span className="flex-1">Jūsų {wallet.walletName} balansas:</span>
           <span className="text-right">{walletBalanceText()}</span>
         </div>
-        <div className="my-2 flex">
-          <span className="flex-1">Išsiųsime jums:</span>
-          <span className="text-right">{parseFloat(faucetInfo.chunk_size).toFixed(3)} {networkInfo.short_name}</span>
-        </div>
-        <div className="my-2 flex">
-          <span className="flex-1">Čiaupo balansas:</span>
-          <span className="text-right">{parseFloat(faucetInfo.balance).toFixed(3)} {networkInfo.short_name}</span>
-        </div>
+        <FaucetRows faucetInfo={faucetInfo} failed={faucetFailed} shortName={networkInfo.short_name} />
 
         <div className="mt-3">
           {wallet.wallets.length > 1 && (
-            <WalletPicker wallets={wallet.wallets} current={wallet.walletName} onSelect={wallet.selectWallet} />
+            <WalletPicker wallets={wallet.wallets} inUse={wallet.inUse} onSelect={wallet.selectWallet} />
           )}
 
           <WalletGateButton
@@ -525,8 +627,8 @@ export default function FaucetMOVE() {
               color="primary"
               fullWidth
               aria-busy={claiming}
-              aria-disabled={claiming}
-              onClick={claiming ? undefined : claim}
+              aria-disabled={claimBlocked}
+              onClick={claimBlocked ? undefined : claim}
               sx={{ minHeight: 40, '&[aria-disabled="true"]': { opacity: 0.6, pointerEvents: 'none' } }}
             >
               {claiming && <CircularProgress size={22} color="inherit" aria-hidden="true" sx={{ mr: 1 }} />}
@@ -546,7 +648,7 @@ export default function FaucetMOVE() {
         ))}
       </div>
 
-      <ReturnAddressCard shortName={networkInfo.short_name} address={faucetInfo.address} />
+      {faucetInfo && <ReturnAddressCard shortName={networkInfo.short_name} address={faucetInfo.address} />}
 
     </Box>
   );

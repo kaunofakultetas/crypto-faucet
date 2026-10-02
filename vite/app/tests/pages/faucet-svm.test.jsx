@@ -4,35 +4,40 @@
 //  The Solana faucet end to end against the backend double and
 //  the Phantom double (support/wallets/phantom.js): the
 //  network's names and the faucet's numbers, the loading
-//  skeleton and the 5 s repoll; the four-step flow — install
-//  (the download link, a squatter in the shared window.solana
-//  slot ignored, a late injection picked up), connect (the
-//  popup, a trusted origin reconnecting silently, refusals),
-//  the cluster step (the genesis hash asked for, Phantom's
-//  missing method passing as "assumed" with the Testnet Mode
-//  instructions kept on screen, a confirming wallet,
-//  refusals, unknown clusters, a network without one, a
-//  Testnet network)
-//  and the claim (the signed ownership message, the captured
-//  request with the address, the base58 signature and the
-//  nonce inside the signed text, "Siunčiama…", one request
-//  per double click, both balances refetched, the wallet's
-//  and the backend's refusals verbatim); the student's own
-//  balance read from the public cluster RPC (getBalance, the
-//  confirmed commitment, "Kraunama…", a real zero, a dash for
-//  a JSON-RPC error with HTTP 200 / a 500 / a 429 / a dropped
-//  connection — never a zero or a permanent "Kraunama…" —
-//  its repoll and its recovery); account changes and
-//  disconnects inside Phantom; the return address card (the
-//  base58 address as it is, its QR code); a network switch;
-//  unknown networks and a failed catalog; and the backend
-//  contract matrices for /api/svm/networks,
+//  skeleton and the 5 s repoll, faucet info that could not be
+//  read (or came in another shape) said so on a page whose
+//  wallet steps still work, the claim held until it recovers;
+//  the four-step flow — install (the download link, a
+//  squatter in the shared window.solana slot ignored, a late
+//  injection picked up), connect (the popup, a trusted origin
+//  reconnecting silently, refusals), the cluster step (the
+//  genesis hash asked for, Phantom's missing method passing
+//  as "assumed" with the Testnet Mode instructions kept on
+//  screen, a confirming wallet, refusals, unknown clusters, a
+//  network without one, a Testnet network and its own
+//  instructions, never Devnet's) and the claim (the signed
+//  ownership message, the captured request with the address,
+//  the base58 signature and the nonce inside the signed text,
+//  the transaction linked to the explorer, "Siunčiama…", one
+//  request per double click, both balances refetched, the
+//  wallet's and the backend's refusals verbatim, a 200 that
+//  names no transaction and the failures that carry no
+//  sentence in Lithuanian); the student's own balance read
+//  from the public cluster RPC (getBalance, the confirmed
+//  commitment, "Kraunama…", a real zero, a dash for a
+//  JSON-RPC error with HTTP 200 / a 500 / a 429 / a dropped
+//  connection / an answer with no balance in it — never a
+//  zero or a permanent "Kraunama…" — its repoll and its
+//  recovery); account changes and disconnects inside Phantom;
+//  the return address card (the base58 address as it is, its
+//  QR code); a network switch; unknown networks, a failed
+//  catalog and one answered without its networks map; and the
+//  backend contract matrices for /api/svm/networks,
 //  /api/svm/:network/faucet-balance, the claim's failure
 //  answers and the public getBalance endpoint.
 //
-//  The page shows neither the payout's transaction id nor an
-//  explorer link, and has no copy button — only what it does
-//  show is asserted.
+//  The page has no copy button — only what it does show is
+//  asserted.
 // -----------------------------------------------------------
 
 import { describe, it, expect, vi } from 'vitest';
@@ -63,6 +68,19 @@ const DEVNET_CLICKS = [
   'Nustatymai (⚙️) → Developer Settings → Testnet Mode',
   'Tinklo sąraše pasirinkite „Solana Devnet“, ne „Solana“',
 ];
+
+// The same clicks on a Testnet faucet, its own cluster named
+const TESTNET_CLICKS = [
+  'Atidarykite Phantom plėtinį',
+  'Nustatymai (⚙️) → Developer Settings → Testnet Mode',
+  'Tinklo sąraše pasirinkite „Solana Testnet“, ne „Solana“',
+];
+
+// The transaction id every default payout answers with
+const TXID = f.svmPayout().transaction_id;
+
+// What a failed claim says when nobody had words of their own
+const CLAIM_FAILED = 'Nepavyko išsiųsti kriptovaliutos.';
 
 // A second SVM network on another cluster, for the switch
 const SOLANA_TESTNET = {
@@ -210,7 +228,10 @@ const advance = (ms) => act(async () => { await vi.advanceTimersByTimeAsync(ms);
 // -----------------------------------------------------------
 //
 // The names from /api/svm/networks, the faucet's payout and
-// balance, the skeleton until both have arrived, the repoll.
+// balance, the skeleton until both have arrived, the repoll —
+// and faucet info that never arrives: the page says so in
+// its own words, the wallet steps stay usable, the claim
+// waits, the next poll recovers.
 // -----------------------------------------------------------
 
 describe('The page and its numbers', () => {
@@ -269,6 +290,67 @@ describe('The page and its numbers', () => {
     await settle(100);
     expect(row('Čiaupo balansas:')).toHaveTextContent('493.250 devSOL');
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+
+  it("says the faucet info could not be read — in its own words, not the backend's — on a page whose wallet steps still work", async () => {
+    given.error('get', '/api/svm/:network/faucet-balance', 'Solana RPC nepasiekiamas', 500);
+    installPhantom();
+    const { user } = renderSvm();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/^Nepavyko gauti čiaupo informacijos$/);
+    expect(screen.getByRole('heading', { level: 1, name: "Solana Devnet faucet'as" })).toBeInTheDocument();
+    expect(screen.queryByText('Solana RPC nepasiekiamas')).toBeNull();
+    expect(screen.queryByText('Čiaupo balansas:')).toBeNull();
+    // No return card for a faucet the page knows nothing about
+    expect(screen.queryByText(/^Grąžinkite nebereikalingą/)).toBeNull();
+    expect(qrCodes()).toHaveLength(0);
+    await user.click(screen.getByRole('button', { name: 'Prijungti piniginę' }));
+    expect(await screen.findByRole('button', { name: 'Persijungti į Solana Devnet tinklą' })).toBeInTheDocument();
+  });
+
+
+  it.each([
+    ['no address', () => given.json('get', '/api/svm/:network/faucet-balance', { ...f.svmBalance(), address: undefined })],
+    ['an empty address', () => given.json('get', '/api/svm/:network/faucet-balance', { ...f.svmBalance(), address: '' })],
+    ['the balance as text', () => given.json('get', '/api/svm/:network/faucet-balance', { ...f.svmBalance(), balance: '498.25' })],
+    ['no payout size', () => given.json('get', '/api/svm/:network/faucet-balance', { ...f.svmBalance(), chunk_size: null })],
+    ["a proxy's page answered 200", () => given.text('get', '/api/svm/:network/faucet-balance', '<html><body>Palaukite…</body></html>')],
+  ])('takes faucet info of another shape for a failed read, never a blank number: %s', async (_, answer) => {
+    answer();
+    renderSvm();
+    expect(await screen.findByRole('alert')).toHaveTextContent(/^Nepavyko gauti čiaupo informacijos$/);
+    expect(screen.queryByText(/NaN/)).toBeNull();
+    expect(qrCodes()).toHaveLength(0);
+  });
+
+
+  it('holds the claim while the faucet info could not be read — Phantom is not asked to sign, nothing is sent', async () => {
+    given.error('get', '/api/svm/:network/faucet-balance', 'Vidinė serverio klaida', 500);
+    const calls = given.capture('get', '/api/svm/:network/request', f.svmPayout());
+    const { user, phantom, claim } = await atClaimStep();
+    expect(claim).toHaveAttribute('aria-disabled', 'true');
+    await expect(user.click(claim)).rejects.toThrow(/pointer-events: none/);
+    claim.focus();
+    await user.keyboard('{Enter}');
+    await settle(100);
+    expect(phantom.callsTo('signMessage')).toEqual([]);
+    expect(calls).toHaveLength(0);
+  });
+
+
+  it('recovers from a failed first load on the next poll — the numbers, the return card and the claim come back', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    given.sequence('get', '/api/svm/:network/faucet-balance', [
+      { status: 500, body: { error: 'Vidinė serverio klaida' } },
+      { body: f.svmBalance() },
+    ]);
+    const { claim } = await atClaimStep();
+    expect(claim).toHaveAttribute('aria-disabled', 'true');
+    await advance(5000);
+    await waitFor(() => expect(row('Čiaupo balansas:')).toHaveTextContent('498.250 devSOL'));
+    expect(screen.queryByText('Nepavyko gauti čiaupo informacijos')).toBeNull();
+    expect(qrCodes()).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Gauti Solana Devnet valiutos' })).toHaveAttribute('aria-disabled', 'false');
   });
 });
 
@@ -398,7 +480,9 @@ describe('Connecting', () => {
 // the step passes on the click and the Testnet Mode
 // instructions stay on screen until a wallet confirms a hop.
 // Devnet is the configured network; a Testnet one (the
-// backend supports it) must be served the same way.
+// backend supports it) must be served the same way, its
+// instructions naming Testnet — Phantom's own name for a
+// cluster, or the config's key when Phantom has none.
 // -----------------------------------------------------------
 
 describe('The cluster step', () => {
@@ -459,12 +543,13 @@ describe('The cluster step', () => {
   });
 
 
-  it('needs no cluster step for a network that names no cluster', async () => {
+  it('needs no cluster step — and shows no cluster help — for a network that names no cluster', async () => {
     given.json('get', '/api/svm/networks', networksWith({ cluster: undefined }));
     installPhantom({ connected: true });
     renderSvm();
     expect(await screen.findByRole('button', { name: 'Gauti Solana Devnet valiutos' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Persijungti į Solana Devnet tinklą' })).toBeNull();
+    expect(screen.queryByText(/įjungiamas taip:$/)).toBeNull();
   });
 
 
@@ -476,12 +561,33 @@ describe('The cluster step', () => {
   });
 
 
-  it.fails('PINNED KNOWN BUG: a Solana Testnet faucet (a cluster the backend supports) does not send the student to Devnet — the cluster-step help is hard-wired to „Solana Devnet“', async () => {
+  it("names the network's own cluster in the help — a Solana Testnet faucet never sends the student to Devnet", async () => {
     installPhantom({ connected: true });
     renderWithPicker('solanaTestnet');
     expect(await screen.findByRole('button', { name: 'Persijungti į Solana Testnet tinklą' })).toBeInTheDocument();
+    expect(screen.getByText('Phantom Solana Testnet įjungiamas taip:')).toBeInTheDocument();
+    expect(within(screen.getByRole('list')).getAllByRole('listitem').map((item) => item.textContent)).toEqual(TESTNET_CLICKS);
+    expect(screen.getByText('Čiaupo monetos visada keliauja į Testnet. Jei piniginė vis dar rodo mainnet, gautų monetų ten nematysite.')).toBeInTheDocument();
     // The picker's own "Devnet" link aside, nothing on the page may name Devnet
     expect(screen.queryAllByText(/Devnet/, { ignore: 'a, script, style' })).toEqual([]);
+  });
+
+
+  it('keeps the Testnet help under the claim button while the hop is unconfirmed', async () => {
+    installPhantom({ connected: true });
+    const { user } = renderWithPicker('solanaTestnet');
+    await passClusterStep(user, 'Solana Testnet');
+    expect(screen.getByText('Phantom Solana Testnet įjungiamas taip:')).toBeInTheDocument();
+    expect(screen.queryAllByText(/Devnet/, { ignore: 'a, script, style' })).toEqual([]);
+  });
+
+
+  it("calls a cluster Phantom has no name for by the network's own key", async () => {
+    given.json('get', '/api/svm/networks', networksWith({ cluster: 'localnet' }));
+    installPhantom({ connected: true });
+    renderSvm();
+    expect(await screen.findByText('Phantom localnet įjungiamas taip:')).toBeInTheDocument();
+    expect(screen.getByText('Tinklo sąraše pasirinkite „localnet“, ne „Solana“')).toBeInTheDocument();
   });
 });
 
@@ -579,8 +685,12 @@ describe("The student's own balance", () => {
   });
 
 
-  it.fails('PINNED KNOWN BUG: an RPC answer with neither result nor error (a proxy page answered 200) shows a dash — instead "Kraunama…" stays forever', async () => {
-    given.text('post', RPC, '<html><body>Palaukite…</body></html>');
+  it.each([
+    ["a proxy's page answered 200", () => given.text('post', RPC, '<html><body>Palaukite…</body></html>')],
+    ['a JSON-RPC answer with neither result nor error', () => given.json('post', RPC, { jsonrpc: '2.0', id: 1 })],
+    ['a result without a number in it', () => given.json('post', RPC, { jsonrpc: '2.0', id: 1, result: { context: { slot: 1 }, value: null } })],
+  ])('shows a dash — never a lasting "Kraunama…" — for an RPC answer that carries no balance: %s', async (_, answer) => {
+    answer();
     await atClaimStep();
     await waitFor(() => expect(studentBalance()).toHaveTextContent(/^Jūsų Phantom balansas:-$/), { timeout: 1500 });
   });
@@ -598,8 +708,10 @@ describe("The student's own balance", () => {
 //
 // Sign the ownership message in Phantom, then GET
 // /api/svm/<network>/request?address=&signature=&nonce= — the
-// in-flight state, the outcome rows, and every refusal from
-// the wallet and from the backend.
+// in-flight state, the outcome rows (the payout's transaction
+// linked to the explorer), every refusal from the wallet and
+// from the backend, and the failures that carry no sentence
+// of their own, in Lithuanian.
 // -----------------------------------------------------------
 
 describe('The claim', () => {
@@ -617,11 +729,44 @@ describe('The claim', () => {
   });
 
 
-  it('says the coins are on their way to the wallet', async () => {
+  it("says the coins are on their way and names the transaction in full, linked to the network's explorer", async () => {
     const { user, claim } = await atClaimStep();
     await user.click(claim);
-    expect(await screen.findByRole('alert')).toHaveTextContent(/^Solana Devnet išsiųstas į jūsų piniginę\.$/);
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(exactly(`Solana Devnet išsiųstas į jūsų piniginę. Transakcija: ${TXID}`));
+    const link = within(alert).getByRole('link', { name: TXID });
+    // The Solana explorer learns its cluster after the question
+    // mark — the transaction's path goes in front of it
+    expect(link).toHaveAttribute('href', `https://explorer.solana.com/tx/${TXID}?cluster=devnet`);
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    // An 88-character id wraps inside the alert instead of
+    // widening the card — the class is where that lives
+    expect(link).toHaveClass('break-all', 'underline');
     expect(screen.getByRole('button', { name: 'Gauti Solana Devnet valiutos' })).toBeInTheDocument();
+  });
+
+
+  it('links a Testnet payout to the Testnet explorer', async () => {
+    given.json('get', '/api/svm/:network/request', f.svmPayout());
+    installPhantom({ connected: true });
+    const { user } = renderWithPicker('solanaTestnet');
+    await user.click(await passClusterStep(user, 'Solana Testnet'));
+    const alert = await screen.findByRole('alert');
+    expect(within(alert).getByRole('link', { name: TXID })).toHaveAttribute('href', `https://explorer.solana.com/tx/${TXID}?cluster=testnet`);
+  });
+
+
+  it.each([
+    ['names no explorer', { block_explorer_urls: [] }],
+    ['names an explorer address that is no URL', { block_explorer_urls: ['explorer.solana.com'] }],
+  ])('shows the transaction id as plain text when the network %s', async (_, changes) => {
+    given.json('get', '/api/svm/networks', networksWith(changes));
+    const { user, claim } = await atClaimStep();
+    await user.click(claim);
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(exactly(`Solana Devnet išsiųstas į jūsų piniginę. Transakcija: ${TXID}`));
+    expect(within(alert).queryByRole('link')).toBeNull();
   });
 
 
@@ -632,7 +777,7 @@ describe('The claim', () => {
     await waitFor(() => expect(bodies).toHaveLength(1));
     expect(balances).toHaveLength(1);
     await user.click(claim);
-    await screen.findByText('Solana Devnet išsiųstas į jūsų piniginę.');
+    await screen.findByText(/^Solana Devnet išsiųstas į jūsų piniginę\./);
     await waitFor(() => expect(balances).toHaveLength(2), { timeout: 1000 });
     await waitFor(() => expect(bodies).toHaveLength(2), { timeout: 1000 });
   });
@@ -666,7 +811,7 @@ describe('The claim', () => {
     expect(held.requests).toBe(1);
     expect(phantom.callsTo('signMessage')).toHaveLength(1);
     await held.release();
-    expect(await screen.findByText('Solana Devnet išsiųstas į jūsų piniginę.')).toBeInTheDocument();
+    expect(await screen.findByText(/^Solana Devnet išsiųstas į jūsų piniginę\./)).toBeInTheDocument();
   });
 
 
@@ -697,7 +842,34 @@ describe('The claim', () => {
     const { user, claim } = await atClaimStep();
     await user.click(claim);
     expect(await screen.findByRole('alert')).toHaveTextContent(exactly(message));
-    expect(screen.queryByText('Solana Devnet išsiųstas į jūsų piniginę.')).toBeNull();
+    expect(screen.queryByText(/išsiųstas į jūsų piniginę/)).toBeNull();
+  });
+
+
+  it.each([
+    ["a proxy's HTML error page", () => given.html('get', '/api/svm/:network/request'), `${CLAIM_FAILED} Serveris grąžino klaidą (502).`],
+    ['a 500 with no body', () => given.empty('get', '/api/svm/:network/request', 500), `${CLAIM_FAILED} Serveris grąžino klaidą (500).`],
+    ['a dropped connection', () => given.networkError('get', '/api/svm/:network/request'), `${CLAIM_FAILED} Patikrinkite interneto ryšį.`],
+  ])("says it in Lithuanian, never in axios's English, for %s", async (_, answer, message) => {
+    answer();
+    const { user, claim } = await atClaimStep();
+    await user.click(claim);
+    expect(await screen.findByRole('alert')).toHaveTextContent(exactly(message));
+  });
+
+
+  it.each([
+    ['an empty object', () => given.json('get', '/api/svm/:network/request', {}), CLAIM_FAILED],
+    ["a proxy's page", () => given.text('get', '/api/svm/:network/request', '<html><body>Palaukite…</body></html>'), CLAIM_FAILED],
+    ['a transaction id that is no string', () => given.json('get', '/api/svm/:network/request', { ...f.svmPayout(), transaction_id: 12345 }), CLAIM_FAILED],
+    ["a refusal sent as { error }", () => given.json('get', '/api/svm/:network/request', { error: f.COOLDOWN_MESSAGE }), f.COOLDOWN_MESSAGE],
+  ])('treats a 200 answer that names no transaction as a failure, not a payout: %s', async (_, answer, message) => {
+    answer();
+    const { user, claim } = await atClaimStep();
+    await user.click(claim);
+    expect(await screen.findByRole('alert')).toHaveTextContent(exactly(message));
+    expect(screen.queryByText(/išsiųstas į jūsų piniginę/)).toBeNull();
+    expect(document.querySelector('a[href*="/tx/"]')).toBeNull();
   });
 
 
@@ -814,10 +986,11 @@ describe('Switching networks', () => {
     installPhantom({ connected: true });
     const { user } = renderWithPicker();
     await user.click(await passClusterStep(user));
-    await screen.findByText('Solana Devnet išsiųstas į jūsų piniginę.');
+    await screen.findByText(/^Solana Devnet išsiųstas į jūsų piniginę\./);
     await user.click(screen.getByRole('link', { name: 'Testnet' }));
     expect(await pageLoaded("Solana Testnet faucet'as")).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: 'Persijungti į Solana Testnet tinklą' })).toBeInTheDocument();
+    expect(screen.getByText('Phantom Solana Testnet įjungiamas taip:')).toBeInTheDocument();
     expect(screen.queryByRole('alert')).toBeNull();
   });
 
@@ -845,6 +1018,13 @@ describe('Switching networks', () => {
 // -----------------------------------------------------------
 // Unknown networks and a missing network list
 // -----------------------------------------------------------
+//
+// An unknown :network gets the error card and never polls; a
+// network list that failed — or answered 200 without its
+// networks map — gets the list's failure card, never a
+// skeleton that does not end; the real App routes here and
+// titles the tab.
+// -----------------------------------------------------------
 
 describe('Unknown networks and a missing network list', () => {
 
@@ -867,6 +1047,19 @@ describe('Unknown networks and a missing network list', () => {
   });
 
 
+  it.each([
+    ["a proxy's page", () => given.text('get', '/api/svm/networks', '<html><body>Palaukite…</body></html>')],
+    ['an empty object', () => given.json('get', '/api/svm/networks', {})],
+    ['a list where the map belongs', () => given.json('get', '/api/svm/networks', { ...f.svmNetworks, networks: [f.svmNetworksMap.solanaDevnet] })],
+  ])('says the network list could not be read when it answers 200 without a networks map, instead of a skeleton forever: %s', async (_, answer) => {
+    answer();
+    renderSvm();
+    expect(await screen.findByText('Nepavyko gauti tinklų sąrašo. Perkraukite puslapį.')).toBeInTheDocument();
+    expect(screen.queryByText('Kraunami tinklo duomenys…')).toBeNull();
+    expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
+  });
+
+
   it('the real App routes /faucet/svm/solanaDevnet here, under the tab title "SVM čiaupas"', async () => {
     renderApp({ route: '/faucet/svm/solanaDevnet' });
     expect(await pageLoaded()).toBeInTheDocument();
@@ -885,13 +1078,14 @@ describe('Unknown networks and a missing network list', () => {
 // -----------------------------------------------------------
 //
 // Every response variant against the endpoints the page
-// reads: the network list, the faucet's balance (the page has
-// NO failure state for it — the failure variants are pinned),
-// the claim's failure answers (a render that clicks through
-// to the claim: the matrix does not await it, the click is its
-// last step) and the public getBalance, rendered on a network
-// with no cluster so a connected wallet is at the claim step
-// at once — the row's four states need no click.
+// reads: the network list, the faucet's balance (its failure
+// is the page's notice in place of the numbers, under the
+// page's own title), the claim's failure answers (a render
+// that clicks through to the claim: the matrix does not await
+// it, the click is its last step) and the public getBalance,
+// rendered on a network with no cluster so a connected wallet
+// is at the claim step at once — the row's four states need
+// no click.
 // -----------------------------------------------------------
 
 describeEndpointContract({
@@ -903,8 +1097,6 @@ describeEndpointContract({
   loading: () => screen.getByRole('status'),
 });
 
-
-const NO_FAILURE_STATE = 'a failed faucet-balance leaves the page on its loading skeleton forever — no failure is ever shown';
 
 describeEndpointContract({
   path: '/api/svm/:network/faucet-balance',
@@ -918,7 +1110,6 @@ describeEndpointContract({
     expect(screen.getByText(/Nepavyko/)).toBeInTheDocument();
   },
   loading: () => screen.getByRole('status'),
-  pins: Object.fromEntries(VARIANTS.filter((variant) => variant.expect === 'failed').map((variant) => [variant.name, NO_FAILURE_STATE])),
 });
 
 
@@ -941,11 +1132,6 @@ describeEndpointContract({
     expect(alert.textContent).not.toMatch(/Network Error|Request failed with status code/);
   },
   loading: () => screen.getByRole('button', { name: 'Siunčiama…' }),
-  pins: {
-    'HTML error page from the proxy (502) → the failure is shown': 'the student reads axios\'s English "Request failed with status code 502"',
-    'status 500 with an empty body → the failure is shown': 'the student reads axios\'s English "Request failed with status code 500"',
-    'connection dropped → the failure is shown': 'the student reads axios\'s English "Network Error"',
-  },
 });
 
 

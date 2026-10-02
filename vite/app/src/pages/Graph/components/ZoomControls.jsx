@@ -35,6 +35,10 @@ const ZOOM_BUTTON_SX = {
 // ZoomControls (default export)
 // -----------------------------------------------------------
 //
+// The panel itself. Every control is named for assistive
+// technology: the buttons by what they do, the slider
+// "Mastelis" — the name the UTXO graph's zoom slider has.
+//
 // Used by:
 //   - CryptoFlowGraph.jsx — floating over the graph canvas
 // -----------------------------------------------------------
@@ -67,6 +71,7 @@ export default function ZoomControls({ scale, min, max, step, onScaleChange, onZ
         max={max}
         step={step}
         onChange={(_, value) => onScaleChange(Array.isArray(value) ? value[0] : value)}
+        aria-label="Mastelis"
         sx={{ height: DIMENSIONS.ZOOM_SLIDER_HEIGHT, mx: 0.5 }}
       />
 

@@ -3,10 +3,10 @@
 //
 //  The day picker at the top of the page: ONE compact row with
 //  three ways to pick a day, all over the SAME list of used
-//  days — the searchable dropdown (newest first; type a
-//  fragment like "09-" to filter), then the − / + steppers
-//  (exactly one used day earlier / later) around the slider.
-//  Slider positions are indices into `days`, rightmost =
+//  days — the searchable dropdown (newest first; typing part
+//  of a date filters it), then the − / + steppers (exactly
+//  one used day earlier / later) around the slider. Slider
+//  positions are indices into `days`, the rightmost the
 //  newest; the tooltip previews WHILE dragging, the graph
 //  switches only on release. With a single known day there is
 //  nothing to step or slide — the row shrinks to the dropdown
@@ -45,10 +45,12 @@ const STEP_BUTTON_SX = {
 // DateSliderBar (default export)
 // -----------------------------------------------------------
 //
-//   <DateSliderBar days={['2026-09-27', …]} selectedDay today
-//                  onCommit={(day) => …} />
-//
-// days ascending (today last); onCommit gets the picked day.
+// The row, controlled by the page: `days` is the list of used
+// days, ascending with today last; selectedDay is the day on
+// show — one that fell out of the list shows as the newest;
+// today is the day the dropdown marks "(šiandien)"; and
+// onCommit receives every day picked, from the dropdown, a
+// stepper or the slider's release.
 //
 // Used by:
 //   - Page.jsx — the middle of the title row

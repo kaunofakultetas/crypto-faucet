@@ -195,8 +195,8 @@ export const NAME_MAX_LENGTH = 64;
 // MEMPOOL_COLUMN
 // -----------------------------------------------------------
 //
-// The key of the last column: the transactions no block
-// holds yet (block: null).
+// The key of the last column, where the transactions no
+// block holds yet wait — the ones whose block is null.
 //
 // Used by:
 //   - useNodePositions.js — columnKeyOf, buildColumns

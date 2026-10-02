@@ -13,14 +13,13 @@
 //  outputs of the transactions before them.
 //
 //  handlers.js serves these by default; a test that needs a
-//  variation copies and edits (`{ ...evmBalance(), balance: 0 }`)
-//  rather than changing a fixture other tests share.
+//  variation copies a fixture and edits the copy rather than
+//  changing a fixture other tests share.
 //
 //  Used by:
 //    - handlers.js — the default handlers
 //    - page and component tests — the values they assert on
 // -----------------------------------------------------------
-
 
 // The faucet's own addresses, per family (the live ones —
 // public, and what every balance answer names)
@@ -37,6 +36,11 @@ export const JONAS = 'tb1qxc2wlcxvzcph96p4q9xn9hqpua7l3fv9ufxek8';
 export const EGLE = 'tb1q3gq3qmj6efm2frmwu9gkm9hq7kcc3yuamvn6kkwv26rxepf4q2hshun05n';
 export const PETRAS = 'tb1qvrzfhju72hv677g74ma5lwh4nyu50e4nsmssky';
 export const HUB = 'tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx';
+
+
+
+
+
 
 
 // -----------------------------------------------------------
@@ -85,6 +89,11 @@ export const catalog = {
 };
 
 
+
+
+
+
+
 // -----------------------------------------------------------
 // Balances — GET /api/<family>/<network>/faucet-balance
 // -----------------------------------------------------------
@@ -130,6 +139,11 @@ export const erc20Token = (symbol = 'LINK', address = null) => ({
 });
 
 
+
+
+
+
+
 // -----------------------------------------------------------
 // Payouts — the success answers (never called live)
 // -----------------------------------------------------------
@@ -143,6 +157,11 @@ export const movePayout = () => ({ message: 'SUI sent successfully', transaction
 // The backend's refusals the pages must show as they are
 export const COOLDOWN_MESSAGE = 'Kriptovaliuta jums jau išsiųsta. Daugiau galėsite pasiimti už 3500 sek.';
 export const EMPTY_FAUCET_MESSAGE = 'Čiaupas nebeturi kriptovaliutos. Praneškite dėstytojui.';
+
+
+
+
+
 
 
 // -----------------------------------------------------------
@@ -165,6 +184,11 @@ export const evmStoredTransactions = () => ({
     { count: 1, from_addr_contract: 0, from_addr_hub: null, from_address: STUDENT_EVM, from_name: 'Jonas', from_timestamp: 1789034568, to_addr_contract: 0, to_addr_hub: null, to_address: FAUCET_EVM, to_name: 'KNF Faucet', to_timestamp: 1789034568, value: 0.199752074200623 },
   ],
 });
+
+
+
+
+
 
 
 // -----------------------------------------------------------
@@ -293,6 +317,11 @@ export const utxoTransactionDays = () => ({
     { count: 5, day: '2026-09-29' },
   ],
 });
+
+
+
+
+
 
 
 // -----------------------------------------------------------

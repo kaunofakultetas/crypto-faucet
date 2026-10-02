@@ -16,9 +16,11 @@
 //  panel, the right-click naming dialog, the notice shown
 //  while the backend cannot be reached (an outage must not
 //  look like a quiet day) and the TEXT ALTERNATIVE — the
-//  canvas is named as an image and a visually hidden table
-//  lists every drawn transfer (from, to, amount, count), so
-//  a screen-reader user gets the same facts the picture
+//  canvas is named as an image with the day and how many
+//  transfers it draws, the noun agreeing with that count the
+//  Lithuanian way, and a visually hidden table lists every
+//  drawn transfer (from, to, amount, count), so a
+//  screen-reader user gets the same facts the picture
 //  shows. All graph state and logic live in
 //  useTransactionGraph.js (which pulls in useNodePositions.js
 //  for the dragged-X persistence); ZoomControls.jsx and
@@ -29,10 +31,17 @@ import { useState } from 'react';
 
 import Box from '@mui/material/Box';
 
+import { pluralForm } from '@/utils/plural';
+
 import { ZOOM_CONFIG } from '../constants';
 import useTransactionGraph from '../hooks/useTransactionGraph';
 import ZoomControls from './ZoomControls';
 import AddressDialog from './AddressDialog';
+
+
+// The canvas's count noun in its Lithuanian forms, for the
+// plural categories utils/plural.js sorts a count into
+const TRANSFERS = { one: 'pervedimas', few: 'pervedimai', other: 'pervedimų' };
 
 
 
@@ -43,6 +52,11 @@ import AddressDialog from './AddressDialog';
 // -----------------------------------------------------------
 // CryptoFlowGraph (default export)
 // -----------------------------------------------------------
+//
+// The shell around the canvas: it holds the right-click
+// dialog's state and wires the hook's graph to the zoom
+// panel, the dialog, the outage notice and the text
+// alternative.
 //
 // Used by:
 //   - Page.jsx — under the date slider bar
@@ -104,7 +118,7 @@ export default function CryptoFlowGraph({ faucetAddress, network, dateRange, liv
         <div
           ref={containerRef}
           role="img"
-          aria-label={`Transakcijų srauto grafikas, ${day}: ${rows.length} pervedimai`}
+          aria-label={`Transakcijų srauto grafikas, ${day}: ${rows.length} ${pluralForm(rows.length, TRANSFERS)}`}
           aria-describedby="graph-table"
           style={{ height: '100%', width: '100%', border: '1px solid #ddd' }}
         />

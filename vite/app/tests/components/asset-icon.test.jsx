@@ -45,8 +45,9 @@ const renderMark = (props) => {
 
 const colourOf = (element) => getComputedStyle(element).backgroundColor;
 
-// hsl(h, 65 %, 55 %) in rgb: the strongest channel is always
-// 215 and the weakest 66, whatever the hue
+// A dot's colour — its hue at 65 % saturation and 55 %
+// lightness — in rgb: the strongest channel is always 215 and
+// the weakest 66, whatever the hue
 const channels = (rgb) => rgb.match(/\d+/g).map(Number);
 
 

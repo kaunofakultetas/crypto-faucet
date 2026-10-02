@@ -189,11 +189,12 @@ async function connectPhantom() {
 // has switchChain. The cluster is the student's Testnet Mode
 // setting, full stop.
 //
-// changeNetwork({ genesisHash }) is the OKX-style provider
-// API, kept as cheap future-proofing: a wallet that ships it
-// answers → 'confirmed'; Phantom answers method-not-found →
-// 'assumed', and the page keeps the Testnet Mode instructions
-// visible. A refusal or a real failure throws a
+// The OKX-style changeNetwork request, which names the
+// cluster by its genesis hash, is still sent as cheap
+// future-proofing: a wallet that ships it confirms the hop;
+// Phantom answers that the method does not exist, so the hop
+// counts as assumed and the page keeps the Testnet Mode
+// instructions in view. A refusal or a real failure throws a
 // ready-to-display message.
 //
 // Used by:
@@ -288,19 +289,19 @@ async function signClaimMessage(address) {
 // usePhantomWallet (default export)
 // -----------------------------------------------------------
 //
-//   const { installed, address, step, clusterConfirmed,
-//           connect, switchNetwork, signMessage } =
-//     usePhantomWallet(expectedCluster)
-//
-// expectedCluster is the faucet network's flavour ('devnet' |
-// 'testnet' | 'mainnet'); with none there is no cluster to be
-// wrong about and a connected wallet is already step 3.
-// clusterConfirmed is false when the student passed the
-// cluster step on a build that could not confirm the hop — the
-// page then keeps showing the manual instructions. Balance
-// polling stays on the page: the wallet owns no RPC.
-// connect / switchNetwork / signMessage reject with a
-// ready-to-display Lithuanian message.
+// Everything the Solana page needs from Phantom: whether it
+// is installed, the connected address, the step of the wallet
+// flow the student is on, whether the cluster hop was
+// confirmed, and the three actions — connect, switch the
+// cluster, sign the claim message. The expected cluster is
+// the faucet network's flavour (devnet, testnet or mainnet);
+// without one there is no cluster to be wrong about, so a
+// connected wallet goes straight past the cluster step. The
+// hop counts as unconfirmed when the student passed the
+// cluster step on a build that could not confirm it — the
+// page then keeps the manual instructions in view. Balance
+// polling stays on the page: the wallet owns no RPC. Every
+// action rejects with a ready-to-display Lithuanian message.
 //
 // Used by:
 //   - Page.jsx — FaucetSVM

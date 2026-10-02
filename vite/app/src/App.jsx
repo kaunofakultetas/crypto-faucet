@@ -17,11 +17,13 @@
 //  entries configured, EVM preferred — a family the operator
 //  disabled (empty map in _CONFIG/coins.py) is skipped, the
 //  same way the navbar hides it. A catalog that could not be
-//  fetched at all is a different thing and says so. Unmatched
-//  URLs (a typo, a stale bookmark, a family path with no
-//  key) land on the not-found page; a render-time throw in
-//  the navbar or a page is caught by an ErrorBoundary instead
-//  of blanking the whole app. Every page is a static import
+//  fetched at all is a different thing and says so. A family
+//  path with no key (a truncated bookmark) goes through "/"
+//  like a fresh visit; any other unmatched URL (a typo, a
+//  stale bookmark) lands on the not-found page; a render-time
+//  throw in the navbar or a page is caught by an
+//  ErrorBoundary instead of blanking the whole app. Every
+//  page is a static import
 //  — one bundle, no lazy chunks, by decision: a tab left
 //  open across a deploy must keep navigating, never fail on
 //  a chunk the server no longer has.
@@ -161,9 +163,11 @@ function CatalogUnavailable({ onRetry }) {
 // One document.title per route — a client-routed SPA never
 // changes it on its own, so every tab, bookmark and history
 // entry would read the same "VU KNF Faucet'as". Matched by
-// path prefix, FIRST match wins — a longer prefix must come
-// before a shorter one it extends (/graph/utxo before
-// /graph); an unknown path keeps the bare site name.
+// path prefix on whole segments — a path that merely starts
+// with a route's letters (/graphs) is not under it — and the
+// FIRST match wins, so a longer prefix must come before a
+// shorter one it extends (/graph/utxo before /graph); an
+// unknown path keeps the bare site name.
 //
 // Used by:
 //   - PageArea (below)
@@ -188,7 +192,7 @@ function useRouteTitle() {
   const { pathname } = useLocation();
 
   useEffect(() => {
-    const name = ROUTE_TITLES.find(([prefix]) => pathname.startsWith(prefix))?.[1];
+    const name = ROUTE_TITLES.find(([prefix]) => pathname === prefix || pathname.startsWith(`${prefix}/`))?.[1];
     document.title = name ? `${name} — ${SITE_TITLE}` : SITE_TITLE;
   }, [pathname]);
 }
@@ -251,11 +255,16 @@ function PageArea() {
           </Route>
         </Route>
 
-        {/* Transaction graph */}
+        {/* Transaction graphs — the UTXO graph is a family of its
+            own, with its own index: without it /graph/utxo would
+            be the EVM graph of a network named "utxo" */}
         <Route path="graph">
           <Route index element={<Navigate to="/" replace />} />
           <Route path=":network" element={<GraphPage />} />
-          <Route path="utxo/:network" element={<GraphUtxoPage />} />
+          <Route path="utxo">
+            <Route index element={<Navigate to="/" replace />} />
+            <Route path=":network" element={<GraphUtxoPage />} />
+          </Route>
         </Route>
 
         {/* Teaching pages */}

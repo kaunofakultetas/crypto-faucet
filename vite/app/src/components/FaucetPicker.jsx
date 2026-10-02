@@ -1,21 +1,16 @@
 // -----------------------------------------------------------
 //  [*] FaucetPicker — the navbar's what-am-I-getting dropdown
 //
-//  One compact dropdown for all five faucet types, because
-//  they are not all keyed by the same thing:
-//
-//    UTXO  → a network  (Bitcoin Testnet4, …)
-//    EVM   → a network  (Sepolia, Arbitrum Sepolia, …)
-//    ERC-20→ a TOKEN    (Chainlink, …) — the token lives on
-//                        many chains, so the chain is chosen
-//                        on the page, not here
-//    SVM   → a network  (Solana Devnet, …)
-//    MOVE  → a network  (Sui Testnet, …)
+//  One compact dropdown for all five faucet types, although
+//  they are not keyed by the same thing: the UTXO, EVM, SVM
+//  and MOVE faucets are picked by network, the ERC-20 faucet
+//  by token — one token lives on many chains, so its chain is
+//  chosen on the page, not here.
 //
 //  The component knows nothing about that distinction: it
-//  takes a ready list of { key, primary, secondary, icon }
-//  items from the navbar and navigates to
-//  /faucet/<type>/<key>. The pick is remembered per type as
+//  takes a ready list of items (a key, two lines of text and
+//  an icon) from the navbar and navigates to the faucet page
+//  of the picked key. The pick is remembered per type as
 //  lastPick:<type>; favourites are stored as <type>:<key>,
 //  since catalog keys are only unique within a family. Each
 //  row's identity mark is an AssetIcon
@@ -24,10 +19,12 @@
 //
 //  Split into (root component last):
 //
-//    useSelectedKey — the picked key straight from the URL
+//    useSelectedKey  — the picked key straight from the URL
 //    useLocalStorage — JSON state persisted per key
-//    ItemRow        — one selectable menu row
-//    FaucetPicker   — button + menu (default export)
+//    isFavoriteList  — what a readable favourites entry is
+//    FilterRow       — the filter field at the top of the menu
+//    ItemRow         — one selectable menu row
+//    FaucetPicker    — button + menu (default export)
 // -----------------------------------------------------------
 
 import { useEffect, useState } from 'react';
@@ -75,23 +72,27 @@ function useSelectedKey(faucetType) {
 // useLocalStorage
 // -----------------------------------------------------------
 //
-//   const [value, setValue] = useLocalStorage(key, initial)
-//
 // useState that survives reloads: JSON under the given
 // localStorage key, read once on mount, written on every
-// change. Storage failures (private mode, quota) degrade to
-// plain state.
+// change. What was stored is only trusted when the caller's
+// check accepts it — an older build, or a hand edit, can
+// leave valid JSON of the wrong shape behind, and replaying
+// that on every visit would crash the navbar each time. A
+// rejected or unreadable value starts fresh, and storage
+// failures (private mode, quota) degrade to plain state.
 //
 // Used by:
 //   - FaucetPicker (below) — the favourites list
 // -----------------------------------------------------------
 
-function useLocalStorage(key, initialValue) {
+function useLocalStorage(key, initialValue, isValid = () => true) {
 
   const [value, setValue] = useState(() => {
     try {
       const raw = localStorage.getItem(key);
-      return raw ? JSON.parse(raw) : initialValue;
+      if (!raw) return initialValue;
+      const stored = JSON.parse(raw);
+      return isValid(stored) ? stored : initialValue;
     } catch {
       // corrupt JSON or blocked storage — start fresh
       return initialValue;
@@ -108,6 +109,85 @@ function useLocalStorage(key, initialValue) {
 
   return [value, setValue];
 }
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// isFavoriteList
+// -----------------------------------------------------------
+//
+// The only favourites entry worth restoring: a list of
+// "<type>:<key>" strings. Anything else is left behind by
+// another build and is dropped rather than repaired.
+//
+// Used by:
+//   - FaucetPicker (below) — useLocalStorage's check
+// -----------------------------------------------------------
+
+function isFavoriteList(value) {
+  return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// FilterRow
+// -----------------------------------------------------------
+//
+// The filter field at the top of the menu. It sits inside
+// the menu's list, so MUI's MenuList would take this wrapper
+// for its first item and make it the keyboard stop — the
+// first ArrowDown from the field would then land on an
+// invisible box. muiSkipListHighlight (set below the
+// function) tells MenuList to pass over it, so ArrowDown goes
+// straight to the first row.
+//
+// Printable keystrokes must not reach the menu's own
+// type-ahead, or the field loses focus on every letter; named
+// keys (Escape, the arrows, Tab) must reach it, or the menu
+// could not be closed or walked from the keyboard.
+//
+// Used by:
+//   - FaucetPicker (below)
+// -----------------------------------------------------------
+
+function FilterRow({ value, onChange }) {
+  return (
+    <Box sx={{ px: 1.5, pt: 0.5, pb: 1 }}>
+      <TextField
+        autoFocus
+        fullWidth
+        size="small"
+        placeholder="Filtruoti…"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) e.stopPropagation();
+        }}
+        slotProps={{
+          input: {
+            startAdornment: (
+              <InputAdornment position="start">
+                <SearchIcon fontSize="small" />
+              </InputAdornment>
+            ),
+          },
+        }}
+      />
+    </Box>
+  );
+}
+
+// MenuList reads this flag from the child's component type
+FilterRow.muiSkipListHighlight = true;
 
 
 
@@ -169,13 +249,11 @@ function ItemRow({ item, isFavorite, isSelected, onToggleFavorite, onSelect }) {
 // FaucetPicker (default export)
 // -----------------------------------------------------------
 //
-//   <FaucetPicker items={…} loading faucetType label />
-//
-// The trigger button plus its anchored menu. `label` is what
-// the button says when nothing is picked yet ("Pasirinkti
-// tinklą" / "Pasirinkti žetoną"). The filter matches both
-// lines of a row, and favourites float to the top under their
-// own divider.
+// The trigger button plus its anchored menu, for one faucet
+// type's items; `loading` stands in while the catalog is on
+// its way, and `label` is what the button says while nothing
+// is picked yet. The filter matches both lines of a row, and
+// favourites float to the top under their own divider.
 //
 // Used by:
 //   - Navbar.jsx — next to the faucet-type switch
@@ -188,7 +266,7 @@ export default function FaucetPicker({ items = [], loading = false, faucetType, 
 
   const [anchorEl, setAnchorEl] = useState(null);
   const [filter, setFilter] = useState('');
-  const [favorites, setFavorites] = useLocalStorage('favFaucetPicks', []);
+  const [favorites, setFavorites] = useLocalStorage('favFaucetPicks', [], isFavoriteList);
 
   const open = Boolean(anchorEl);
   const selected = items.find((i) => i.key === selectedKey) || null;
@@ -273,33 +351,7 @@ export default function FaucetPicker({ items = [], loading = false, faucetType, 
         transformOrigin={{ vertical: 'top', horizontal: 'left' }}
         slotProps={{ paper: { sx: { width: 320, maxHeight: 420, mt: 0.5 } } }}
       >
-        {/* Filter — printable keystrokes must not reach the
-            menu's own type-ahead, or the field loses focus on
-            every letter; named keys (Escape, the arrows, Tab)
-            must reach it, or the menu can't be closed or
-            walked from the keyboard */}
-        <Box sx={{ px: 1.5, pt: 0.5, pb: 1 }}>
-          <TextField
-            autoFocus
-            fullWidth
-            size="small"
-            placeholder="Filtruoti…"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) e.stopPropagation();
-            }}
-            slotProps={{
-              input: {
-                startAdornment: (
-                  <InputAdornment position="start">
-                    <SearchIcon fontSize="small" />
-                  </InputAdornment>
-                ),
-              },
-            }}
-          />
-        </Box>
+        <FilterRow value={filter} onChange={setFilter} />
 
         {loading && (
           <MenuItem disabled>Kraunama…</MenuItem>

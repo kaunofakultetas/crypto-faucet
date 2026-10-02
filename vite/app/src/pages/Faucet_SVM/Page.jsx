@@ -1,7 +1,8 @@
 // -----------------------------------------------------------
 //  [*] Pages — SVM Faucet (route /faucet/svm/:network)
 //
-//  The student-facing faucet for SVM chains (Solana Devnet).
+//  The student-facing faucet for SVM chains (Solana, on the
+//  cluster each network's config names — Devnet today).
 //  Laid out like the EVM page — title, stepper, balances,
 //  claim, return address — but the wallet underneath is
 //  Phantom, not MetaMask:
@@ -12,25 +13,37 @@
 //      same Lithuanian nonce message, sent base58-encoded
 //    - Phantom cannot always hop clusters on request, and
 //      never reports the one it is showing, so the cluster
-//      step passes on the click and DevnetInstructions stays
-//      on screen until the hop was confirmed
+//      step passes on the click and ClusterInstructions — the
+//      Testnet Mode clicks for the network's own cluster —
+//      stays on screen until the hop was confirmed
 //
 //  Claiming signs a nonce the backend verifies before sending
-//  (GET /api/svm/<network>/request). The faucet's return
-//  address renders as text + QR. There is no transaction-graph
-//  shortcut — /graph is Etherscan-based.
+//  (GET /api/svm/<network>/request); the success alert names
+//  the payout's transaction, linked to the network's
+//  explorer. The faucet's return address renders as text +
+//  QR. There is no transaction-graph shortcut — /graph is
+//  Etherscan-based.
+//
+//  No answer of the backend leaves the page hanging: a network
+//  list without its map gets the list's failure card, faucet
+//  info that never arrived (or arrived in another shape) a
+//  failure notice on a page whose wallet steps still work, and
+//  a failed claim a Lithuanian sentence.
 //
 //  Split into (root component last):
 //
 //    SVM_REFRESH_MS      — balance repoll cadence
 //    PHANTOM_*           — wallet name + download link
+//    PHANTOM_CLUSTERS    — Phantom's own names for a cluster
+//    CLAIM_FAILED        — the claim's own failure sentence
 //    lamportsToCoins     — the only unit maths on this page
-//    useNetworks         — the SVM network catalog (shared cache)
+//    useNetworks         — the SVM network catalog (own fetch)
 //    useFaucetInfo       — faucet address + balance, polled
 //    useWalletBalance    — the student's cluster balance, from
 //                          the public cluster JSON-RPC
-//    DevnetInstructions  — the manual Testnet Mode clicks
+//    ClusterInstructions — the manual Testnet Mode clicks
 //    LoadingSkeleton     — full-page skeleton layout
+//    FaucetRows          — the faucet's numbers, or its failure
 //    ReturnAddressCard   — return address + QR
 //    FaucetSVM           — page state + layout (default export)
 // -----------------------------------------------------------
@@ -41,12 +54,15 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import QRCode from 'react-qr-code';
 import axios from 'axios';
 
-import { Button, Box, Skeleton, Stack, CircularProgress } from '@mui/material';
+import { Alert, Button, Box, Skeleton, Stack, CircularProgress } from '@mui/material';
 import PaidIcon from '@mui/icons-material/Paid';
 
 import AssetIcon from '@/components/AssetIcon';
 import ErrorCard from '@/components/ErrorCard';
+import PayoutMessage from '@/components/PayoutMessage';
 import { WalletStepper, WalletGateButton, FadingAlert, useAlerts } from '@/components/WalletFlow';
+import { requestErrorText } from '@/utils/requestError';
+import { payoutTxid } from '@/utils/payout';
 
 import usePhantomWallet from './usePhantomWallet';
 
@@ -58,6 +74,20 @@ const SVM_REFRESH_MS = 5000;
 // app store listing
 const PHANTOM_NAME = 'Phantom';
 const PHANTOM_DOWNLOAD_URL = 'https://phantom.com/download';
+
+// Phantom's own names for the clusters its Testnet Mode lists
+// — what the student has to pick there — and the short name
+// the coins sentence uses; a cluster Phantom does not list is
+// called by its config key
+const PHANTOM_CLUSTERS = {
+  devnet: { label: 'Solana Devnet', short: 'Devnet' },
+  testnet: { label: 'Solana Testnet', short: 'Testnet' },
+};
+
+// What a failed claim says when neither the wallet nor the
+// backend had words of their own — requestErrorText adds the
+// reason after it
+const CLAIM_FAILED = 'Nepavyko išsiųsti kriptovaliutos.';
 
 
 // Lamports are integers; the chain's decimals come from the
@@ -75,13 +105,15 @@ const lamportsToCoins = (lamports, decimals) => lamports / 10 ** decimals;
 // useNetworks
 // -----------------------------------------------------------
 //
-//   const { networks, failed } = useNetworks()
-//
 // The SVM network map, the page's own fetch — the navbar
 // reads the bundled /api/faucet/catalog instead, so nothing
-// shares this cache entry. failed is true only when the map
-// NEVER arrived — a failed refresh of a map already on
-// screen keeps it.
+// shares this cache entry. The hook hands back the map and
+// whether it failed, which is true only when the map NEVER
+// arrived — a failed refresh of a map already on screen
+// keeps it. An answer without a networks map (a proxy's page
+// with HTTP 200, an empty object) is a failed fetch too, so
+// the page says the list is missing instead of waiting for
+// it on a skeleton.
 //
 // Used by:
 //   - FaucetSVM (below)
@@ -90,7 +122,12 @@ const lamportsToCoins = (lamports, decimals) => lamports / 10 ** decimals;
 function useNetworks() {
   const { data, isError } = useQuery({
     queryKey: ['svm-networks'],
-    queryFn: async () => (await axios.get('/api/svm/networks')).data,
+    queryFn: async () => {
+      const list = (await axios.get('/api/svm/networks')).data;
+      const map = list?.networks;
+      if (!map || typeof map !== 'object' || Array.isArray(map)) throw new Error('no networks map in the answer');
+      return list;
+    },
     staleTime: 5 * 60 * 1000,
   });
 
@@ -108,27 +145,39 @@ function useNetworks() {
 // useFaucetInfo
 // -----------------------------------------------------------
 //
-//   const faucetInfo = useFaucetInfo(network, ready)
+// The faucet's address and balance (with the payout size),
+// repolled every 5 s. The backend caches it ~10 s and drops
+// that cache after a payout. `ready` gates the poll on the
+// catalog knowing this network, so an unknown :network in the
+// URL doesn't repoll a 400 forever.
 //
-// The faucet's address and balance ({ address, balance,
-// symbol, chunk_size }), repolled every 5 s. The backend
-// caches it ~10 s and drops that cache after a payout. `ready`
-// gates the poll on the catalog knowing this network, so an
-// unknown :network in the URL doesn't repoll a 400 forever.
+// The hook hands back the info — null until the first answer
+// — and whether it failed. Only a read that NEVER succeeded
+// is a failure; a failed repoll keeps the last numbers on
+// screen. An answer without an address or without its two
+// numbers counts as a failed read too, rather than a blank
+// number or a QR code of nothing. The poll goes on after a
+// failure, so the page recovers by itself.
 //
 // Used by:
 //   - FaucetSVM (below)
 // -----------------------------------------------------------
 
 function useFaucetInfo(network, ready) {
-  const { data = null } = useQuery({
+  const { data, isLoadingError } = useQuery({
     queryKey: ['svm-faucet-balance', network],
-    queryFn: async () => (await axios.get(`/api/svm/${network}/faucet-balance`)).data,
+    queryFn: async () => {
+      const info = (await axios.get(`/api/svm/${network}/faucet-balance`)).data;
+      const complete = typeof info?.address === 'string' && info.address
+        && Number.isFinite(info.balance) && Number.isFinite(info.chunk_size);
+      if (!complete) throw new Error('not a faucet balance answer');
+      return info;
+    },
     enabled: Boolean(ready),
     refetchInterval: SVM_REFRESH_MS,
   });
 
-  return data;
+  return { faucetInfo: data ?? null, failed: isLoadingError };
 }
 
 
@@ -141,17 +190,19 @@ function useFaucetInfo(network, ready) {
 // useWalletBalance
 // -----------------------------------------------------------
 //
-//   const { lamports, failed } = useWalletBalance(rpcUrl, address)
+// The student's OWN balance in lamports, read with a plain
+// getBalance JSON-RPC call against the PUBLIC cluster RPC
+// from the network payload — never the backend's keyed
+// Infura URL. @solana/web3.js would pull a megabyte of
+// library to wrap this one POST. Only polls once an address
+// is connected. The hook hands back the lamports (null until
+// the first answer) and whether the last read failed.
 //
-// The student's OWN balance, read with a plain getBalance
-// JSON-RPC call against the PUBLIC cluster RPC from the
-// network payload — never the backend's keyed Infura URL.
-// @solana/web3.js would pull a megabyte of library to wrap
-// this one POST. Only polls once an address is connected.
-//
-// A JSON-RPC error arrives with HTTP 200, so it is rethrown
-// here to reach `failed` — the page shows a dash rather than
-// a zero or a permanent "Kraunama…".
+// A JSON-RPC error arrives with HTTP 200, and so does a
+// proxy's page that is no JSON-RPC answer at all; both are
+// thrown here to reach `failed`, as is any answer whose
+// result carries no number — the page shows a dash rather
+// than a zero or a permanent "Kraunama…".
 //
 // This is always the faucet's cluster, even if Phantom's UI is
 // still on mainnet — that is why the cluster step exists: so
@@ -174,7 +225,11 @@ function useWalletBalance(rpcUrl, address) {
         params: [address, { commitment: 'confirmed' }],
       });
       if (data?.error) throw new Error(data.error.message || 'Solana RPC error');
-      return data?.result?.value ?? null;
+
+      // Zero is a balance; a missing number is not
+      const lamports = data?.result?.value;
+      if (!Number.isFinite(lamports)) throw new Error('Solana RPC answered without a balance');
+      return lamports;
     },
   });
 
@@ -188,31 +243,38 @@ function useWalletBalance(rpcUrl, address) {
 
 
 // -----------------------------------------------------------
-// DevnetInstructions
+// ClusterInstructions
 // -----------------------------------------------------------
 //
-// The clicks Phantom will not do for us: Devnet is Testnet
-// Mode inside the extension. Shown on the cluster step, and
-// afterwards too whenever the hop could not be confirmed —
-// otherwise students stay on "Solana" (mainnet) and never see
-// the coins this page sent to Devnet.
+// The clicks Phantom will not do for us: a test cluster is
+// Testnet Mode inside the extension, then the cluster picked
+// by Phantom's own name for it. Shown on the cluster step,
+// and afterwards too whenever the hop could not be confirmed
+// — otherwise students stay on "Solana" (mainnet) and never
+// see the coins this page sent. Every line names the
+// network's OWN cluster: a Testnet faucet must not send the
+// student to Devnet.
 //
 // Used by:
 //   - FaucetSVM (below) — the gate's switchHelp and the
 //     unconfirmed-cluster notice
 // -----------------------------------------------------------
 
-function DevnetInstructions() {
+function ClusterInstructions({ cluster }) {
+
+  const { label, short } = PHANTOM_CLUSTERS[cluster] ?? { label: cluster, short: cluster };
+
+
   return (
     <div className="mt-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-      <p className="font-semibold">Phantom Solana Devnet įjungiamas taip:</p>
+      <p className="font-semibold">Phantom {label} įjungiamas taip:</p>
       <ol className="mt-1 list-decimal space-y-0.5 pl-5">
         <li>Atidarykite Phantom plėtinį</li>
         <li>Nustatymai (⚙️) → Developer Settings → Testnet Mode</li>
-        <li>Tinklo sąraše pasirinkite „Solana Devnet“, ne „Solana“</li>
+        <li>Tinklo sąraše pasirinkite „{label}“, ne „Solana“</li>
       </ol>
       <p className="mt-1">
-        Čiaupo monetos visada keliauja į Devnet. Jei piniginė vis dar
+        Čiaupo monetos visada keliauja į {short}. Jei piniginė vis dar
         rodo mainnet, gautų monetų ten nematysite.
       </p>
     </div>
@@ -230,7 +292,8 @@ function DevnetInstructions() {
 // -----------------------------------------------------------
 //
 // The page as grey bones, shown until the network catalog and
-// the faucet info have arrived.
+// the faucet info have arrived — or the faucet info has
+// failed, which the page itself then says.
 //
 // Used by:
 //   - FaucetSVM (below)
@@ -267,6 +330,46 @@ function LoadingSkeleton() {
         </Stack>
       </div>
     </Box>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// FaucetRows
+// -----------------------------------------------------------
+//
+// The faucet's two lines in the balance card — what one claim
+// pays and what the faucet holds — or, when its info could not
+// be read, the page's failure notice in their place, as the
+// UTXO page shows it.
+//
+// Used by:
+//   - FaucetSVM (below) — the balance card
+// -----------------------------------------------------------
+
+function FaucetRows({ faucetInfo, failed, shortName }) {
+
+  if (failed) {
+    return <Alert severity="error" sx={{ my: 1 }}>Nepavyko gauti čiaupo informacijos</Alert>;
+  }
+
+
+  return (
+    <>
+      <div className="my-2 flex">
+        <span className="flex-1">Išsiųsime jums:</span>
+        <span className="text-right">{parseFloat(faucetInfo.chunk_size).toFixed(3)} {shortName}</span>
+      </div>
+      <div className="my-2 flex">
+        <span className="flex-1">Čiaupo balansas:</span>
+        <span className="text-right">{parseFloat(faucetInfo.balance).toFixed(3)} {shortName}</span>
+      </div>
+    </>
   );
 }
 
@@ -314,7 +417,10 @@ function ReturnAddressCard({ shortName, address }) {
 // -----------------------------------------------------------
 //
 // The page: the Phantom hook wired into the stepper, the
-// balance rows, the claim button and the alerts.
+// balance rows, the claim button and the alerts. Faucet info
+// that could not be read does not hold the page back — the
+// student still installs, connects and hops clusters; only
+// the claim waits for the info, as on the UTXO page.
 //
 // Used by:
 //   - App.jsx — route /faucet/svm/:network
@@ -330,7 +436,7 @@ export default function FaucetSVM() {
   const clusterRpc = networkInfo?.rpc_urls?.[0] ?? null;
   const wallet = usePhantomWallet(networkInfo?.cluster);
 
-  const faucetInfo = useFaucetInfo(network, networkInfo);
+  const { faucetInfo, failed: faucetFailed } = useFaucetInfo(network, networkInfo);
   const walletBalance = useWalletBalance(clusterRpc, wallet.address);
 
   const { alerts, addAlert, clearAlerts } = useAlerts();
@@ -356,28 +462,37 @@ export default function FaucetSVM() {
 
   // Sign the ownership message and let the backend verify it
   // before paying out — no transaction on the student's side.
-  // An answer that arrives after a network switch is dropped:
-  // it belongs to the chain it was issued for.
+  // The success alert names the transaction (payoutTxid); a
+  // failure reads in Lithuanian whatever broke — Phantom's
+  // own words for a refusal inside the wallet, the backend's
+  // sentence for its refusals, the page's sentence with the
+  // reason after it for anything else (requestErrorText). An
+  // answer that arrives after a network switch is dropped: it
+  // belongs to the chain it was issued for.
   const claim = async () => {
     const forNetwork = network;
     setClaimingFor(forNetwork);
     try {
       const { nonce, signature } = await wallet.signMessage();
 
-      await axios.get(`/api/svm/${forNetwork}/request`, {
+      const { data } = await axios.get(`/api/svm/${forNetwork}/request`, {
         params: { address: wallet.address, signature, nonce },
       });
+      const txid = payoutTxid(data, 'transaction_id', CLAIM_FAILED);
 
       queryClient.invalidateQueries({ queryKey: ['svm-faucet-balance', forNetwork] });
       queryClient.invalidateQueries({ queryKey: ['svm-wallet-balance', clusterRpc, wallet.address] });
       if (networkRef.current !== forNetwork) return;
-      addAlert('success', `${networkInfo.full_name} išsiųstas į jūsų piniginę.`);
+      addAlert('success', (
+        <PayoutMessage
+          sentence={`${networkInfo.full_name} išsiųstas į jūsų piniginę.`}
+          txid={txid}
+          explorer={networkInfo.block_explorer_urls?.[0]}
+        />
+      ));
     } catch (e) {
-      // Backend refusals arrive as { error } in the response
-      // body; wallet errors (signature refused) only carry a
-      // message
       if (networkRef.current !== forNetwork) return;
-      addAlert('error', e.response?.data?.error || e.message || 'Nepavyko išsiųsti kriptovaliutos.');
+      addAlert('error', requestErrorText(e, CLAIM_FAILED));
     } finally {
       setClaimingFor((current) => (current === forNetwork ? null : current));
     }
@@ -392,7 +507,9 @@ export default function FaucetSVM() {
     return <ErrorCard>Nežinomas tinklas: {network}</ErrorCard>;
   }
 
-  if (!networkInfo || !faucetInfo) {
+  // A faucet info that failed is no reason to wait: the page
+  // shows its notice instead of the numbers
+  if (!networkInfo || (!faucetInfo && !faucetFailed)) {
     return <LoadingSkeleton />;
   }
 
@@ -405,6 +522,11 @@ export default function FaucetSVM() {
     if (walletBalance.lamports == null) return 'Kraunama…';
     return `${lamportsToCoins(walletBalance.lamports, networkInfo.decimals).toFixed(3)} ${networkInfo.short_name}`;
   };
+
+
+  // The claim takes no click while one is in flight, nor while
+  // the faucet info could not be read
+  const claimBlocked = claiming || faucetFailed;
 
 
   return (
@@ -444,14 +566,7 @@ export default function FaucetSVM() {
           <span className="flex-1">Jūsų Phantom balansas:</span>
           <span className="text-right">{walletBalanceText()}</span>
         </div>
-        <div className="my-2 flex">
-          <span className="flex-1">Išsiųsime jums:</span>
-          <span className="text-right">{parseFloat(faucetInfo.chunk_size).toFixed(3)} {networkInfo.short_name}</span>
-        </div>
-        <div className="my-2 flex">
-          <span className="flex-1">Čiaupo balansas:</span>
-          <span className="text-right">{parseFloat(faucetInfo.balance).toFixed(3)} {networkInfo.short_name}</span>
-        </div>
+        <FaucetRows faucetInfo={faucetInfo} failed={faucetFailed} shortName={networkInfo.short_name} />
 
         <div className="mt-3">
           <WalletGateButton
@@ -459,7 +574,7 @@ export default function FaucetSVM() {
             networkInfo={networkInfo}
             walletName={PHANTOM_NAME}
             installUrl={PHANTOM_DOWNLOAD_URL}
-            switchHelp={<DevnetInstructions />}
+            switchHelp={<ClusterInstructions cluster={networkInfo.cluster} />}
             onConnect={wallet.connect}
             onSwitch={wallet.switchNetwork}
             onError={(msg) => addAlert('error', msg)}
@@ -472,8 +587,8 @@ export default function FaucetSVM() {
                 color="primary"
                 fullWidth
                 aria-busy={claiming}
-                aria-disabled={claiming}
-                onClick={claiming ? undefined : claim}
+                aria-disabled={claimBlocked}
+                onClick={claimBlocked ? undefined : claim}
                 sx={{ minHeight: 40, '&[aria-disabled="true"]': { opacity: 0.6, pointerEvents: 'none' } }}
               >
                 {claiming && <CircularProgress size={22} color="inherit" aria-hidden="true" sx={{ mr: 1 }} />}
@@ -481,8 +596,10 @@ export default function FaucetSVM() {
               </Button>
 
               {/* Phantom could not confirm the hop, so the
-                  wallet may still be showing mainnet */}
-              {!wallet.clusterConfirmed && <DevnetInstructions />}
+                  wallet may still be showing mainnet — a
+                  network that names no cluster has no hop to
+                  explain */}
+              {networkInfo.cluster && !wallet.clusterConfirmed && <ClusterInstructions cluster={networkInfo.cluster} />}
             </>
           )}
         </div>
@@ -494,7 +611,7 @@ export default function FaucetSVM() {
         ))}
       </div>
 
-      <ReturnAddressCard shortName={networkInfo.short_name} address={faucetInfo.address} />
+      {faucetInfo && <ReturnAddressCard shortName={networkInfo.short_name} address={faucetInfo.address} />}
 
     </Box>
   );
