@@ -55,14 +55,15 @@
 //    LAST_DATA_SHOWN     — a failed fetch's notice, its close
 //    MAY_BE_INCOMPLETE   — a notice's close when transfers
 //                          may be missing
+//    TIME_UNITS          — the units an age is counted in
 //    NODE_PRESENTATION   — model kind → icon + size
+//    VIS_OPTIONS         — static vis-network options
 //    clamp               — the zoom range clamp
 //    formatAddress       — an address shortened for a label
 //    formatTransactionLabel — edge label text
 //    timeSince           — how long ago, for node labels
 //    parseTimestamp      — the backend's timestamp as a Date
 //    nodeLabel           — the one place labels are built
-//    VIS_OPTIONS         — static vis-network options
 //    createGraphStore    — model + vis DataSets in one object
 //    mapWithLimit        — a small worker pool for fetches
 //    sweepGraph          — one breadth-first refresh pass
@@ -97,6 +98,17 @@ const LAST_DATA_SHOWN = 'Rodomi paskutiniai gauti duomenys.';
 // Etherscan: transfers may be missing from the canvas
 const MAY_BE_INCOMPLETE = 'Grafike gali trūkti transakcijų.';
 
+// The units timeSince counts an age in, largest first, each
+// with its abbreviation: years and months are counted as 365
+// and 30 days
+const TIME_UNITS = [
+  [31536000, 'm.'],     // 365 days
+  [2592000, 'mėn.'],    // 30 days
+  [86400, 'd.'],
+  [3600, 'val.'],
+  [60, 'min.'],
+];
+
 
 
 
@@ -119,6 +131,59 @@ const NODE_PRESENTATION = {
   user:     { image: IMAGES.USER,     size: NODE_CONFIG.USER_SIZE },
   contract: { image: IMAGES.CONTRACT, size: NODE_CONFIG.USER_SIZE },
   faucet:   { image: IMAGES.FAUCET,   size: NODE_CONFIG.FAUCET_SIZE },
+};
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// VIS_OPTIONS
+// -----------------------------------------------------------
+//
+// Static vis-network options. The layout engine is fully
+// disabled — vis's hierarchical mode recomputes EVERY position
+// on EVERY data change (its _dataChanged listener ignores
+// predefined x), which is what kept snapping dragged nodes
+// back. Every node we add carries an explicit x/y instead, so
+// vis only renders and never repositions anything. fixed.y
+// locks dragging to the horizontal axis, keeping each node on
+// its level line — faucet on top, wallets below, contracts at
+// the bottom of their branch.
+//
+// Used by:
+//   - useTransactionGraph (below) — the Network constructor
+// -----------------------------------------------------------
+
+const VIS_OPTIONS = {
+  layout: {
+    hierarchical: { enabled: false },
+    improvedLayout: false,
+  },
+  interaction: {
+    hover: true,
+    zoomView: true,
+    zoomSpeed: ZOOM_CONFIG.SCROLL_SENSITIVITY,
+    // bindToWindow MUST stay false: vis's default window-wide
+    // key handler eats "-", "+" and the arrows everywhere on
+    // the page — it made "-" untypable in the date search box.
+    // Bound to the canvas, the shortcuts work when the graph
+    // itself has focus.
+    keyboard: { enabled: true, bindToWindow: false },
+  },
+  edges: {
+    width: EDGE_CONFIG.WIDTH,
+    smooth: EDGE_CONFIG.SMOOTH,
+    font: { ...EDGE_CONFIG.FONT, multi: 'html' },
+    color: EDGE_CONFIG.COLOR,
+  },
+  nodes: {
+    font: NODE_CONFIG.FONT,
+    fixed: { x: false, y: true },
+  },
+  physics: false,
 };
 
 
@@ -226,9 +291,9 @@ const formatTransactionLabel = (value, count, symbol = 'ETH') => {
 //
 // How long ago a Date was, for a node's "Atnaujinta" line:
 // "prieš" and the count of the largest whole unit that fits —
-// seconds, minutes, hours, days, 30-day months or 365-day
-// years, so a full year reads as a year and not as twelve
-// months. Every unit is abbreviated, which sidesteps
+// seconds, or one of TIME_UNITS (above): minutes, hours, days,
+// 30-day months or 365-day years, so a full year reads as a
+// year and not as twelve months. Every unit is abbreviated, which sidesteps
 // Lithuanian declension entirely. Clamped at zero: a block
 // timestamp a few seconds ahead of a lagging lab clock must
 // not print a negative age. `now` lets a caller labeling a
@@ -237,14 +302,6 @@ const formatTransactionLabel = (value, count, symbol = 'ETH') => {
 // Used by:
 //   - nodeLabel (below) — the "Atnaujinta: …" line
 // -----------------------------------------------------------
-
-const TIME_UNITS = [
-  [31536000, 'm.'],     // 365 days
-  [2592000, 'mėn.'],    // 30 days
-  [86400, 'd.'],
-  [3600, 'val.'],
-  [60, 'min.'],
-];
 
 const timeSince = (date, now = Date.now()) => {
   const seconds = Math.max(0, Math.floor((now - date) / 1000));
@@ -305,59 +362,6 @@ const nodeLabel = (address, node, now = Date.now()) => {
   const namePart = node.name ? `${node.name}\n` : '';
   const ago = node.updatedAt ? timeSince(node.updatedAt, now) : 'ką tik';
   return `${namePart}${formatAddress(address)}\nAtnaujinta: ${ago}`;
-};
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// VIS_OPTIONS
-// -----------------------------------------------------------
-//
-// Static vis-network options. The layout engine is fully
-// disabled — vis's hierarchical mode recomputes EVERY position
-// on EVERY data change (its _dataChanged listener ignores
-// predefined x), which is what kept snapping dragged nodes
-// back. Every node we add carries an explicit x/y instead, so
-// vis only renders and never repositions anything. fixed.y
-// locks dragging to the horizontal axis, keeping each node on
-// its level line — faucet on top, wallets below, contracts at
-// the bottom of their branch.
-//
-// Used by:
-//   - useTransactionGraph (below) — the Network constructor
-// -----------------------------------------------------------
-
-const VIS_OPTIONS = {
-  layout: {
-    hierarchical: { enabled: false },
-    improvedLayout: false,
-  },
-  interaction: {
-    hover: true,
-    zoomView: true,
-    zoomSpeed: ZOOM_CONFIG.SCROLL_SENSITIVITY,
-    // bindToWindow MUST stay false: vis's default window-wide
-    // key handler eats "-", "+" and the arrows everywhere on
-    // the page — it made "-" untypable in the date search box.
-    // Bound to the canvas, the shortcuts work when the graph
-    // itself has focus.
-    keyboard: { enabled: true, bindToWindow: false },
-  },
-  edges: {
-    width: EDGE_CONFIG.WIDTH,
-    smooth: EDGE_CONFIG.SMOOTH,
-    font: { ...EDGE_CONFIG.FONT, multi: 'html' },
-    color: EDGE_CONFIG.COLOR,
-  },
-  nodes: {
-    font: NODE_CONFIG.FONT,
-    fixed: { x: false, y: true },
-  },
-  physics: false,
 };
 
 

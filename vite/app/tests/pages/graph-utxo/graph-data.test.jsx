@@ -9,7 +9,9 @@
 //  day's first crawl is still filling its cache, every 5 s on
 //  a live window, never again for a past day once landed —
 //  unless the backend still calls it live, the hour after
-//  midnight — and on through an outage until it recovers);
+//  midnight, or says its crawl failed, which is asked every
+//  30 s until a crawl of it lands — and on through an outage
+//  until it recovers);
 //  the day list asked again exactly when a first crawl lands
 //  — judged per window: leaving a day mid-crawl is no landing,
 //  coming back to it once its crawl landed is — with the
@@ -46,7 +48,7 @@ import {
   findBox, getBox, queryBox, allBoxes, bandOf, rowsOf, headerCells,
 } from '../../support/graph-utxo/graph';
 import { T, X, spend, coin, transaction, dayTransactions } from '../../support/graph-utxo/transactions';
-import { COLORS } from '@/pages/Graph_UTXO/constants';
+import { COLORS, POLL_CONFIG } from '@/pages/Graph_UTXO/constants';
 
 
 beforeEach(() => {
@@ -55,53 +57,67 @@ beforeEach(() => {
 });
 
 
-
-
-
-
-
-// -----------------------------------------------------------
-// Helpers
-// -----------------------------------------------------------
-//
-// status is the canvas' message — its status region — if
-// any; expectStatus waits for it to read exactly the given
-// text, with or without the spinner, and toneOf names its
-// colour. showYesterday presses the previous-day stepper
-// ("Ankstesnė diena") once. answerPastDay answers the fixture
-// day's window from `steps` (one per request, the last
-// repeating) and every other window as the default handler
-// does. daysAsked captures the day-list requests.
-// CRAWL_FAILED and REFUSED are the backend's sentences for a
-// crawl that could not reach its Electrum server and for a
-// transaction a node without -txindex would not give.
-// -----------------------------------------------------------
-
+// The backend's sentence for a crawl that could not reach its
+// Electrum server in time
 const CRAWL_FAILED = 'Nepavyko atnaujinti grafiko: Electrum serveris neatsakė per 15 s.';
+
+// The backend's sentence for a transaction a node without
+// -txindex would not give — the node's words cut where the
+// backend cuts them
 const REFUSED = "Nepavyko gauti transakcijos: Electrum serveris atsakė klaida: daemon error: DaemonError({'code': -5, "
   + "'message': 'No such mempool transaction. Use -txindex or provide a block hash to enable blockchain transaction "
   + "queries. Use gettransaction for wallet transactio…";
 
+// The canvas message's text colours (UtxoFlowGraph's
+// TONE_CLASSES), each read back as the tone it shows
+const TONES = { 'text-red-700': 'error', 'text-amber-800': 'warn', 'text-slate-600': 'info' };
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// status
+// -----------------------------------------------------------
+//
+// The canvas' message — its status region — or null while
+// the canvas says nothing.
+// -----------------------------------------------------------
+
 const status = () => screen.queryByRole('status');
 
-const TONES = { 'text-red-700': 'error', 'text-amber-800': 'warn', 'text-slate-600': 'info' };
+
+
+
+
+
+
+// -----------------------------------------------------------
+// toneOf
+// -----------------------------------------------------------
+//
+// The tone the canvas' message is shown in — error, warn or
+// info — read back from its colour.
+// -----------------------------------------------------------
+
 const toneOf = () => Object.entries(TONES).find(([cls]) => status().firstElementChild.classList.contains(cls))?.[1];
 
-async function showYesterday(user) {
-  await user.click(await screen.findByRole('button', { name: 'Ankstesnė diena' }));
-}
 
-function answerPastDay(...steps) {
-  let asked = 0;
-  return given.capture('get', GRAPH, ({ query }) => {
-    if (query.get('from') !== windowOf(YESTERDAY).from) return graphFor(query);
-    const step = steps[Math.min(asked, steps.length - 1)];
-    asked += 1;
-    return graphFor(query, step);
-  });
-}
 
-const daysAsked = (body = f.utxoTransactionDays()) => given.capture('get', DAYS, body);
+
+
+
+
+// -----------------------------------------------------------
+// expectStatus
+// -----------------------------------------------------------
+//
+// Waits for the canvas' message to read exactly the given
+// text, then checks the spinner shows only while the message
+// says something is on its way.
+// -----------------------------------------------------------
 
 async function expectStatus(text, { busy = false } = {}) {
   await waitFor(() => expect(status()?.textContent).toBe(text));
@@ -116,7 +132,72 @@ async function expectStatus(text, { busy = false } = {}) {
 
 
 // -----------------------------------------------------------
+// showYesterday
+// -----------------------------------------------------------
+//
+// Presses the previous-day stepper ("Ankstesnė diena") once,
+// the way a student steps back a day.
+// -----------------------------------------------------------
+
+async function showYesterday(user) {
+  await user.click(await screen.findByRole('button', { name: 'Ankstesnė diena' }));
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// answerPastDay
+// -----------------------------------------------------------
+//
+// Answers the fixture day's window from `steps` — one per
+// request, the last repeating — and every other window the
+// way the default handler does, handing back the requests it
+// captured.
+// -----------------------------------------------------------
+
+function answerPastDay(...steps) {
+  let asked = 0;
+  return given.capture('get', GRAPH, ({ query }) => {
+    if (query.get('from') !== windowOf(YESTERDAY).from) return graphFor(query);
+    const step = steps[Math.min(asked, steps.length - 1)];
+    asked += 1;
+    return graphFor(query, step);
+  });
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// daysAsked
+// -----------------------------------------------------------
+//
+// Captures the day-list requests, answering them with the
+// given list — the fixture's unless the test names another.
+// -----------------------------------------------------------
+
+const daysAsked = (body = f.utxoTransactionDays()) => given.capture('get', DAYS, body);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // What is asked for
+// -----------------------------------------------------------
+//
+// The graph query's network and window: the route's network,
+// and the picked day as a [from, to) unix window from the
+// student's local midnight.
 // -----------------------------------------------------------
 
 describe('What the page asks for', () => {
@@ -241,6 +322,30 @@ describe('Polling', () => {
   });
 
 
+  it('keeps asking slowly about a past day while its crawl failed, and stops once a crawl of it lands', async () => {
+    useFakeClock();
+    const calls = answerPastDay({ crawl_error: CRAWL_FAILED }, { crawl_error: CRAWL_FAILED }, {});
+    const { user } = renderGraph();
+    await findBox(T.T5);
+    await showYesterday(user);
+    await waitFor(() => expect(askedFor(calls, YESTERDAY)).toHaveLength(1));
+    await expectStatus(`${CRAWL_FAILED} Rodomi anksčiau surinkti duomenys.`);
+
+    // Not at a live day's pace — at the slow one
+    await advance(POLL_CONFIG.CRAWL_RETRY_MS / 2);
+    expect(askedFor(calls, YESTERDAY)).toHaveLength(1);
+    await advance(POLL_CONFIG.CRAWL_RETRY_MS);
+    expect(askedFor(calls, YESTERDAY)).toHaveLength(2);
+    await advance(POLL_CONFIG.CRAWL_RETRY_MS);
+    expect(askedFor(calls, YESTERDAY)).toHaveLength(3);
+    await waitFor(() => expect(status()).toBeNull());
+
+    // The third answer carried no error: the day is history again
+    await advance(3 * POLL_CONFIG.CRAWL_RETRY_MS);
+    expect(askedFor(calls, YESTERDAY)).toHaveLength(3);
+  });
+
+
   it('never asks a finished past day again, nor today once the page has left it', async () => {
     useFakeClock();
     const calls = answerGraph();
@@ -294,6 +399,11 @@ describe('Polling', () => {
 
 // -----------------------------------------------------------
 // The day list follows the crawl
+// -----------------------------------------------------------
+//
+// The day list is read from what the crawls stored, so it is
+// asked again when a day's first crawl lands — judged per
+// window, never on a poll that changes nothing.
 // -----------------------------------------------------------
 
 describe('The day list follows the crawl', () => {

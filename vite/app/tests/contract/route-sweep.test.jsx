@@ -40,7 +40,7 @@ import { renderApp } from '../support/render';
 import { apiError } from '../support/backend/server';
 import { allowConsoleErrors } from '../support/setup';
 import { expectNoCrash, settle } from '../support/backend/contract';
-import { backendIdle, everyGet } from '../support/shell/requests';
+import { backendIdle, everyGet, watchRequests } from '../support/shell/requests';
 import { appRoutes } from '../support/shell/source';
 
 
@@ -109,6 +109,11 @@ const status = (words) => async () => {
 //              sentence (500 mode) or null (connection
 //              dropped). None: the page reads nothing — it
 //              simply still shows
+//   never    — the requests the route must not make in any
+//              state, as a pattern over the request's path:
+//              the EVM graph roots itself at the network
+//              list's faucet address and never reads the
+//              faucet's balance, whose RPC may be down
 //   index    — a family index: on a failed catalog it rests
 //              on "/" with the CatalogUnavailable notice, on a
 //              wrong-shaped one on a blank "/"
@@ -122,7 +127,7 @@ const ROUTES = [
   { path: '/faucet/utxo/btc4', title: 'UTXO čiaupas', shows: heading("Bitcoin Testnet4 faucet'as"), failed: (message) => text(NETWORKS_FAILED(message))() },
   { path: '/faucet/svm/solanaDevnet', title: 'SVM čiaupas', shows: heading("Solana Devnet faucet'as"), failed: (message) => text(NETWORKS_FAILED(message))() },
   { path: '/faucet/move/suiTestnet', title: 'Move čiaupas', shows: heading("Sui Testnet faucet'as"), failed: (message) => text(NETWORKS_FAILED(message))() },
-  { path: '/graph/sepolia', title: 'Transakcijų srautas', shows: heading('Transakcijų srautas — Ethereum Sepolia'), failed: (message) => text(message ?? 'Nepavyko gauti čiaupo adreso. Patikrinkite interneto ryšį.')() },
+  { path: '/graph/sepolia', title: 'Transakcijų srautas', shows: heading('Transakcijų srautas — Ethereum Sepolia'), failed: (message) => text(message ?? 'Nepavyko gauti tinklų sąrašo. Patikrinkite interneto ryšį.')(), never: /\/faucet-balance$/ },
   { path: '/graph/utxo/btc4', title: 'UTXO transakcijos', shows: heading('Transakcijų Srautas - Bitcoin Testnet4'), failed: (message) => status(message ?? 'Nepavyko gauti transakcijų. Patikrinkite interneto ryšį.')() },
   { path: '/sha256', title: 'Blokų grandinės simuliatorius', shows: heading('Blokų grandinės simuliatorius') },
   { path: '/presentations', title: 'Prezentacijos', shows: heading('Prezentacijos') },
@@ -237,8 +242,15 @@ describe('route sweep', () => {
     const runner = (state) => (PINS[`${route.path} × ${state}`] ? it.fails : it);
     const named = (state, name) => (PINS[`${route.path} × ${state}`] ? `${name} — PINNED KNOWN BUG: ${PINS[`${route.path} × ${state}`]}` : name);
 
+    // None of the requests made is one this route must never
+    // make (its `never`)
+    const expectNever = (requests) => {
+      if (route.never) expect(requests.filter((request) => route.never.test(request))).toEqual([]);
+    };
+
 
     runner('default')(named('default', 'renders under the default backend, titles the tab and asks only what the double knows'), async () => {
+      const seen = watchRequests();
       renderApp({ route: route.path });
       await landsOn(route.lands ?? route.path);
       expect(await route.shows()).toBeInTheDocument();
@@ -247,38 +259,42 @@ describe('route sweep', () => {
       expectNoCrash();
       expectChrome();
       expectSafeMarkup();
+      expectNever(seen);
     });
 
 
     runner('500')(named('500', 'shows the failure, not a crash, when every GET answers 500 { error }'), async () => {
-      await renderFailing(route.path, () => HttpResponse.json(apiError(MESSAGE), { status: 500 }));
+      const gets = await renderFailing(route.path, () => HttpResponse.json(apiError(MESSAGE), { status: 500 }));
       await navbarSaysUnreachable();
       await expectFailureShown(route, MESSAGE);
       await titled(route.index ? null : route.title);
       expectNoCrash();
       expectChrome();
+      expectNever(gets.paths);
     });
 
 
     runner('JSON string')(named('JSON string', 'survives every GET answering a JSON string'), async () => {
       if (PINS[`${route.path} × JSON string`]) allowConsoleErrors(/Render failed:/);
-      await renderFailing(route.path, () => HttpResponse.json('netikėtas atsakymas'));
+      const gets = await renderFailing(route.path, () => HttpResponse.json('netikėtas atsakymas'));
       await settle(100);
       if (route.index) await landsOn('/');
       else expect(window.location.pathname).toBe(route.path);
       await titled(route.index ? null : route.title);
       expectNoCrash();
       expectChrome();
+      expectNever(gets.paths);
     });
 
 
     runner('dropped')(named('dropped', 'shows the failure, not a crash, when every GET drops the connection'), async () => {
-      await renderFailing(route.path, () => HttpResponse.error());
+      const gets = await renderFailing(route.path, () => HttpResponse.error());
       await navbarSaysUnreachable();
       await expectFailureShown(route, null);
       await titled(route.index ? null : route.title);
       expectNoCrash();
       expectChrome();
+      expectNever(gets.paths);
     });
   });
 });

@@ -89,11 +89,14 @@ def request_eth(network):
 # GET /api/evm/<network>/faucet-balance
 #
 # The faucet address and its balance, so the UI (and the
-# operator) can see whether the faucet needs a top-up.
+# operator) can see whether the faucet needs a top-up. The
+# balance is read over the network's RPC, so this answer
+# fails while that RPC is down — which is why the
+# transaction graph takes its root address from
+# /api/evm/networks instead.
 #
 # Used by:
 #   - Faucet_EVM/Page.jsx — useFaucetInfo's 3 s repoll
-#   - Graph/Page.jsx — resolving the graph's root address
 ############################################################
 
 @bp_evm_faucet.route('/api/evm/<network>/faucet-balance', methods=['GET'])
@@ -115,15 +118,20 @@ def faucet_balance(network):
 # GET /api/evm/networks
 #
 # Network picker data for the frontend: names, chain ids and
-# which network to preselect. The same payload feeds
-# MetaMask's wallet_addEthereumChain when the chain is
-# missing there. Composed in EVMFaucet.get_networks — the
-# config's backend-only sections never reach the browser.
+# which network to preselect, and the faucet's own address
+# on every network — read off its key, so this answer needs
+# no RPC and stands while a network's RPC is down. The same
+# payload feeds MetaMask's wallet_addEthereumChain when the
+# chain is missing there. Composed in EVMFaucet.get_networks
+# — the config's backend-only sections never reach the
+# browser. The navbar and the "/" redirect read the same
+# payload inside /api/faucet/catalog.
 #
 # Used by:
-#   - Faucet_EVM/Page.jsx — useFaucetInfo
-#   - components/Navbar.jsx — useNetworksDirectory
-#   - App.jsx — the "/" redirect's default network
+#   - hooks/useEvmNetworks.js — the one query the EVM faucet
+#     page (chain ids, names, MetaMask's data) and the
+#     transaction graph (its root address, currency and
+#     explorer flag) share
 ############################################################
 
 @bp_evm_faucet.route('/api/evm/networks', methods=['GET'])

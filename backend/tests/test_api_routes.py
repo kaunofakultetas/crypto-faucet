@@ -144,6 +144,30 @@ class EvmRouteTests(RouteTestCase):
         self.assertEqual(status, 200)
         self.assertEqual(body, self.faucet.get_networks())
 
+    def test_the_networks_answer_names_the_address_the_balance_reads(self):
+        # The transaction graph roots itself at faucet_address: the
+        # balance answer's address, in the faucet key's checksummed form
+        _, networks = self.get('/api/evm/networks')
+        _, balance = self.get('/api/evm/testchain/faucet-balance')
+
+        address = networks['networks']['testchain']['faucet_address']
+        self.assertEqual(address, self.faucet.FAUCET_ADDRESS)
+        self.assertEqual(address.lower(), balance['address'])
+
+    def test_the_networks_answer_stands_while_the_rpc_is_down(self):
+        # The balance needs the RPC and fails; the address does not
+        # need it, and no RPC read is made for it
+        self.eth.balance_error = requests.ConnectionError('Max retries exceeded')
+        reads = self.count_calls(self.eth, 'get_balance')
+
+        status, body = self.get('/api/evm/networks')
+        self.assertEqual(status, 200)
+        self.assertEqual(body['networks']['testchain']['faucet_address'], self.faucet.FAUCET_ADDRESS)
+        self.assertEqual(reads, [])
+
+        balance_status, _ = self.get('/api/evm/testchain/faucet-balance')
+        self.assertEqual(balance_status, 500)
+
     def test_the_balance_answer_carries_what_the_page_shows(self):
         # The address feeds the return QR code; the balance and the
         # claim size are whole coins

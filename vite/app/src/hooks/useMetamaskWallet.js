@@ -60,10 +60,25 @@ let cachedRdns = null;
 // The hooks following the pick, told whenever it changes
 const waiters = new Set();
 
+
+
+
+
+
+
+// -----------------------------------------------------------
+// utf8ToHex
+// -----------------------------------------------------------
+//
 // The claim message as personal_sign wants it: the UTF-8
 // bytes, hex-encoded. Sent as a plain string MetaMask would
 // guess the encoding; hex is unambiguous, and the backend
 // recovers the signer from the very same bytes.
+//
+// Used by:
+//   - signClaimMessage (below) — the message it asks to sign
+// -----------------------------------------------------------
+
 const utf8ToHex = (text) =>
   '0x' + Array.from(new TextEncoder().encode(text), (b) => b.toString(16).padStart(2, '0')).join('');
 

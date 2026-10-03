@@ -104,10 +104,13 @@ SUI_REFUSALS = (
 )
 
 # Bitcoin Core's reject reasons and lookup refusals, as
-# Electrum relays them. A node still building its index says
-# "no such transaction" too, so the indexing phrase comes
-# before the plain not-found one.
+# Electrum relays them, and the Electrum server's own refusal
+# of an address' history longer than it sends in one answer
+# (ElectrumX's MAX_SEND limit). A node still building its
+# index says "no such transaction" too, so the indexing phrase
+# comes before the plain not-found one.
 BITCOIN_REFUSALS = (
+    ('history too large', 'Electrum serveris atsisakė pateikti adreso istoriją, nes ji per ilga'),
     ('still in the process of being indexed', 'tinklo mazgas dar indeksuoja blokų transakcijas'),
     ('use -txindex', 'tinklo mazgas neturi transakcijų indekso, todėl ieško tik tinklo eilėje, o ne blokuose'),
     ('no such mempool or blockchain transaction', 'tinklo mazgas tokios transakcijos neturi nei blokuose, nei tinklo eilėje'),

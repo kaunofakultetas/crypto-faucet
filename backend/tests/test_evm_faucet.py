@@ -5,8 +5,10 @@
 #  RPC: key normalization, the <NAME> template substitution
 #  in rpc_url (an unset placeholder fails the boot, and the
 #  resolved value never reaches the log), the composed public
-#  payload (which must never leak backend-only config), and
-#  the per-network send locks.
+#  payload (which must never leak backend-only config, and
+#  names the faucet's address on every network without a
+#  single RPC call — the transaction graph roots itself there
+#  while an RPC is down), and the per-network send locks.
 ############################################################
 
 
@@ -14,10 +16,19 @@ import copy
 import json
 import logging
 import unittest
+from unittest import mock
 
+from web3 import Web3
 from eth_account import Account
 
 from tests import helpers
+
+
+class RefusingEth:
+    # A network's w3.eth whose every use is an RPC call — and
+    # fails the test loudly
+    def __getattr__(self, name):
+        raise AssertionError(f'an RPC call was made: eth.{name}')
 
 
 
@@ -107,6 +118,42 @@ class EvmFaucetTests(unittest.TestCase):
         self.assertIsInstance(entry['block_explorer_urls'], list)
         self.assertEqual(entry['native_currency']['decimals'], 18)
         self.assertTrue(entry['has_explorer'])
+
+    def test_every_network_names_the_checksummed_faucet_address(self):
+        # One key, one address — the one the faucet pays from, in
+        # the checksummed form MetaMask and the explorers show
+        configs = copy.deepcopy(helpers.EVM_TEST_CONFIGS)
+        configs['otherchain'] = copy.deepcopy(configs['testchain'])
+        configs['otherchain'].update(id=2, chain_id=54321)
+        faucet = helpers.make_evm_faucet(configs)
+        expected = Account.from_key('0x' + helpers.TEST_PRIVATE_KEY).address
+
+        networks = faucet.get_networks()['networks']
+
+        self.assertEqual(set(networks), {'testchain', 'otherchain'})
+        for key, entry in networks.items():
+            with self.subTest(network=key):
+                self.assertEqual(entry['faucet_address'], expected)
+                self.assertTrue(Web3.is_checksum_address(entry['faucet_address']))
+
+    def test_the_faucet_address_takes_no_rpc_call(self):
+        # The graph reads it while the RPC may be down — every RPC
+        # use fails here, and the payload still names the address
+        faucet = helpers.make_evm_faucet()
+        for w3 in faucet.w3_instances.values():
+            w3.eth = RefusingEth()
+            refuse = mock.patch.object(w3.provider, 'make_request', side_effect=AssertionError('an RPC call was made'))
+            refuse.start()
+            self.addCleanup(refuse.stop)
+
+        entry = faucet.get_networks()['networks']['testchain']
+
+        self.assertEqual(entry['faucet_address'], faucet.FAUCET_ADDRESS)
+
+    def test_a_faucet_without_a_key_names_no_address(self):
+        # Nothing to pay from, nothing to root a graph at
+        faucet = helpers.make_evm_faucet(private_key='')
+        self.assertIsNone(faucet.get_networks()['networks']['testchain']['faucet_address'])
 
     def test_send_lock_is_per_network(self):
         # Same network -> same lock object; different -> different

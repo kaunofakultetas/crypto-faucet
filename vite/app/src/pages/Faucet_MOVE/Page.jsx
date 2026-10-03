@@ -115,9 +115,24 @@ const FAUCET_FAILED = 'Nepavyko gauti čiaupo informacijos.';
 const walletFailed = (walletName) => `Nepavyko gauti jūsų ${walletName} balanso.`;
 
 
-// MIST are integers; the chain's decimals come from the
-// network payload (9 on Sui, but it is a chain fact, not a
-// constant to hardcode here)
+
+
+
+
+
+// -----------------------------------------------------------
+// mistToCoins
+// -----------------------------------------------------------
+//
+// The only unit maths on this page. MIST are integers; the
+// chain's decimals come from the network payload — fixed on
+// Sui, but a fact of the chain, not a constant to hardcode
+// here.
+//
+// Used by:
+//   - FaucetMOVE (below) — the student's balance row
+// -----------------------------------------------------------
+
 const mistToCoins = (mist, decimals) => mist / 10 ** decimals;
 
 

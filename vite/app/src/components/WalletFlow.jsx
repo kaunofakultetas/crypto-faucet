@@ -45,15 +45,20 @@ import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
 import CheckIcon from '@mui/icons-material/Check';
 
 
-// Alert lifetime: fully visible, then a short fade, then the
-// row is dropped from the list
+// How long an outcome alert stays fully visible
 const ALERT_VISIBLE_MS = 8000;
+
+// How long it then fades out before its row is dropped from
+// the list
 const ALERT_FADE_MS = 500;
 
-// WalletGateButton's defaults — the EVM-family pages never
-// pass these, the SVM page passes Phantom's and the MOVE page
-// the discovered Sui wallet's
+// WalletGateButton's default wallet name — the EVM-family
+// pages never pass one, the SVM page passes Phantom's and the
+// MOVE page the discovered Sui wallet's
 const METAMASK_NAME = 'MetaMask';
+
+// The default wallet's install link, overridden the same way
+// as its name
 const METAMASK_DOWNLOAD_URL = 'https://metamask.io/download/';
 
 

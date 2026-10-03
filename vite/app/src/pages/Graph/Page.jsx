@@ -3,12 +3,20 @@
 //
 //  Entry point of the transaction-flow visualization: a
 //  compact date slider bar on top and the graph below it,
-//  rooted at the network's faucet address (resolved via
-//  GET /api/evm/<network>/faucet-balance — cache key shared
-//  with the faucet page, so it's usually instant). When the
-//  address cannot be had, the page says why in the graph's
-//  place: the backend's own sentence, or the request's reason
-//  — an answer that names no address is a malformed one.
+//  rooted at the network's faucet address — the faucet_address
+//  of this network's entry in GET /api/evm/networks (the
+//  useEvmNetworks query the faucet page shares, so it's
+//  usually instant). The backend reads that address off the
+//  faucet key, not off the chain, and the page never asks for
+//  the faucet's balance, so the graph stands while the
+//  network's RPC is down — it needs only Etherscan and the
+//  backend's database. When the page cannot find its network
+//  or the address, it says why in the graph's place: the
+//  backend's own sentence or the request's reason for a list
+//  that failed, a malformed answer for a list that is none or
+//  an entry without an address, the faucet key missing when
+//  the backend says it has none, and the faucet having no
+//  such network for a :network the list does not know.
 //
 //  The slider offers ONLY the days the faucet address itself
 //  transacted on (GET /api/evm/<network>/transaction-days,
@@ -34,8 +42,9 @@
 //    rangeOfDay    — a day's local-midnight unix window
 //    DateSliderBar — the top bar: searchable day dropdown,
 //                    −/+ steppers and the day slider
-//    GraphPage     — address + day list + picked-day state
-//                    (default export)
+//    PageFailure   — the red line in the graph's place
+//    GraphPage     — network + address + day list +
+//                    picked-day state (default export)
 // -----------------------------------------------------------
 
 import { useEffect, useMemo, useState } from 'react';
@@ -48,6 +57,7 @@ import TodayIcon from '@mui/icons-material/Today';
 import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';
 
+import useEvmNetworks, { isEvmCatalog } from '@/hooks/useEvmNetworks';
 import { MalformedAnswerError, requestErrorText } from '@/utils/requestError';
 
 import CryptoFlowGraph from './components/CryptoFlowGraph';
@@ -58,10 +68,20 @@ import CryptoFlowGraph from './components/CryptoFlowGraph';
 // hyphens — the form transaction-days answers in
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
-// What a failed read of the faucet's address says when the
+// What a failed read of the network list says when the
 // backend gave no sentence of its own — requestErrorText adds
 // the reason
+const NETWORKS_FAILED = 'Nepavyko gauti tinklų sąrašo.';
+
+// What the page says when this network's entry names no
+// faucet address to root the graph at — the malformed
+// answer's reason follows it
 const ADDRESS_FAILED = 'Nepavyko gauti čiaupo adreso.';
+
+// What the page says when the backend has no usable faucet
+// key: the list then names the address as null on purpose,
+// and only the operator can set the key
+const NO_FAUCET_KEY = 'Čiaupo adresas nesukonfigūruotas: serveryje nenustatytas arba netinkamas čiaupo raktas. Praneškite dėstytojui.';
 
 // The same for a failed read of the day list, said under the
 // date bar
@@ -252,18 +272,41 @@ function DateSliderBar({ days, selectedDay, today, onCommit }) {
 
 
 // -----------------------------------------------------------
+// PageFailure
+// -----------------------------------------------------------
+//
+// The red line the page shows in the graph's place when it
+// has nothing to root a graph at — the sentence saying why.
+//
+// Used by:
+//   - GraphPage (below) — no network list, a network the list
+//     does not know, an entry without the faucet's address
+// -----------------------------------------------------------
+
+function PageFailure({ children }) {
+  return <div className="p-4 text-center text-red-600">{children}</div>;
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // GraphPage (default export)
 // -----------------------------------------------------------
 //
-// Resolves the faucet address (the graph's root node), loads
-// the used-day list (today is appended even before its first
-// transaction — new claims appear live), holds the picked day
-// and mounts the slider bar + graph. Either read failing is
-// said in words: the address's in the graph's place, the day
-// list's under the bar. The selection is stored as the day
-// STRING, so it survives the day list growing under it.
-// CryptoFlowGraph rebuilds from scratch on a new window, the
-// same way it does on a network switch.
+// Finds the network and its faucet address (the graph's root
+// node) in the network list, loads the used-day list (today
+// is appended even before its first transaction — new claims
+// appear live), holds the picked day and mounts the slider
+// bar + graph. Every read failing is said in words: the
+// network list's, the network's or the address's in the
+// graph's place, the day list's under the bar. The selection
+// is stored as the day STRING, so it survives the day list
+// growing under it. CryptoFlowGraph rebuilds from scratch on
+// a new window, the same way it does on a network switch.
 //
 // Used by:
 //   - App.jsx — route /graph/:network
@@ -291,31 +334,23 @@ export default function GraphPage() {
   }, [today]);
 
 
-  // The graph needs the address and nothing else from this
-  // answer — one without it (a proxy's page, an emptied
-  // object) is a malformed answer, not a faucet that has none
-  const { data, isPending, isError, error } = useQuery({
-    queryKey: ['evm-faucet-balance', network],
-    queryFn: async () => {
-      const body = (await axios.get(`/api/evm/${network}/faucet-balance`)).data;
-      if (typeof body?.address !== 'string' || body.address === '') throw new MalformedAnswerError();
-      return body;
-    },
-    staleTime: 60 * 1000,
-  });
-  const address = typeof data?.address === 'string' && data.address !== '' ? data.address : null;
-
-  // The viewed network's entry — its native currency symbol for
-  // the graph's edge labels and whether it has an explorer at
-  // all; same cache entry the EVM faucet page uses, so coming
-  // from there this costs no request
-  const { data: networksData } = useQuery({
-    queryKey: ['evm-networks'],
-    queryFn: async () => (await axios.get('/api/evm/networks')).data,
-    staleTime: 5 * 60 * 1000,
-  });
-  const networkInfo = networksData?.networks?.[network] ?? null;
+  // The viewed network's entry in the network list: the
+  // faucet's address (the graph's root), the native currency
+  // symbol of the edge labels and whether the network has an
+  // explorer at all. The same query and cache entry as the
+  // EVM faucet page's, so coming from there this costs no
+  // request. Own keys only — a :network named after a property
+  // every object inherits is no network the list knows.
+  const { data: catalog, isPending, error: catalogError } = useEvmNetworks();
+  const networks = isEvmCatalog(catalog) ? catalog.networks : null;
+  const networkInfo = networks && Object.hasOwn(networks, network) ? networks[network] : null;
   const currencySymbol = networkInfo?.native_currency?.symbol ?? 'ETH';
+
+  // The list names the address checksummed; the graph's nodes
+  // are keyed by the lowercase addresses the backend's flows
+  // carry, so the root must be lowercase to be one of them
+  const faucetAddress = networkInfo?.faucet_address;
+  const address = typeof faucetAddress === 'string' && faucetAddress !== '' ? faucetAddress.toLowerCase() : null;
 
   // The root address's used days (+ per-day counts), bucketed
   // in the browser's IANA zone — the backend files each row
@@ -364,23 +399,35 @@ export default function GraphPage() {
   // frozen history
   const range = useMemo(() => rangeOfDay(selectedDay), [selectedDay]);
 
-  if (networkInfo && networkInfo.has_explorer === false) {
-    return <div className="p-4 text-center">Šiam tinklui transakcijų srautas neprieinamas</div>;
-  }
-
   if (isPending) {
     return <div className="p-4 text-center">Kraunama…</div>;
   }
 
-  // A failed read, or an answer that names no address — the
-  // query refuses one, but the faucet page fills the same
-  // cache entry
-  if (isError || !address) {
-    return (
-      <div className="p-4 text-center text-red-600">
-        {requestErrorText(error ?? new MalformedAnswerError(), ADDRESS_FAILED)}
-      </div>
-    );
+  // No list to find the network in: the request failed, or the
+  // answer is none — the query refuses one, and the cache entry
+  // is checked again on the way out
+  if (!networks) {
+    return <PageFailure>{requestErrorText(catalogError ?? new MalformedAnswerError(), NETWORKS_FAILED)}</PageFailure>;
+  }
+
+  if (!networkInfo) {
+    return <PageFailure>Čiaupas neturi EVM tinklo „{network}“. Patikrinkite nuorodą.</PageFailure>;
+  }
+
+  // The graph needs Etherscan behind it — the notice wins over
+  // whatever else the entry lacks
+  if (networkInfo.has_explorer === false) {
+    return <div className="p-4 text-center">Šiam tinklui transakcijų srautas neprieinamas</div>;
+  }
+
+  // A null address is the backend saying it has no usable
+  // faucet key — a configuration fault, not a malformed answer
+  if (networkInfo.faucet_address === null) {
+    return <PageFailure>{NO_FAUCET_KEY}</PageFailure>;
+  }
+
+  if (!address) {
+    return <PageFailure>{requestErrorText(new MalformedAnswerError(), ADDRESS_FAILED)}</PageFailure>;
   }
 
   return (

@@ -68,6 +68,27 @@ import PresentationsPage from '@/pages/Presentations/Page';
 import NotFoundPage from '@/pages/NotFound/Page';
 
 
+// The site's name: the end of every tab's title, and the
+// whole title on a path no route claims
+const SITE_TITLE = "VU KNF Faucet'as";
+
+// Each route's tab title by path prefix — useRouteTitle takes
+// the FIRST match, so a longer prefix stays above a shorter
+// one it extends
+const ROUTE_TITLES = [
+  ['/faucet/evm', 'EVM čiaupas'],
+  ['/faucet/erc20', 'ERC-20 čiaupas'],
+  ['/faucet/svm', 'SVM čiaupas'],
+  ['/faucet/move', 'Move čiaupas'],
+  ['/faucet/utxo', 'UTXO čiaupas'],
+  ['/graph/utxo', 'UTXO transakcijos'],
+  ['/graph', 'Transakcijų srautas'],
+  ['/sha256', 'Blokų grandinės simuliatorius'],
+  ['/presentations', 'Prezentacijos'],
+  ['/dapps-server', 'DAPPS serveris'],
+];
+
+
 
 
 
@@ -174,21 +195,6 @@ function CatalogUnavailable({ error, onRetry }) {
 // Used by:
 //   - PageArea (below)
 // -----------------------------------------------------------
-
-const SITE_TITLE = "VU KNF Faucet'as";
-
-const ROUTE_TITLES = [
-  ['/faucet/evm', 'EVM čiaupas'],
-  ['/faucet/erc20', 'ERC-20 čiaupas'],
-  ['/faucet/svm', 'SVM čiaupas'],
-  ['/faucet/move', 'Move čiaupas'],
-  ['/faucet/utxo', 'UTXO čiaupas'],
-  ['/graph/utxo', 'UTXO transakcijos'],
-  ['/graph', 'Transakcijų srautas'],
-  ['/sha256', 'Blokų grandinės simuliatorius'],
-  ['/presentations', 'Prezentacijos'],
-  ['/dapps-server', 'DAPPS serveris'],
-];
 
 function useRouteTitle() {
   const { pathname } = useLocation();

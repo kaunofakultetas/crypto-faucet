@@ -35,6 +35,10 @@ import SettingsApplicationsIcon from '@mui/icons-material/SettingsApplications';
 // DappsServerPage (default export)
 // -----------------------------------------------------------
 //
+// The page itself: a heading over the two launcher buttons,
+// each opening its tool in a new tab so the student keeps
+// the faucet open beside it.
+//
 // Used by:
 //   - App.jsx — route /dapps-server (imported as
 //     DappsServerPage)

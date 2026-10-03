@@ -24,6 +24,9 @@
 // The faucet's own addresses, per family (the live ones —
 // public, and what every balance answer names)
 export const FAUCET_EVM = '0x87efe7dfb3b49162385bbe36ec0f3e5f3b41ed7d';
+// The same EVM address as the network list names it: in the
+// checksummed form the faucet key gives (EIP-55)
+const FAUCET_EVM_CHECKSUMMED = '0x87EfE7dfB3b49162385bBE36EC0f3e5F3b41ed7D';
 export const FAUCET_UTXO = 'tb1qgc4lympfuq8wwvh563660hdsm7efh3eekmuas4';
 export const FAUCET_SVM = 'DGvWVvGUt92p1YiffQ69Ba75stvSRMjCo6KdUtkWayC8';
 export const FAUCET_MOVE = '0x0dddd360675c2e52ce731c87f993c9588bb2ede1c067b4bc58ee86aad9a91dbc';
@@ -48,9 +51,9 @@ export const HUB = 'tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx';
 // -----------------------------------------------------------
 
 export const evmNetworksMap = {
-  sepolia: { block_explorer_urls: ['https://sepolia.etherscan.io'], chain_id: 11155111, chain_name: 'Sepolia', full_name: 'Ethereum Sepolia', has_explorer: true, icon: '/api/icons/evm/sepolia', id: 1, native_currency: { decimals: 18, name: 'Ethereum', symbol: 'SepETH' }, rpc_urls: ['https://rpc.sepolia.org'], short_name: 'SepETH' },
-  hoodi: { block_explorer_urls: ['https://light-hoodi.beaconcha.in'], chain_id: 560048, chain_name: 'Ethereum Hoodi', full_name: 'Ethereum Hoodi', has_explorer: true, icon: '/api/icons/evm/hoodi', id: 6, native_currency: { decimals: 18, name: 'Ethereum', symbol: 'ETH' }, rpc_urls: ['https://rpc.hoodi.ethpandaops.io'], short_name: 'ETH' },
-  arbitrumSepolia: { block_explorer_urls: ['https://sepolia.arbiscan.io'], chain_id: 421614, chain_name: 'Arbitrum Sepolia', full_name: 'Arbitrum Sepolia', has_explorer: false, icon: '/api/icons/evm/arbitrumSepolia', id: 7, native_currency: { decimals: 18, name: 'Ethereum', symbol: 'ETH' }, rpc_urls: ['https://sepolia.arbitrum.io/rpc'], short_name: 'ETH' },
+  sepolia: { block_explorer_urls: ['https://sepolia.etherscan.io'], chain_id: 11155111, chain_name: 'Sepolia', faucet_address: FAUCET_EVM_CHECKSUMMED, full_name: 'Ethereum Sepolia', has_explorer: true, icon: '/api/icons/evm/sepolia', id: 1, native_currency: { decimals: 18, name: 'Ethereum', symbol: 'SepETH' }, rpc_urls: ['https://rpc.sepolia.org'], short_name: 'SepETH' },
+  hoodi: { block_explorer_urls: ['https://light-hoodi.beaconcha.in'], chain_id: 560048, chain_name: 'Ethereum Hoodi', faucet_address: FAUCET_EVM_CHECKSUMMED, full_name: 'Ethereum Hoodi', has_explorer: true, icon: '/api/icons/evm/hoodi', id: 6, native_currency: { decimals: 18, name: 'Ethereum', symbol: 'ETH' }, rpc_urls: ['https://rpc.hoodi.ethpandaops.io'], short_name: 'ETH' },
+  arbitrumSepolia: { block_explorer_urls: ['https://sepolia.arbiscan.io'], chain_id: 421614, chain_name: 'Arbitrum Sepolia', faucet_address: FAUCET_EVM_CHECKSUMMED, full_name: 'Arbitrum Sepolia', has_explorer: false, icon: '/api/icons/evm/arbitrumSepolia', id: 7, native_currency: { decimals: 18, name: 'Ethereum', symbol: 'ETH' }, rpc_urls: ['https://sepolia.arbitrum.io/rpc'], short_name: 'ETH' },
 };
 
 export const erc20TokensMap = {

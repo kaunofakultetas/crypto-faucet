@@ -84,8 +84,24 @@ import {
 // NAME, so every address of one person wears the same colour
 const PERSON_COLORS = ['#0284c7', '#059669', '#7c3aed', '#ea580c', '#db2777', '#0d9488', '#4f46e5', '#65a30d'];
 
-// The backend's ISO times, shown as the viewer's local date
-// and time
+
+
+
+
+
+
+// -----------------------------------------------------------
+// formatTime
+// -----------------------------------------------------------
+//
+// A time the backend sends (ISO, UTC) as the viewer's own
+// local date and time in the short Lithuanian form — the same
+// clock the student reads the day slider by.
+//
+// Used by:
+//   - TransactionModal (below) — beside the status chip
+// -----------------------------------------------------------
+
 const formatTime = (iso) => new Date(iso).toLocaleString('lt-LT', { dateStyle: 'short', timeStyle: 'short' });
 
 

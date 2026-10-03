@@ -230,6 +230,15 @@ class RefusalReasonTests(unittest.TestCase):
         self.assertEqual(describe_failure(error, 'electrum', 15),
                          'Electrum serveris atsakė klaida: excessive resource usage')
 
+    def test_an_electrum_server_refusing_a_long_history_says_so(self):
+        # ElectrumX's own refusal, past its MAX_SEND — recognized in
+        # any case, its words kept as the server wrote them
+        for words in ('history too large', 'History too large'):
+            with self.subTest(words=words):
+                error = RuntimeError(f"Electrum error: {{'code': 1, 'message': '{words}'}}")
+                self.assertEqual(describe_failure(error, 'electrum', 15),
+                                 f'Electrum serveris atsisakė pateikti adreso istoriją, nes ji per ilga ({words})')
+
 
 
 

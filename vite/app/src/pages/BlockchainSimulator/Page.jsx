@@ -40,6 +40,8 @@
 //    TRIES                       — the tries counter's noun
 //    EXAMPLE_FAILED              — a failed load's own sentence
 //    LITHUANIAN_NAMES            — cast for the transactions
+//    RoundedBox                  — the white card every
+//                                  section sits in (styled)
 //    randomName                  — random cast member
 //    generateCoinbaseTransaction — a block's reward line
 //    generateRandomTransaction   — a random payment line
@@ -48,8 +50,6 @@
 //    createFirstBlock            — block #1 chained onto #0
 //    useBlockchain               — chain state + mining logic
 //                                  (sliced, counted, stoppable)
-//    RoundedBox                  — the white card every
-//                                  section sits in (styled)
 //    CopiedToast                 — "Nukopijuota!" bubble
 //    ControlPanel                — difficulty + tool buttons
 //    BlockCard                   — one editable block card
@@ -88,30 +88,131 @@ const EXAMPLE_FAILED = 'Nepavyko užkrauti pavyzdinės blokų grandinės.';
 // and receiver are drawn independently, so someone can pay
 // themselves
 const LITHUANIAN_NAMES = ['Mantas', 'Agnė', 'Jonas', 'Gabija', 'Rokas', 'Eglė', 'Saulius', 'Simona'];
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// RoundedBox
+// -----------------------------------------------------------
+//
+// The rounded white card every section of the page sits in.
+// Note: the webkitBoxShadow line is INERT — emotion renders
+// it as the unknown property "webkit-box-shadow" (the vendor
+// key would be WebkitBoxShadow), so only the grey boxShadow
+// below it ever applies. Kept as found, documented rather
+// than silently changed.
+//
+// Used by:
+//   - ControlPanel / BlockCard / AddBlockButton (below)
+// -----------------------------------------------------------
+
+const RoundedBox = styled(Box)(({ theme }) => ({
+  background: theme.palette.background.default,
+  borderRadius: theme.shape.borderRadius,
+  margin: `${theme.spacing(2)} auto`,
+  padding: theme.spacing(2),
+  minWidth: theme.spacing(40),
+  maxWidth: theme.spacing(70),
+  width: '100%',
+  webkitBoxShadow: '2px 4px 10px 1px rgba(0, 0, 0, 0.47)',
+  boxShadow: '2px 4px 10px 1px rgba(201, 201, 201, 0.47)',
+  ...theme.typography.body2,
+}));
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// randomName
+// -----------------------------------------------------------
+//
+// One member of the cast, drawn at random — senders and
+// receivers alike.
+//
+// Used by:
+//   - generateRandomTransaction, createFirstBlock (below)
+//   - useBlockchain (below) — addBlock's coinbase receiver
+// -----------------------------------------------------------
+
 const randomName = () => LITHUANIAN_NAMES[Math.floor(Math.random() * LITHUANIAN_NAMES.length)];
 
 
-// The coinbase line — every block's first transaction, the
-// reward fixed at 50BTC
+
+
+
+
+
+// -----------------------------------------------------------
+// generateCoinbaseTransaction
+// -----------------------------------------------------------
+//
+// The coinbase line — every block's first transaction, new
+// coins paid to the given receiver, the reward fixed at
+// 50 BTC.
+//
+// Used by:
+//   - createGenesisBlock, createFirstBlock (below)
+//   - useBlockchain (below) — addBlock
+// -----------------------------------------------------------
+
 const generateCoinbaseTransaction = (receiver) => {
   return `1) Nauja kriptovaliuta ---> ${receiver} (50BTC)`;
 };
 
 
-// A random 1-10 BTC payment — every generated block's second
-// transaction line
+
+
+
+
+
+// -----------------------------------------------------------
+// generateRandomTransaction
+// -----------------------------------------------------------
+//
+// A random payment of 1 to 10 BTC between two members of the
+// cast — the second transaction line of every block the
+// student adds.
+//
+// Used by:
+//   - useBlockchain (below) — addBlock
+// -----------------------------------------------------------
+
 const generateRandomTransaction = () => {
   const amount = Math.floor(Math.random() * 10) + 1;
   return `2) ${randomName()} ---> ${randomName()} (${amount}BTC)`;
 };
 
 
-// The hashing rule of the whole page: SHA-256 over
-// `previousHash\nnonce\ndata` (real newlines). This exact
-// string is what the copy button puts on the clipboard, and
-// what the backend's example blocks were mined against. The
-// nonce arrives as a number when mined but as a raw string
-// when typed — both interpolate identically
+
+
+
+
+
+// -----------------------------------------------------------
+// calculateHash
+// -----------------------------------------------------------
+//
+// The hashing rule of the whole page: SHA-256 over the
+// previous hash, the nonce and the block's data, joined by
+// real newlines. That exact text is what the copy button
+// puts on the clipboard, and what the backend's example
+// blocks were mined against. The nonce arrives as a number
+// when mined but as a raw string when typed — both read the
+// same in the text.
+//
+// Used by:
+//   - createGenesisBlock, createFirstBlock (below)
+//   - useBlockchain (below) — recalculateFromIndex, mineBlock
+//     and addBlock
+// -----------------------------------------------------------
+
 const calculateHash = (previousHash, nonce, data) => {
   return sha256(`${previousHash}\n${nonce}\n${data}`).toString();
 };
@@ -380,40 +481,6 @@ function useBlockchain() {
 
 
 // -----------------------------------------------------------
-// RoundedBox
-// -----------------------------------------------------------
-//
-// The rounded white card every section of the page sits in.
-// Note: the webkitBoxShadow line is INERT — emotion renders
-// it as the unknown property "webkit-box-shadow" (the vendor
-// key would be WebkitBoxShadow), so only the grey boxShadow
-// below it ever applies. Kept as found, documented rather
-// than silently changed.
-//
-// Used by:
-//   - ControlPanel / BlockCard / AddBlockButton (below)
-// -----------------------------------------------------------
-
-const RoundedBox = styled(Box)(({ theme }) => ({
-  background: theme.palette.background.default,
-  borderRadius: theme.shape.borderRadius,
-  margin: `${theme.spacing(2)} auto`,
-  padding: theme.spacing(2),
-  minWidth: theme.spacing(40),
-  maxWidth: theme.spacing(70),
-  width: '100%',
-  webkitBoxShadow: '2px 4px 10px 1px rgba(0, 0, 0, 0.47)',
-  boxShadow: '2px 4px 10px 1px rgba(201, 201, 201, 0.47)',
-  ...theme.typography.body2,
-}));
-
-
-
-
-
-
-
-// -----------------------------------------------------------
 // CopiedToast
 // -----------------------------------------------------------
 //
@@ -670,6 +737,10 @@ function BlockCard({ block, index, isValid, mining, miningElsewhere, onNonceChan
 // -----------------------------------------------------------
 // AddBlockButton
 // -----------------------------------------------------------
+//
+// The wide button under the last block that appends a new,
+// unmined one chained onto it — the chain grows only from
+// its tail.
 //
 // Used by:
 //   - BlockchainSimulator (below) — under the last block

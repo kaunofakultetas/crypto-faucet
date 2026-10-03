@@ -17,12 +17,13 @@
 //  `updating` (the day's first crawl has not landed) the page
 //  asks again every few seconds — today's window keeps being
 //  asked after that too, as the backend keeps it current by
-//  watching its addresses; a past day is not asked again. The
-//  names that say who controls which address are the
-//  backend's (shared with the EVM graph): a rename is stored
-//  there and every graph query asks again. The small
-//  formatters every part of the drawing shares live here
-//  too.
+//  watching its addresses; a past day is asked again only
+//  while the backend says its crawl failed, slowly, until a
+//  retry of the crawl lands. The names that say who controls
+//  which address are the backend's (shared with the EVM
+//  graph): a rename is stored there and every graph query
+//  asks again. The small formatters every part of the drawing
+//  shares live here too.
 //
 //  Every answer is cleaned the moment it arrives, so the
 //  drawing, the dialog and the day picker can trust its shape
@@ -108,10 +109,15 @@ const TXID_PATTERN = /^[0-9a-f]{64}$/i;
 // only shape rangeOfDay can turn into a window
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
-// Stable empties while no answer has come — fresh [] / {} on
-// every render would rebuild the layout for nothing
+// Stable empties while no answer has come — a fresh [] or {}
+// on every render would rebuild the layout for nothing. No
+// blocks: no columns to lay out
 const NO_BLOCKS = [];
+
+// No transactions: no boxes and no edges
 const NO_TRANSACTIONS = [];
+
+// No names: every address shows in its short form
 const NO_NAMES = {};
 
 
@@ -941,9 +947,11 @@ export default function useTransactionGraph(network, day, today) {
 
 
   // Fast while the first crawl fills the cache, steady on a
-  // live window, not at all on a past day once it has landed.
-  // An answer that is not even an object is no day — an
-  // empty one would claim the faucet was quiet
+  // live window, slow on a past day while its crawl failed —
+  // the backend retries it, and the day must not sit on its
+  // error — and not at all on a past day once a crawl of it
+  // has landed. An answer that is not even an object is no day
+  // — an empty one would claim the faucet was quiet
   const query = useQuery({
     queryKey: ['utxo-graph', network, from, to],
     queryFn: async ({ signal }) => {
@@ -952,8 +960,10 @@ export default function useTransactionGraph(network, day, today) {
       return graphOf(body, liveGuess);
     },
     refetchInterval: (current) => {
-      if (current.state.data?.updating) return POLL_CONFIG.UPDATING_MS;
-      return (current.state.data?.live ?? liveGuess) ? POLL_CONFIG.LIVE_MS : false;
+      const answer = current.state.data;
+      if (answer?.updating) return POLL_CONFIG.UPDATING_MS;
+      if (answer?.live ?? liveGuess) return POLL_CONFIG.LIVE_MS;
+      return answer?.crawl_error ? POLL_CONFIG.CRAWL_RETRY_MS : false;
     },
   });
   const { data } = query;

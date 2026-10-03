@@ -203,6 +203,9 @@ function PresentationCard({ title, description, href, thumbnail, buttons }) {
 // PresentationsPage (default export)
 // -----------------------------------------------------------
 //
+// The page itself: the heading and one PresentationCard per
+// PRESENTATIONS entry, in the catalog's order.
+//
 // Used by:
 //   - App.jsx — route /presentations
 // -----------------------------------------------------------

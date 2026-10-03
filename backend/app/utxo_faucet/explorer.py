@@ -20,13 +20,17 @@
 #  MAX_ADDRESSES_PER_CRAWL addresses; an address with a history
 #  longer than HUB_HISTORY_THRESHOLD is a PUBLIC HUB (another
 #  faucet, an exchange) — flagged, never stored, never
-#  followed. The faucet is exempt: it is the root.
+#  followed — and so is one whose history the server refuses
+#  to send as too large (HISTORY_TOO_LARGE). The faucet is
+#  exempt: it is the root, and a refusal of its history fails
+#  the crawl, saying why.
 #
 #  Crawls run in the BACKGROUND, one per network at a time,
 #  started by the graph requests themselves: a live window
 #  (touching the last hour — it has a mempool and still grows)
 #  is re-crawled at most every CRAWL_INTERVAL_S, a past one at
-#  most every HISTORICAL_RECRAWL_S. An address' history is
+#  most every HISTORICAL_RECRAWL_S, and one whose last crawl
+#  failed again after CRAWL_RETRY_S. An address' history is
 #  re-read at most every ADDRESS_REFRESH_INTERVAL_S, and a past
 #  window reads only addresses never read before. A request
 #  never waits on ElectrumX: it answers from SQLite, with
@@ -50,6 +54,9 @@
 #  takes a transaction out of the mempool, a reorg moves it to
 #  another height, and one replaced or evicted drops out of
 #  every history — its rows are gone, and it is no longer shown.
+#  A transaction the server refused is asked for again once the
+#  refusal is REFUSAL_RETRY_S old, as refusals can pass; one
+#  embit could not decode, never.
 #  Only read-only calls of Electrum protocol 1.4 on the
 #  explorer's own connection — ElectrumClient is strictly
 #  request/response and treats an unsolicited notification as
@@ -102,12 +109,25 @@ MAX_TX_FETCHES_PER_REQUEST = 50
 # A history longer than this is a public hub, not a class wallet
 HUB_HISTORY_THRESHOLD = 500
 
+# ElectrumX's own refusal of an address' history longer than it
+# sends in one answer (its MAX_SEND limit): an error ANSWER in
+# these words, matched in any case. Such a history is far
+# longer than HUB_HISTORY_THRESHOLD — a hub nobody knows the
+# size of
+HISTORY_TOO_LARGE = 'history too large'
+
 # Seconds between two readings of one address' history
 ADDRESS_REFRESH_INTERVAL_S = 60
 
 # Seconds between two crawls of one live window, of a past one
 CRAWL_INTERVAL_S = 30
 HISTORICAL_RECRAWL_S = 600
+
+# Seconds before a window whose last crawl failed is due again —
+# a past day must not sit on its error for HISTORICAL_RECRAWL_S.
+# A minute: a server back up shows soon, and one still down is
+# not asked at every poll
+CRAWL_RETRY_S = 60
 
 # A window reaching into the last hour is live (the EVM rule)
 LIVE_WINDOW_S = 3600
@@ -144,6 +164,15 @@ NOT_FOUND = 'No such mempool or blockchain transaction'
 # same not-found words and this phrase after them: it could
 # not look yet, which is no proof of absence either
 STILL_INDEXING = 'still in the process of being indexed'
+
+# Seconds a refusal of a transaction stands before it is asked
+# for again. A refusal can pass — a node finishing its index, a
+# transaction reaching the node late, an operator turning
+# -txindex on — while asking at every crawl would put every
+# mined transaction of the window to a node without -txindex
+# twice a minute. A transaction embit could not decode is never
+# asked for again: the same bytes would come back
+REFUSAL_RETRY_S = 300
 
 # SQLite's bound on host parameters, with room to spare — IN
 # lists are sent in chunks of this size
@@ -383,8 +412,8 @@ def _ordered(transactions, root):
 ############################################################
 #
 # What the explorer answers for a transaction it gave up on —
-# the HTTP status and the sentence saying why — decided once,
-# when it gives up. `refused` says which way it gave up: the
+# the HTTP status and the sentence saying why — decided each
+# time it gives up. `refused` says which way it gave up: the
 # Electrum server answered with a refusal, or it sent a
 # transaction embit could not decode. A refusal in the words
 # of NOT_FOUND is the node's own statement that the
@@ -398,8 +427,8 @@ def _ordered(transactions, root):
 #
 # Used by:
 #   - UtxoGraphExplorer._ensure_decoded — kept in
-#     _undecodable, read by get_transaction and
-#     _window_payload
+#     _undecodable, which _gave_up_on reads for
+#     get_transaction and _window_payload
 ############################################################
 
 def _given_up(error, refused):
@@ -429,9 +458,9 @@ def _given_up(error, refused):
 #   serve  — get_graph, get_transaction_days, get_transaction,
 #            set_address_name
 #   crawl  — _maybe_start_crawl, _crawl, _crawl_window,
-#            _refresh_address, _ensure_block_times
+#            _refresh_address, _mark_hub, _ensure_block_times
 #   watch  — _watch, _on_change, _kick
-#   fetch  — _ensure_decoded, _ensure_parents,
+#   fetch  — _gave_up_on, _ensure_decoded, _ensure_parents,
 #            _store_transaction, _locate
 #   read   — _window_txids, _addresses_in, _window_payload,
 #            _transaction_payloads, _names
@@ -473,15 +502,17 @@ class UtxoGraphExplorer:
         # are crawling right now, when each (network, window) was
         # last crawled, which windows have had a crawl land, why
         # each network's last crawl failed (None once one
-        # succeeded), the live window of each network last asked
-        # for (from, to, when), which networks a change wants
-        # crawled at once, and the watchers with the addresses
-        # they follow (scripthash → address)
+        # succeeded) and why each window's did (only the windows
+        # whose last crawl failed), the live window of each
+        # network last asked for (from, to, when), which networks
+        # a change wants crawled at once, and the watchers with
+        # the addresses they follow (scripthash → address)
         self._lock = threading.Lock()
         self._crawling = set()
         self._last_crawl = {}
         self._completed = set()
         self._crawl_errors = {}
+        self._window_errors = {}
         self._live = {}
         self._nudged = set()
         self._watchers = {}
@@ -489,10 +520,13 @@ class UtxoGraphExplorer:
 
         # txids the explorer gave up on — the server refused them
         # or answered with something embit cannot decode (a
-        # Litecoin MWEB transaction, say) — not asked for again by
-        # this process, each with the status and the sentence
-        # _given_up chose for it. Entries are only ever added, one
-        # at a time, so the threads share it without the lock
+        # Litecoin MWEB transaction, say) — each with the status
+        # and the sentence _given_up chose for it, and until when
+        # that answer stands: a refusal REFUSAL_RETRY_S, an
+        # undecodable answer for good (None). Read through
+        # _gave_up_on. Every access is one dictionary operation —
+        # set, get or pop — so the threads share it without the
+        # lock
         self._undecodable = {}
 
 
@@ -533,9 +567,13 @@ class UtxoGraphExplorer:
     # the window's blocks and transactions, how many of them
     # cannot be shown yet (`missing`, with `missing_error` when
     # the server refused one), and the names. `crawl_error` is
-    # the sentence saying why the network's last crawl failed,
-    # None once one succeeds again — so a dead Electrum server
-    # shows on the graph instead of a day that looks quiet.
+    # the sentence saying why a crawl failed — this window's own
+    # last one, else the network's most recent one — and None
+    # once both succeeded: a dead Electrum server shows on the
+    # graph instead of a day that looks quiet, and a past day
+    # whose crawl failed keeps saying so until a crawl of it
+    # succeeds, even when another window's crawl did meanwhile
+    # (the page keeps asking while it is set).
     #
     # Used by:
     #   - utxo_routes.py — GET /api/utxo/<network>/graph
@@ -556,9 +594,10 @@ class UtxoGraphExplorer:
         with get_db_connection() as conn:
             payload = self._window_payload(conn, network, from_ts, to_ts, live)
 
+        key = (network, from_ts, to_ts)
         with self._lock:
-            payload['updating'] = (network, from_ts, to_ts) not in self._completed
-            payload['crawl_error'] = self._crawl_errors.get(network)
+            payload['updating'] = key not in self._completed
+            payload['crawl_error'] = self._window_errors.get(key) or self._crawl_errors.get(network)
         return payload, 200
 
 
@@ -661,12 +700,12 @@ class UtxoGraphExplorer:
         # STEP 3: the cache lacks it — say why. The server not
         # reached, silent or cut off mid-answer is a 503; a
         # transaction the explorer gave up on answers what
-        # _given_up chose for it
+        # _given_up chose for it, while that answer stands
         # ====================================================
         if failure is not None:
             return {"error": failure_sentence('Nepavyko gauti transakcijos', failure, 'electrum',
                                               ELECTRUM_TIMEOUT_S)}, 503
-        status, sentence = self._undecodable.get((network, txid), (404, 'Transakcija nerasta.'))
+        status, sentence = self._gave_up_on(network, txid) or (404, 'Transakcija nerasta.')
         return {"error": sentence}, status
 
 
@@ -720,11 +759,13 @@ class UtxoGraphExplorer:
     # Start a background crawl of the window when one is due: no
     # crawl of this network is running, and this window was not
     # crawled within CRAWL_INTERVAL_S (live) or
-    # HISTORICAL_RECRAWL_S (past) — or, for a live window, a
-    # watched change asked for one (the network is nudged),
-    # which skips the interval. The records are claimed under
-    # the lock BEFORE the thread starts, so a lecture hall
-    # opening the page at once starts one crawl.
+    # HISTORICAL_RECRAWL_S (past) — shortened to CRAWL_RETRY_S
+    # while the window's last crawl failed, so a past day is not
+    # left on its error — or, for a live window, a watched
+    # change asked for one (the network is nudged), which skips
+    # the interval. The records are claimed under the lock
+    # BEFORE the thread starts, so a lecture hall opening the
+    # page at once starts one crawl.
     #
     # Used by:
     #   - get_graph (above)
@@ -737,6 +778,8 @@ class UtxoGraphExplorer:
         now = time.time()
 
         with self._lock:
+            if key in self._window_errors:
+                interval = min(interval, CRAWL_RETRY_S)
             nudged = live and network in self._nudged
             if network in self._crawling or (not nudged and now - self._last_crawl.get(key, 0) < interval):
                 return
@@ -766,8 +809,10 @@ class UtxoGraphExplorer:
     # cache keeps serving, the next due request retries) and put
     # into words for the page, and, whatever happened, the window
     # marked as crawled and the network released. The sentence
-    # stays the network's crawl_error until a crawl succeeds
-    # (get_graph answers it). A change that came in during the
+    # becomes the network's crawl_error and the window's own,
+    # both cleared by the next crawl that succeeds — the
+    # window's makes it due again after CRAWL_RETRY_S (see
+    # _maybe_start_crawl). A change that came in during the
     # crawl starts the next one right away.
     #
     # Used by:
@@ -784,10 +829,15 @@ class UtxoGraphExplorer:
             logging.exception(f"[UTXO graph] {network} crawl failed; the cache keeps serving")
             failure = failure_sentence('Nepavyko atnaujinti grafiko', error, 'electrum', ELECTRUM_TIMEOUT_S)
         finally:
+            key = (network, from_ts, to_ts)
             with self._lock:
                 self._crawling.discard(network)
-                self._completed.add((network, from_ts, to_ts))
+                self._completed.add(key)
                 self._crawl_errors[network] = failure
+                if failure:
+                    self._window_errors[key] = failure
+                else:
+                    self._window_errors.pop(key, None)
                 again = network in self._nudged
             if again:
                 self._kick(network)
@@ -874,12 +924,18 @@ class UtxoGraphExplorer:
     # REPLACES the stored one (a transaction it no longer lists
     # was dropped), and the block times of its heights are
     # fetched. A history longer than HUB_HISTORY_THRESHOLD marks
-    # a public hub instead — nothing stored — unless `trusted`
-    # (the faucet). True when the address may be followed.
+    # a public hub instead — nothing stored — and so does one
+    # the server refuses to send as too large (HISTORY_TOO_LARGE,
+    # a hub of unknown size), so one such address costs its own
+    # place in the graph, never the whole crawl. `trusted` (the
+    # faucet) is never a hub: its refusal is raised, and the
+    # crawl fails saying why. True when the address may be
+    # followed.
     #
     # Used by:
     #   - _crawl_window (above)
-    #   - _locate (below) — force=True, one address at a time
+    #   - _locate (below) — force=True, one address at a time; a
+    #     candidate flagged here is passed over for the next
     ############################################################
 
     def _refresh_address(self, network, address, live, trusted=False, force=False):
@@ -898,13 +954,23 @@ class UtxoGraphExplorer:
 
 
         # STEP 1: the history, from the server — by the address'
-        # scripthash, so the dialect must be able to read it
+        # scripthash, so the dialect must be able to read it. A
+        # history the server refuses as too large is a hub's
         # ======================================================
         try:
             script = self.faucet.network_dialect(network).recipient_script(address)
         except ValueError:
             return False
-        history = self._clients[network].request('blockchain.scripthash.get_history', [_electrum_scripthash(script)])
+        try:
+            history = self._clients[network].request('blockchain.scripthash.get_history',
+                                                     [_electrum_scripthash(script)])
+        except RuntimeError as error:
+            if trusted or HISTORY_TOO_LARGE not in str(error).lower():
+                raise
+            logging.warning(f"[UTXO graph] the server refused the history of {address} on {network} as too "
+                            f"large — flagged a public hub, nothing stored: {error}")
+            self._mark_hub(network, address, now, None)
+            return False
 
 
         # STEP 2: too long — a public hub: flagged, nothing kept
@@ -912,16 +978,7 @@ class UtxoGraphExplorer:
         if len(history) > HUB_HISTORY_THRESHOLD and not trusted:
             logging.warning(f"[UTXO graph] {address} on {network} looks like a public hub "
                             f"({len(history)} transactions) — flagged, history not stored")
-            with get_db_connection() as conn:
-                conn.execute('DELETE FROM GraphUtxo_History WHERE network = ? AND address = ?', [network, address])
-                conn.execute('''
-                    INSERT INTO GraphUtxo_Addresses (network, address, last_refresh, history_size, is_hub)
-                    VALUES (?, ?, ?, ?, 1)
-                    ON CONFLICT(network, address) DO UPDATE SET
-                        last_refresh = excluded.last_refresh,
-                        history_size = excluded.history_size,
-                        is_hub = 1
-                ''', [network, address, now, len(history)])
+            self._mark_hub(network, address, now, len(history))
             return False
 
 
@@ -947,6 +1004,40 @@ class UtxoGraphExplorer:
         # ===========================================
         self._ensure_block_times(network, {int(entry['height']) for entry in history if int(entry['height']) > 0})
         return True
+
+
+
+
+
+
+    ############################################################
+    # _mark_hub
+    ############################################################
+    #
+    # Flag an address a public hub on this network: its stored
+    # history deleted and its row marked is_hub, with when it
+    # was read and the size of the history that gave it away —
+    # NULL when the server refused to send that history at all,
+    # for then nobody knows its size. A hub is never read or
+    # followed again (see _refresh_address), and the graph's
+    # walk stops at it.
+    #
+    # Used by:
+    #   - _refresh_address (above) — a history over
+    #     HUB_HISTORY_THRESHOLD, or one refused as too large
+    ############################################################
+
+    def _mark_hub(self, network, address, read_at, size):
+        with get_db_connection() as conn:
+            conn.execute('DELETE FROM GraphUtxo_History WHERE network = ? AND address = ?', [network, address])
+            conn.execute('''
+                INSERT INTO GraphUtxo_Addresses (network, address, last_refresh, history_size, is_hub)
+                VALUES (?, ?, ?, ?, 1)
+                ON CONFLICT(network, address) DO UPDATE SET
+                    last_refresh = excluded.last_refresh,
+                    history_size = excluded.history_size,
+                    is_hub = 1
+            ''', [network, address, read_at, size])
 
 
 
@@ -1124,6 +1215,38 @@ class UtxoGraphExplorer:
 
 
     ############################################################
+    # _gave_up_on
+    ############################################################
+    #
+    # The answer the explorer stands by for a transaction it gave
+    # up on — the status and the sentence _given_up chose — or
+    # None: it never gave up on it, or the refusal behind the
+    # answer is REFUSAL_RETRY_S old, and the transaction is to be
+    # asked for again. A transaction embit could not decode is
+    # given up on for good. One dictionary read, as the threads
+    # share _undecodable without the lock.
+    #
+    # Used by:
+    #   - _ensure_decoded (below) — whether to ask the server
+    #   - get_transaction (above), _window_payload (below) —
+    #     the answer they give
+    ############################################################
+
+    def _gave_up_on(self, network, txid):
+        entry = self._undecodable.get((network, txid))
+        if entry is None:
+            return None
+        status, sentence, until = entry
+        if until is not None and time.time() >= until:
+            return None
+        return status, sentence
+
+
+
+
+
+
+    ############################################################
     # _ensure_decoded
     ############################################################
     #
@@ -1136,7 +1259,10 @@ class UtxoGraphExplorer:
     # skipped: one bad transaction must not stop the crawl. The
     # two are told apart HERE, where each is caught — embit
     # raises RuntimeError too, for a transaction cut short, so
-    # the exception's type alone cannot say which it was.
+    # the exception's type alone cannot say which it was. A
+    # refusal is remembered for REFUSAL_RETRY_S and then asked
+    # again (_gave_up_on); an undecodable answer for good; a
+    # transaction stored at last is no longer given up on.
     #
     # Used by:
     #   - _crawl_window, _ensure_parents, get_transaction
@@ -1147,7 +1273,7 @@ class UtxoGraphExplorer:
             stored = conn.execute('''
                 SELECT 1 FROM GraphUtxo_Transactions WHERE network = ? AND txid = ?
             ''', [network, txid]).fetchone()
-        if stored or (network, txid) in self._undecodable:
+        if stored or self._gave_up_on(network, txid):
             return True
         if budget['fetches'] <= 0:
             return False
@@ -1159,13 +1285,15 @@ class UtxoGraphExplorer:
             # The server's answer says it all (a node without
             # -txindex refuses every mined transaction) — no traceback
             logging.warning(f"[UTXO graph] the server refused {txid} on {network} — skipped: {error}")
-            self._undecodable[(network, txid)] = _given_up(error, refused=True)
+            self._undecodable[(network, txid)] = (*_given_up(error, refused=True), time.time() + REFUSAL_RETRY_S)
             return True
         try:
             self._store_transaction(network, txid, raw_hex)
         except Exception as error:
             logging.warning(f"[UTXO graph] {txid} on {network} could not be decoded — skipped", exc_info=True)
-            self._undecodable[(network, txid)] = _given_up(error, refused=False)
+            self._undecodable[(network, txid)] = (*_given_up(error, refused=False), None)
+            return True
+        self._undecodable.pop((network, txid), None)
         return True
 
 
@@ -1376,8 +1504,9 @@ class UtxoGraphExplorer:
     # without -txindex serves no mined transaction), which the
     # page must say rather than look like a quiet day.
     # `missing_error` says why in the words _given_up chose for
-    # the first missing one the explorer gave up on; None while
-    # every missing one may simply be still to fetch.
+    # the first missing one the explorer still stands by an
+    # answer for (_gave_up_on); None while every missing one may
+    # simply be still to fetch, or is due to be asked again.
     #
     # Used by:
     #   - get_graph (above)
@@ -1426,10 +1555,9 @@ class UtxoGraphExplorer:
 
 
         # STEP 3: why the missing ones are missing, when the
-        # explorer gave up on one of them
+        # explorer stands by an answer for one of them
         # ==================================================
-        given_up = [self._undecodable[(network, txid)] for txid in sorted(missing)
-                    if (network, txid) in self._undecodable]
+        given_up = [answer for answer in (self._gave_up_on(network, txid) for txid in sorted(missing)) if answer]
 
         return {
             "faucet_address": root,

@@ -11,23 +11,29 @@
 #               transactions in
 #    crawl    — what a crawl stores and follows: inputs resolved
 #               through their parents, fees and sizes, spenders,
-#               block times, the hub cap, live vs past windows,
-#               re-reading only when due, dropped and reorged
-#               transactions, the fetch budget, a refused
-#               transaction and a broken connection
+#               block times, the hub cap and a history the
+#               server refuses as too large, live vs past
+#               windows, re-reading only when due, dropped and
+#               reorged transactions, the fetch budget, a
+#               refused transaction and a broken connection
 #    serve    — the request side: validation, one background
 #               crawl per interval and `updating` until the
 #               first lands, the day list in the browser's
 #               zone, single transactions (fetched and located
-#               when missing, coinbases), names
+#               when missing — past an address refused as too
+#               large — coinbases), names
 #    failures — what the page is told when the Electrum side
 #               fails: a single transaction's reason and status
 #               (no answer in time, no connection, unknown to
 #               the node, refused by a node without -txindex,
 #               sent undecodable), what the cache holds served
 #               all the same, a failed crawl said on the graph
-#               until one succeeds, and why the missing
-#               transactions are missing
+#               until one succeeds — the faucet's history
+#               refused as too large included — why the missing
+#               transactions are missing, a refusal asked again
+#               once old enough while an undecodable answer is
+#               not, and a failed window's crawl retried soon
+#               after, its error kept until a crawl of it lands
 #    watch    — what a live crawl watches, and a notification
 #               crawling the window at once
 #    routes   — the four endpoints reach the explorer
@@ -113,6 +119,10 @@ INDEXING_ERROR = ("Electrum error: {'code': 2, 'message': \"daemon error: Daemon
                   "'No such mempool or blockchain transaction. Blockchain transactions are still in the process "
                   "of being indexed.'})\"}")
 
+# ElectrumX's own refusal of an address' history longer than it
+# sends in one answer, as the Electrum client raises it
+HISTORY_TOO_LARGE_ERROR = "Electrum error: {'code': 1, 'message': 'history too large'}"
+
 # How a Litecoin MWEB transaction starts — the SegWit marker
 # with the MWEB flag — which embit cannot decode
 UNDECODABLE = '0200000000080100'
@@ -153,12 +163,15 @@ def header(height):
 # One network's ElectrumX as the explorer sees it: histories
 # by scripthash, raw transactions by txid, a header for any
 # height. A txid it holds no transaction for is refused the
-# way ElectrumX refuses an unknown one, and `refused` txids
-# the way a node without -txindex refuses a mined one (each a
-# RuntimeError, as ElectrumClient raises a server's error
-# answer); `failure`, when set, is raised by every call — a
-# dead or silent server, as the client gives up on it. Every
-# call is recorded as (method, params).
+# way ElectrumX refuses an unknown one, `refused` txids the
+# way a node without -txindex refuses a mined one, `indexing`
+# txids the way a node still building its index does, and the
+# histories of `too_large` scripthashes the way ElectrumX
+# refuses one longer than it sends (each a RuntimeError, as
+# ElectrumClient raises a server's error answer); `failure`,
+# when set, is raised by every call — a dead or silent server,
+# as the client gives up on it. Every call is recorded as
+# (method, params).
 #
 # Used by:
 #   - GraphWorld (below)
@@ -171,6 +184,7 @@ class FakeGraphElectrum:
         self.raw = {}
         self.refused = set()
         self.indexing = set()
+        self.too_large = set()
         self.failure = None
         self.calls = []
 
@@ -179,6 +193,8 @@ class FakeGraphElectrum:
         if self.failure is not None:
             raise self.failure
         if method == 'blockchain.scripthash.get_history':
+            if params[0] in self.too_large:
+                raise RuntimeError(HISTORY_TOO_LARGE_ERROR)
             return [dict(entry) for entry in self.histories.get(params[0], [])]
         if method == 'blockchain.transaction.get':
             if params[0] in self.refused:
@@ -384,7 +400,10 @@ def recording_threads(started):
 # schema, the explorer's database pointed at it, a UTXOFaucet
 # with the test key, the explorer's btc4 connection replaced
 # by the sample chain's fake server, and its watchers by
-# FakeWatcher.
+# FakeWatcher. A test that needs time to pass takes over the
+# explorer's clock (clock — held still, moved by hand), and one
+# that reads the explorer's warnings turns logging back on for
+# itself (warnings).
 #
 # Used by:
 #   - CrawlTests, ServeTests, FailureTests, WatchTests (below)
@@ -435,6 +454,21 @@ class ExplorerTestCase(unittest.TestCase):
         # crawl finds them due again
         with get_db_connection(self.db_path) as conn:
             conn.execute('UPDATE GraphUtxo_Addresses SET last_refresh = last_refresh - ?', [seconds])
+
+    def clock(self):
+        # The explorer's clock, started where the real one is (so
+        # today's window stays live) and moved only by the test
+        clock = SimpleNamespace(now=time.time())
+        patcher = patch.object(explorer_module, 'time', SimpleNamespace(time=lambda: clock.now))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return clock
+
+    def warnings(self):
+        # The module silences logging; this test reads it
+        logging.disable(logging.NOTSET)
+        self.addCleanup(logging.disable, logging.CRITICAL)
+        return self.assertLogs(level='WARNING')
 
 
 
@@ -640,6 +674,26 @@ class CrawlTests(ExplorerTestCase):
         self.crawl()
         self.assertEqual(self.world.electrum.history_calls().count(self.world.hash['hub']), 1)
 
+    def test_a_history_the_server_refuses_as_too_large_is_a_hub_and_the_crawl_goes_on(self):
+        # Jonas' history was stored once; now the server will not
+        # send it — a hub of unknown size, his rows gone, said in
+        # the log, and the crawl reads on to Eglė
+        self.crawl()
+        self.world.electrum.too_large.add(self.world.hash['jonas'])
+        self.age_reads(explorer_module.ADDRESS_REFRESH_INTERVAL_S)
+        with self.warnings() as logs:
+            self.explorer._crawl('btc4', *TODAY, True)
+
+        row = self.address_row(self.world.jonas)
+        self.assertEqual((row['is_hub'], row['history_size']), (1, None))
+        with get_db_connection(self.db_path) as conn:
+            rows = conn.execute('SELECT COUNT(*) FROM GraphUtxo_History WHERE address = ?', [self.world.jonas]).fetchone()[0]
+        self.assertEqual(rows, 0)
+        self.assertTrue(any(f'the server refused the history of {self.world.jonas} on btc4 as too large' in line
+                            for line in logs.output), logs.output)
+        self.assertEqual(self.world.electrum.history_calls().count(self.world.hash['egle']), 2)
+        self.assertIsNone(self.graph()['crawl_error'])
+
     def test_the_faucet_is_never_a_hub(self):
         self.world.history('faucet').extend(dict(filler) for filler in FILLER)
         self.crawl()
@@ -824,6 +878,16 @@ class ServeTests(ExplorerTestCase):
         self.assertEqual(self.address_row(self.world.faucet)['is_hub'], 0)
         self.assertEqual(self.address_row(self.world.faucet)['history_size'], 3 + len(FILLER))
 
+    def test_a_lookup_passes_over_an_address_refused_as_too_large(self):
+        # t2 is located through its outputs' addresses: Jonas' is
+        # refused — flagged a hub — and the faucet's lists t2
+        self.world.electrum.too_large.add(self.world.hash['jonas'])
+        payload, status = self.explorer.get_transaction('btc4', self.world.id['t2'])
+
+        self.assertEqual(status, 200)
+        self.assertEqual((payload['transaction']['status'], payload['transaction']['block']), ('confirmed', 1200))
+        self.assertEqual(self.address_row(self.world.jonas)['is_hub'], 1)
+
     def test_a_coinbase_has_no_inputs_and_no_fee(self):
         tx = self.explorer.get_transaction('btc4', self.world.id['t0'])[0]['transaction']
 
@@ -859,7 +923,10 @@ class ServeTests(ExplorerTestCase):
 # What the page is told when the Electrum side fails — every
 # sentence word for word, and for a single transaction the
 # status as well: "not found" only when the node said so,
-# never for a server that could not be asked.
+# never for a server that could not be asked — and how long a
+# failure stands: a refusal until it is old enough to ask
+# again, an undecodable answer for good, a failed window's
+# crawl until a retry soon after.
 ############################################################
 
 class FailureTests(ExplorerTestCase):
@@ -981,6 +1048,101 @@ class FailureTests(ExplorerTestCase):
 
         self.assertEqual(payload['missing'], 1)
         self.assertIsNone(payload['missing_error'])
+
+    def test_the_faucet_refused_as_too_large_fails_the_crawl_and_says_why(self):
+        # The faucet is the root, never a hub: its crawl fails
+        self.world.electrum.too_large.add(self.world.hash['faucet'])
+        self.explorer._crawl('btc4', *TODAY, True)
+
+        self.assertEqual(self.graph()['crawl_error'],
+                         'Nepavyko atnaujinti grafiko: Electrum serveris atsisakė pateikti adreso istoriją, nes ji '
+                         'per ilga (history too large).')
+        row = self.address_row(self.world.faucet)
+        self.assertTrue(row is None or row['is_hub'] == 0)
+
+    def test_a_refusal_stands_until_it_is_old_enough_and_the_dialog_then_has_the_fresh_answer(self):
+        clock = self.clock()
+        self.world.electrum.refused.add(self.world.id['t3'])
+        refused = (502, self.refusal(NO_TXINDEX_ERROR))
+        self.assertEqual(self.lookup(self.world.id['t3']), refused)
+
+        # The node gets its index — but the refusal stands, and the
+        # server is not asked, until it is REFUSAL_RETRY_S old
+        self.world.electrum.refused.clear()
+        clock.now += explorer_module.REFUSAL_RETRY_S - 1
+        self.assertEqual(self.lookup(self.world.id['t3']), refused)
+        self.assertEqual(self.world.electrum.transaction_calls().count(self.world.id['t3']), 1)
+
+        clock.now += 2
+        payload, status = self.explorer.get_transaction('btc4', self.world.id['t3'])
+        self.assertEqual((status, payload['transaction']['txid']), (200, self.world.id['t3']))
+        self.assertEqual(self.world.electrum.transaction_calls().count(self.world.id['t3']), 2)
+
+    def test_a_transaction_that_cannot_be_decoded_is_never_asked_for_again(self):
+        # The same bytes would come back
+        clock = self.clock()
+        self.world.electrum.raw[self.world.id['t3']] = UNDECODABLE
+        undecodable = self.lookup(self.world.id['t3'])
+
+        clock.now += 100 * explorer_module.REFUSAL_RETRY_S
+        self.assertEqual(self.lookup(self.world.id['t3']), undecodable)
+        self.assertEqual(self.world.electrum.transaction_calls().count(self.world.id['t3']), 1)
+
+    def test_a_crawl_asks_a_refused_transaction_again_once_the_refusal_is_old_enough(self):
+        clock = self.clock()
+        self.world.electrum.refused.update([self.world.id['t2'], self.world.id['t3']])
+        self.crawl()
+        self.world.electrum.refused.clear()
+
+        # Within the interval the refusals stand: said, not asked
+        clock.now += explorer_module.REFUSAL_RETRY_S - 1
+        self.crawl()
+        payload = self.graph()
+        self.assertEqual((payload['missing'], payload['missing_error']), (2, self.refusal(NO_TXINDEX_ERROR)))
+        self.assertEqual(self.world.electrum.transaction_calls().count(self.world.id['t2']), 1)
+
+        clock.now += 2
+        self.crawl()
+        payload = self.graph()
+        self.assertEqual((payload['missing'], payload['missing_error'], len(payload['transactions'])), (0, None, 4))
+
+    def test_a_window_whose_crawl_failed_is_due_again_after_the_retry_interval(self):
+        # Not after HISTORICAL_RECRAWL_S — and back on it once a
+        # crawl lands
+        clock = self.clock()
+        started = []
+        self.world.electrum.failure = TimeoutError('timed out')
+        with patch.object(explorer_module, 'threading', recording_threads(started)):
+            self.explorer.get_graph('btc4', *PAST)
+            self.explorer._crawl(*started[-1])
+
+            clock.now += explorer_module.CRAWL_RETRY_S - 1
+            payload = self.explorer.get_graph('btc4', *PAST)[0]
+            self.assertEqual(len(started), 1)
+            self.assertEqual(payload['crawl_error'], 'Nepavyko atnaujinti grafiko: Electrum serveris neatsakė per 15 s.')
+
+            clock.now += 2
+            self.world.electrum.failure = None
+            self.explorer.get_graph('btc4', *PAST)
+            self.assertEqual(len(started), 2)
+            self.explorer._crawl(*started[-1])
+
+            clock.now += explorer_module.CRAWL_RETRY_S + 1
+            payload = self.explorer.get_graph('btc4', *PAST)[0]
+        self.assertEqual(len(started), 2)
+        self.assertIsNone(payload['crawl_error'])
+        self.assertEqual([tx['txid'] for tx in payload['transactions']], [self.world.id['t1']])
+
+    def test_a_past_day_keeps_its_own_crawl_error_while_another_day_crawls_fine(self):
+        # So its page keeps asking — and the retry comes — until a
+        # crawl of THAT day succeeds
+        self.world.electrum.failure = TimeoutError('timed out')
+        self.explorer._crawl('btc4', *PAST, False)
+        self.world.electrum.failure = None
+        self.explorer._crawl('btc4', *TODAY, True)
+
+        self.assertEqual(self.graph(PAST)['crawl_error'], 'Nepavyko atnaujinti grafiko: Electrum serveris neatsakė per 15 s.')
+        self.assertIsNone(self.graph(TODAY)['crawl_error'])
 
 
 

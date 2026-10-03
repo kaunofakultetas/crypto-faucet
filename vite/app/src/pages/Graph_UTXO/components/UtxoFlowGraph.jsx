@@ -76,11 +76,6 @@ import ZoomControls from './ZoomControls';
 // ids cannot clash
 const ARROWS = { faucet: 'utxo-arrow-faucet', other: 'utxo-arrow-other' };
 
-// A column's tint — the mempool amber, every other block light
-// grey — shared by the lane and its header cell
-const bandOf = (column, index) =>
-  (column.key === MEMPOOL_COLUMN ? COLORS.MEMPOOL_BAND : (index % 2 ? COLORS.BLOCK_BAND : '#ffffff'));
-
 // The status box's colours per tone — the EVM graph's red
 // outage notice, and its amber and neutral siblings
 const TONE_CLASSES = {
@@ -88,6 +83,27 @@ const TONE_CLASSES = {
   warn: 'border-amber-200 bg-amber-50 text-amber-800',
   error: 'border-red-200 bg-red-50 text-red-700',
 };
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// bandOf
+// -----------------------------------------------------------
+//
+// A column's tint: the mempool amber, the blocks alternating
+// light grey and white. The lane and its header cell share
+// it, so a column reads as one band from the pinned row down.
+//
+// Used by:
+//   - BlockHeaderRow, BlockColumn (below)
+// -----------------------------------------------------------
+
+const bandOf = (column, index) =>
+  (column.key === MEMPOOL_COLUMN ? COLORS.MEMPOOL_BAND : (index % 2 ? COLORS.BLOCK_BAND : '#ffffff'));
 
 
 

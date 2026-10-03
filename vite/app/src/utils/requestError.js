@@ -47,6 +47,8 @@ import axios from 'axios';
 // Used by:
 //   - Faucet_EVM, Faucet_ERC20, Faucet_SVM, Faucet_MOVE,
 //     Faucet_UTXO — the shape checks inside their queries
+//   - hooks/useEvmNetworks.js — the EVM network list's shape
+//     check, for the EVM faucet and the transaction graph
 //   - Graph/Page.jsx, Graph/hooks/useTransactionGraph.js,
 //     Graph_UTXO/Page.jsx, Graph_UTXO/hooks/useTransactionGraph.js
 //     — the graphs' shape checks

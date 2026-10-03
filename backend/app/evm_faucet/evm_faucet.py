@@ -677,8 +677,18 @@ class EVMFaucet:
     # that key is not configured — the lowest picker id, which
     # is the first entry the picker lists.
     #
+    # Every entry also names faucet_address, the checksummed
+    # address the faucet pays from: one key, so the same on
+    # every network, and known from the key alone — no RPC call
+    # is made for it. The transaction graph roots itself there,
+    # so the graph keeps working while a network's RPC is down
+    # (the balance read, which needs that RPC, would fail).
+    # None when the faucet key is missing or unusable.
+    #
     # Used by:
     #   - evm_routes.py — GET /api/evm/networks
+    #   - faucet_catalog/catalog_routes.py — the evm part of
+    #     GET /api/faucet/catalog
     ############################################################
 
     def get_networks(self):
@@ -703,6 +713,9 @@ class EVMFaucet:
                 # section with an API URL; the page hides the graph
                 # button without it instead of showing an empty graph
                 'has_explorer': bool(config.get('explorer', {}).get('etherscan_api_url')),
+                # The graph's root — read off the account, never
+                # off the chain (see the banner)
+                'faucet_address': self.FAUCET_ADDRESS,
             }
 
         default_key = DEFAULT_NETWORK if DEFAULT_NETWORK in networks else min(

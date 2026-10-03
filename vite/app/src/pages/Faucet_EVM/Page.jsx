@@ -15,7 +15,8 @@
 //  the transaction graph (/graph/<network>).
 //
 //  Network metadata (chain id, names, RPC urls, explorer)
-//  comes from /api/evm/networks and also feeds MetaMask's
+//  comes from /api/evm/networks — the useEvmNetworks query the
+//  transaction graph shares — and also feeds MetaMask's
 //  wallet_addEthereumChain when the chain is missing there.
 //  The page shows skeletons until both the metadata and the
 //  faucet info have arrived, and nothing it reads can keep
@@ -34,8 +35,7 @@
 //    NETWORKS_FAILED   — the network list's failure sentence
 //    FAUCET_FAILED     — the faucet info's failure sentence
 //    WALLET_FAILED     — the student's balance's failure sentence
-//    isPlainObject     — the shape checks' building block
-//    isCatalog         — a usable /api/evm/networks answer
+//    isPlainObject     — the shape check's building block
 //    isFaucetInfo      — a usable faucet-balance answer
 //    useFaucetInfo     — network metadata + faucet polling
 //    LoadingSkeleton   — full-page skeleton layout
@@ -54,6 +54,7 @@ import { Alert, Button, Box, Skeleton, Stack, CircularProgress } from '@mui/mate
 import HubIcon from '@mui/icons-material/Hub';
 
 import useMetamaskWallet from '@/hooks/useMetamaskWallet';
+import useEvmNetworks, { isEvmCatalog } from '@/hooks/useEvmNetworks';
 import { WalletStepper, WalletGateButton, FadingAlert, useAlerts } from '@/components/WalletFlow';
 import AssetIcon from '@/components/AssetIcon';
 import ErrorCard from '@/components/ErrorCard';
@@ -96,32 +97,10 @@ const WALLET_FAILED = 'Nepavyko gauti jūsų MetaMask balanso.';
 // answers are built from.
 //
 // Used by:
-//   - isCatalog, isFaucetInfo (below)
+//   - isFaucetInfo (below)
 // -----------------------------------------------------------
 
 const isPlainObject = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
-
-
-
-
-
-
-
-// -----------------------------------------------------------
-// isCatalog
-// -----------------------------------------------------------
-//
-// Whether an /api/evm/networks answer can drive the page: an
-// object whose networks map holds an entry per network.
-// Anything else — a proxy's empty body, a list, the map
-// missing — used to leave the page waiting for networks that
-// would never come.
-//
-// Used by:
-//   - useFaucetInfo (below) — the query and its cache reads
-// -----------------------------------------------------------
-
-const isCatalog = (body) => isPlainObject(body) && isPlainObject(body.networks);
 
 
 
@@ -161,18 +140,20 @@ const isFaucetInfo = (body) => isPlainObject(body)
 //
 // The backend side of the page as two TanStack queries: the
 // network's metadata (chain id, names, RPC urls, explorer —
-// from /api/evm/networks, cache shared with the graph page;
-// the navbar reads the bundled /api/faucet/catalog instead)
-// and the faucet's address, balance and per-claim amount,
-// polling every 3 s once the metadata is in. A network switch
-// changes the query keys, so the previous chain's numbers
-// never linger.
+// the shared useEvmNetworks query, whose cache entry the
+// graph page reads too; the navbar reads the bundled
+// /api/faucet/catalog instead) and the faucet's address,
+// balance and per-claim amount, polling every 3 s once the
+// metadata is in. A network switch changes the query keys,
+// so the previous chain's numbers never linger.
 //
 // Both answers are checked for the shape the page needs
-// inside their queries, so a malformed body fails the query
-// just like an error status does. The checks run again on the
-// way out, because the graph page fills the same cache
-// entries without them. The page learns which case it is in:
+// inside their queries — the list by isEvmCatalog, the rule
+// every reader of its cache entry shares — so a malformed
+// body fails the query just like an error status does. The
+// checks run again on the way out of the cache, so whatever
+// lands in an entry some other way is never taken for a
+// usable answer. The page learns which case it is in:
 // the catalog never arrived or is unusable (catalogFailed),
 // the catalog does not know this :network (unknownNetwork),
 // or the faucet info never arrived (faucetFailed — the poll
@@ -187,22 +168,13 @@ const isFaucetInfo = (body) => isPlainObject(body)
 
 function useFaucetInfo(network) {
 
-  const { data: catalog, error: catalogQueryError } = useQuery({
-    queryKey: ['evm-networks'],
-    queryFn: async () => {
-      const body = (await axios.get('/api/evm/networks')).data;
-      if (!isCatalog(body)) throw new MalformedAnswerError();
-      return body;
-    },
-    staleTime: 5 * 60 * 1000,
-  });
-  const networks = isCatalog(catalog) ? catalog.networks : null;
+  const { data: catalog, error: catalogQueryError } = useEvmNetworks();
+  const networks = isEvmCatalog(catalog) ? catalog.networks : null;
   // Own keys only — a :network named after a property every
   // object inherits is not a network the catalog knows
   const networkInfo = networks && Object.hasOwn(networks, network) ? networks[network] : null;
-  // An unusable answer the graph page cached counts as a
-  // failure too, not as a load still on its way — one in an
-  // unusable shape
+  // An unusable answer in the cache counts as a failure too,
+  // not as a load still on its way — one in an unusable shape
   const catalogFailed = !networks && Boolean(catalogQueryError || catalog !== undefined);
   const catalogError = catalogFailed ? (catalogQueryError ?? new MalformedAnswerError()) : null;
   const unknownNetwork = Boolean(networks) && !networkInfo;

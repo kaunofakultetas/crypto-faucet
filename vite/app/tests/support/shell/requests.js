@@ -47,6 +47,8 @@ import { settle } from '../backend/contract';
 //
 // Used by:
 //   - core/app.test.jsx, pages/not-found.test.jsx
+//   - contract/route-sweep.test.jsx — the requests a route
+//     must never make, under the default backend
 // -----------------------------------------------------------
 
 export function watchRequests(pattern = '/api/*') {

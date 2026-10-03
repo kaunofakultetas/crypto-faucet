@@ -47,8 +47,11 @@ import { amountText, groupThousands, isChange, nameOf, senderOf, shortTxid, spen
 const TEXT_INSET = 12;
 
 // What an output row ends in, by its coin's state (see
-// spendStateOf) — and the words its tooltip adds
+// spendStateOf)
 const MARK_OF_STATE = { spent: 'port', unspent: 'coin', unknown: 'ring', data: 'none' };
+
+// The words an output row's tooltip adds for its coin's state
+// — a spent coin's adds none, its port mark says it
 const STATE_TEXT = { unspent: 'neišleista', unknown: 'nežinoma, ar išleista', data: 'duomenys — išleisti negalima' };
 
 

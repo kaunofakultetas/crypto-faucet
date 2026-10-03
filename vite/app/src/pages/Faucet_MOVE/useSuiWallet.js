@@ -49,6 +49,8 @@ import { useCallback, useEffect, useState } from 'react';
 // What the install step suggests when NO Sui wallet was
 // discovered — Slush is Sui's own wallet (ex "Sui Wallet")
 const SLUSH_NAME = 'Slush';
+
+// Where that suggestion sends the student to install it
 const SLUSH_URL = 'https://slush.app';
 
 
@@ -99,9 +101,26 @@ const suiAccountOf = (accounts) =>
   (accounts || []).find((account) =>
     (account.chains || []).some((chain) => chain.startsWith('sui:'))) ?? null;
 
-// The sui:* chains an account advertises ('sui:testnet', …) —
-// a wallet honest about its selected network lists one, a
-// wallet that supports them all lists every one
+
+
+
+
+
+
+// -----------------------------------------------------------
+// suiChainsOf
+// -----------------------------------------------------------
+//
+// The Sui chains an account advertises. A wallet honest
+// about its selected network lists just that one; a wallet
+// that supports them all lists every one, so the list alone
+// cannot always say which network the wallet is on.
+//
+// Used by:
+//   - useSuiWallet (below) — the account's chains it hands
+//     the page
+// -----------------------------------------------------------
+
 const suiChainsOf = (account) =>
   (account?.chains || []).filter((chain) => chain.startsWith('sui:'));
 

@@ -15,6 +15,10 @@
 // Footer (default export)
 // -----------------------------------------------------------
 //
+// The copyright line on the brand burgundy, at a fixed height
+// so the shell's flex column hands everything else to the
+// routed page.
+//
 // Used by:
 //   - App.jsx — the page shell
 // -----------------------------------------------------------

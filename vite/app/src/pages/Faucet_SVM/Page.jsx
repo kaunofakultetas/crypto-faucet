@@ -76,9 +76,12 @@ import usePhantomWallet from './usePhantomWallet';
 // How often both balances repoll
 const SVM_REFRESH_MS = 5000;
 
+// The wallet's name, as the steps, the gate button and the
+// balance row's failure sentence say it
+const PHANTOM_NAME = 'Phantom';
+
 // Official Phantom download — the extension, not the mobile
 // app store listing
-const PHANTOM_NAME = 'Phantom';
 const PHANTOM_DOWNLOAD_URL = 'https://phantom.com/download';
 
 // Phantom's own names for the clusters its Testnet Mode lists
@@ -107,9 +110,24 @@ const FAUCET_FAILED = 'Nepavyko gauti čiaupo informacijos.';
 const WALLET_FAILED = `Nepavyko gauti jūsų ${PHANTOM_NAME} balanso.`;
 
 
-// Lamports are integers; the chain's decimals come from the
-// network payload (9 on every SVM chain so far, but it is a
-// chain fact, not a constant to hardcode here)
+
+
+
+
+
+// -----------------------------------------------------------
+// lamportsToCoins
+// -----------------------------------------------------------
+//
+// The only unit maths on this page. Lamports are integers;
+// the chain's decimals come from the network payload — the
+// same on every SVM chain so far, but a fact of the chain,
+// not a constant to hardcode here.
+//
+// Used by:
+//   - FaucetSVM (below) — the student's balance row
+// -----------------------------------------------------------
+
 const lamportsToCoins = (lamports, decimals) => lamports / 10 ** decimals;
 
 

@@ -68,9 +68,12 @@ import { LAYOUT_CONFIG, MEMPOOL_COLUMN, NODE_CONFIG } from '../constants';
 const CLICK_SLOP = 4;
 
 // localStorage: the dropped positions of one network live
-// under this prefix + the network's key — at most MAX_SAVED
-// boxes, the most recently moved
+// under this prefix + the network's key
 const STORAGE_PREFIX = 'utxo-graph-positions:';
+
+// The most dropped boxes one network keeps — the most recently
+// moved; older ones fall back to their computed place, so the
+// stored entry cannot grow without bound
 const MAX_SAVED = 2000;
 
 

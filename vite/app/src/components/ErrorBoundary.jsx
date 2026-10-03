@@ -13,6 +13,11 @@
 //  A class on purpose: React has no hook for
 //  componentDidCatch.
 //
+//  Split into (root component last):
+//
+//    clearCachedData — forgets everything the SPA persisted
+//    ErrorBoundary   — the guard and its card (default export)
+//
 //  Used by:
 //    - App.jsx — around the Navbar and around the routes
 // -----------------------------------------------------------
@@ -28,6 +33,26 @@ import { Box, Button } from '@mui/material';
 // tests/core/structural.test.js compares this list with every
 // key the code writes
 const CACHE_KEY_PREFIXES = ['catalog:', 'lastPick:', 'favFaucetPicks', 'graphNodePositions:', 'utxo-graph-positions:'];
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// clearCachedData
+// -----------------------------------------------------------
+//
+// Removes every key the SPA persisted, so a stale payload
+// that throws on every reload is gone before the next one.
+// Storage the browser blocks holds nothing to clear, so its
+// refusal is swallowed rather than thrown from inside the
+// error card itself.
+//
+// Used by:
+//   - ErrorBoundary (below) — the clear-cache button
+// -----------------------------------------------------------
 
 const clearCachedData = () => {
   try {
@@ -53,7 +78,8 @@ const clearCachedData = () => {
 // so moving to another page recovers without a reload.
 //
 // Used by:
-//   - App.jsx — the page shell
+//   - App.jsx — PageArea (the routes, reset by the route) and
+//     App (the Navbar)
 // -----------------------------------------------------------
 
 export default class ErrorBoundary extends Component {

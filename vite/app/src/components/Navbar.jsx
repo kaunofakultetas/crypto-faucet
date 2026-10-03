@@ -30,9 +30,11 @@
 //  Split into (root component last):
 //
 //    WHITE_OUTLINED_SX  — shared white outline button look
+//    CATALOG_CACHE_KEY  — where the last catalog is kept
+//    FAUCET_TYPES       — the five types as a table (exported)
 //    networkCatalog     — the shared shape of network-keyed
 //                         types
-//    FAUCET_TYPES       — the five types as a table (exported)
+//    readCatalogCache   — the last catalog, read back
 //    useFaucetCatalogs  — the one-request catalog (exported)
 //    faucetTargetFor    — where a jump into one type lands
 //                         (exported)
@@ -64,37 +66,9 @@ const WHITE_OUTLINED_SX = {
   '&:hover': { borderColor: 'white', backgroundColor: '#78003F' },
 };
 
-
-
-
-
-
-
-// -----------------------------------------------------------
-// networkCatalog
-// -----------------------------------------------------------
-//
-// The shared catalog shape of every network-keyed type: the
-// slice's `networks` map as picker items in picker order,
-// with the type's own `secondary` line — the ONLY thing that
-// differs between UTXO, EVM, SVM and MOVE.
-//
-// Used by:
-//   - FAUCET_TYPES (below) — every network-keyed entry
-//     (utxo / evm / svm / move)
-// -----------------------------------------------------------
-
-const networkCatalog = (secondaryOf) => ({
-  defaultOf: (data) => data.default_network ?? null,
-  itemsOf: (data) => Object.entries(data.networks ?? {})
-    .sort(([, a], [, b]) => (a.id ?? 0) - (b.id ?? 0))
-    .map(([key, network]) => ({
-      key,
-      primary: network.full_name || key,
-      secondary: secondaryOf(network),
-      icon: network.icon ?? null,
-    })),
-});
+// The localStorage key of the last catalog payload — when to
+// bump its version is told at useFaucetCatalogs
+const CATALOG_CACHE_KEY = 'catalog:v2';
 
 
 
@@ -176,6 +150,72 @@ export const FAUCET_TYPES = [
 
 
 // -----------------------------------------------------------
+// networkCatalog
+// -----------------------------------------------------------
+//
+// The shared catalog shape of every network-keyed type: the
+// slice's `networks` map as picker items in picker order,
+// with the type's own `secondary` line — the ONLY thing that
+// differs between UTXO, EVM, SVM and MOVE.
+//
+// A function declaration, not a const arrow: FAUCET_TYPES
+// above calls it while the module loads, and only a
+// declaration is ready that early.
+//
+// Used by:
+//   - FAUCET_TYPES (above) — every network-keyed entry
+//     (utxo / evm / svm / move)
+// -----------------------------------------------------------
+
+function networkCatalog(secondaryOf) {
+  return {
+    defaultOf: (data) => data.default_network ?? null,
+    itemsOf: (data) => Object.entries(data.networks ?? {})
+      .sort(([, a], [, b]) => (a.id ?? 0) - (b.id ?? 0))
+      .map(([key, network]) => ({
+        key,
+        primary: network.full_name || key,
+        secondary: secondaryOf(network),
+        icon: network.icon ?? null,
+      })),
+  };
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// readCatalogCache
+// -----------------------------------------------------------
+//
+// The catalog payload the last visit kept, for the query's
+// initialData: undefined when there is none — never null,
+// which initialData would take for data. Corrupt JSON and
+// blocked storage read as no cache at all.
+//
+// Used by:
+//   - useFaucetCatalogs (below) — the query's initialData
+// -----------------------------------------------------------
+
+const readCatalogCache = () => {
+  try {
+    return JSON.parse(localStorage.getItem(CATALOG_CACHE_KEY)) ?? undefined;
+  } catch {
+    // corrupt JSON or blocked storage — same as no cache
+    return undefined;
+  }
+};
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // useFaucetCatalogs
 // -----------------------------------------------------------
 //
@@ -210,19 +250,6 @@ export const FAUCET_TYPES = [
 //   - Navbar (below)
 //   - App.jsx — DynamicDefaultRedirect, the "/" route
 // -----------------------------------------------------------
-
-const CATALOG_CACHE_KEY = 'catalog:v2';
-
-// The persisted last-known catalog payload, or undefined
-// (never null — initialData treats null as data)
-const readCatalogCache = () => {
-  try {
-    return JSON.parse(localStorage.getItem(CATALOG_CACHE_KEY)) ?? undefined;
-  } catch {
-    // corrupt JSON or blocked storage — same as no cache
-    return undefined;
-  }
-};
 
 export function useFaucetCatalogs() {
 

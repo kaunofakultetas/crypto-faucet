@@ -116,9 +116,13 @@ export const ZOOM_CONFIG = {
 // they come; steady on a live window (today) — the backend
 // learns of a new payout, a student's transaction or a mined
 // block within seconds (it watches the addresses), so this is
-// most of the wait; a past day, once its crawl has landed, is
-// history and not asked again. Each ask is read from the
-// backend's cache — no Electrum call behind it.
+// most of the wait; slow on a past day while the backend says
+// its crawl failed (`crawl_error`) — the backend retries a
+// failed window's crawl about once a minute, and every few
+// asks give it the chance, so the day does not sit on its
+// error — and a past day whose crawl has landed is history,
+// not asked again. Each ask is read from the backend's cache;
+// only a due crawl goes on to Electrum.
 //
 // Used by:
 //   - useTransactionGraph.js — the graph query's refetchInterval
@@ -127,6 +131,7 @@ export const ZOOM_CONFIG = {
 export const POLL_CONFIG = {
   UPDATING_MS: 3_000,
   LIVE_MS: 5_000,
+  CRAWL_RETRY_MS: 30_000,
 };
 
 
