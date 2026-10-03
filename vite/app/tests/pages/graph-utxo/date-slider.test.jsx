@@ -14,8 +14,9 @@
 //  on the page, the day list from /transaction-days asked in
 //  the browser's timezone plus today, only the entries of a
 //  broken list that name a day, today alone while the list
-//  fails or is no list at all, and the graph drawing the day
-//  picked.
+//  fails or is no list at all — with the line under the title
+//  row saying why, word for word — and the graph drawing the
+//  day picked.
 // -----------------------------------------------------------
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -23,7 +24,6 @@ import { useState } from 'react';
 import { screen, within, waitFor, fireEvent } from '@testing-library/react';
 import { renderPage } from '../../support/render';
 import { given } from '../../support/backend/server';
-import { settle } from '../../support/backend/contract';
 import { mediaQueryMatches } from '../../support/setup';
 import {
   DAYS, TODAY, YESTERDAY, pinToday, renderGraph, answerGraph, askedFor, windowOf, findBox, queryBox, headerCells,
@@ -41,6 +41,10 @@ beforeEach(() => {
 // The fixture's days plus today, ascending — what the page
 // hands the bar
 const FOUR_DAYS = ['2025-08-13', '2025-10-29', YESTERDAY, TODAY];
+
+// What the page says when the day list never arrived, after
+// the failure: that only today can be picked
+const ONLY_TODAY = 'Pasirinkti galima tik šiandieną.';
 
 
 
@@ -284,12 +288,32 @@ describe('Day picker on the page', () => {
   });
 
 
-  it('offers today alone while the day list cannot be had', async () => {
+  it("offers today alone while the day list cannot be had, and says why in the backend's words", async () => {
     given.error('get', DAYS, 'Vidinė serverio klaida', 500);
     renderGraph();
     await findBox(T.T1);
+    expect(await screen.findByText(`Vidinė serverio klaida. ${ONLY_TODAY}`)).toBeInTheDocument();
     expect(dateField()).toHaveValue('2026-09-30 (šiandien)');
     expect(screen.queryByRole('button', { name: 'Ankstesnė diena' })).toBeNull();
+  });
+
+
+  it('says the page\'s own sentence and the reason when the failure carries no sentence — a dropped connection', async () => {
+    given.networkError('get', DAYS);
+    renderGraph();
+    await findBox(T.T1);
+    expect(await screen.findByText(
+      `Nepavyko gauti dienų, kuriomis buvo čiaupo transakcijų. Patikrinkite interneto ryšį. ${ONLY_TODAY}`,
+    )).toBeInTheDocument();
+    expect(dateField()).toHaveValue('2026-09-30 (šiandien)');
+  });
+
+
+  it('says nothing about the day list while it is fine', async () => {
+    renderGraph();
+    await findBox(T.T1);
+    await waitFor(() => expect(daySlider()).toHaveAttribute('max', '3'));
+    expect(screen.queryByText(ONLY_TODAY, { exact: false })).toBeNull();
   });
 
 
@@ -316,12 +340,14 @@ describe('Day picker on the page', () => {
   });
 
 
-  it('offers today alone when the day list is no list at all', async () => {
+  it('offers today alone when the day list is no list at all, and says the answer could not be used', async () => {
     const calls = given.capture('get', DAYS, { days: 'kelios dienos' });
     renderGraph();
     await findBox(T.T1);
     await waitFor(() => expect(calls).toHaveLength(1));
-    await settle();
+    expect(await screen.findByText(
+      `Nepavyko gauti dienų, kuriomis buvo čiaupo transakcijų. Serveris atsakė netinkamo formato duomenimis. ${ONLY_TODAY}`,
+    )).toBeInTheDocument();
     expect(dateField()).toHaveValue('2026-09-30 (šiandien)');
     expect(screen.queryByRole('button', { name: 'Ankstesnė diena' })).toBeNull();
   });

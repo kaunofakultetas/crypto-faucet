@@ -122,7 +122,11 @@ export const hugeList = (body, n = 300) => {
 // that answer — 'failed' (show the failure), 'survives'
 // (stand without crashing), 'hostile' (stand, with markup
 // rendered as text), 'loading' (hold its loading state) or
-// 'loaded' (show the data).
+// 'loaded' (show the data). A failure variant also knows what
+// a page that says what went wrong shows for it, given the
+// page's own sentence: the backend's sentence when the
+// answer carried one, otherwise the page's sentence with the
+// reason after it.
 //
 // Used by:
 //   - describeEndpointContract (below)
@@ -131,12 +135,12 @@ export const hugeList = (body, n = 300) => {
 const jsonResponse = (body, status = 200) => HttpResponse.json(body, { status });
 
 export const VARIANTS = [
-  { name: '500 { error } → the failure is shown', respond: () => jsonResponse(apiError('Vidinė serverio klaida'), 500), expect: 'failed' },
-  { name: '400 { error } → the failure is shown', respond: () => jsonResponse(apiError('Nepalaikomas tinklas: x'), 400), expect: 'failed' },
-  { name: '404 { error } → the failure is shown', respond: () => jsonResponse(apiError('Nerasta'), 404), expect: 'failed' },
-  { name: 'HTML error page from the proxy (502) → the failure is shown', respond: () => new HttpResponse('<html><body><h1>502 Bad Gateway</h1></body></html>', { status: 502, headers: { 'Content-Type': 'text/html' } }), expect: 'failed' },
-  { name: 'status 500 with an empty body → the failure is shown', respond: () => new HttpResponse(null, { status: 500 }), expect: 'failed' },
-  { name: 'connection dropped → the failure is shown', respond: () => HttpResponse.error(), expect: 'failed' },
+  { name: '500 { error } → the failure is shown', respond: () => jsonResponse(apiError('Vidinė serverio klaida'), 500), expect: 'failed', says: () => 'Vidinė serverio klaida' },
+  { name: '400 { error } → the failure is shown', respond: () => jsonResponse(apiError('Nepalaikomas tinklas: x'), 400), expect: 'failed', says: () => 'Nepalaikomas tinklas: x' },
+  { name: '404 { error } → the failure is shown', respond: () => jsonResponse(apiError('Nerasta'), 404), expect: 'failed', says: () => 'Nerasta' },
+  { name: 'HTML error page from the proxy (502) → the failure is shown', respond: () => new HttpResponse('<html><body><h1>502 Bad Gateway</h1></body></html>', { status: 502, headers: { 'Content-Type': 'text/html' } }), expect: 'failed', says: (sentence) => `${sentence} Serveris grąžino klaidą (502).` },
+  { name: 'status 500 with an empty body → the failure is shown', respond: () => new HttpResponse(null, { status: 500 }), expect: 'failed', says: (sentence) => `${sentence} Serveris grąžino klaidą (500).` },
+  { name: 'connection dropped → the failure is shown', respond: () => HttpResponse.error(), expect: 'failed', says: (sentence) => `${sentence} Patikrinkite interneto ryšį.` },
   { name: 'empty 200 body → page survives', respond: () => new HttpResponse(null, { status: 200 }), expect: 'survives' },
   { name: 'JSON null → page survives', respond: () => jsonResponse(null), expect: 'survives' },
   { name: 'a JSON string → page survives', respond: () => jsonResponse('unexpected'), expect: 'survives' },
@@ -174,9 +178,11 @@ export const VARIANTS = [
 // is awaited. `chrome` runs after every variant: the page must
 // still show its own frame. `loaded` is awaited for the
 // variants that end with data on screen, `failed` for the
-// failure variants (a page with no visible failure state
-// passes a callback that asserts what it shows instead — say,
-// a dash), and the optional `loading` must hold while the
+// failure variants — handed the variant's own wording (see
+// VARIANTS), for a page that says what went wrong to assert
+// exactly that; a page with no visible failure state asserts
+// what it shows instead, say, a dash — and the optional
+// `loading` must hold while the
 // request hangs. `only` narrows the run to the variants it
 // names; `skip` and `pins` map a variant's name to a reason —
 // a skipped variant is listed with its reason, a pinned one
@@ -224,7 +230,7 @@ export function describeEndpointContract({ path, method = 'get', fixture, render
 
         if (variant.expect === 'failed') {
           await waitFor(() => expect(answered).toBe(true));
-          await failed();
+          await failed(variant.says);
           expectNoCrash();
           if (chrome) expect(chrome()).toBeTruthy();
           return;

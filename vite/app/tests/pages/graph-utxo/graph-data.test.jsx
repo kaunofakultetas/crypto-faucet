@@ -14,20 +14,25 @@
 //  — judged per window: leaving a day mid-crawl is no landing,
 //  coming back to it once its crawl landed is — with the
 //  picked day surviving the list growing under it; what the
-//  canvas says about the day — "Kraunama…", the first crawl
-//  collecting, "Atnaujinama…", an empty day (today or past),
-//  transactions the server did not give (centred or as a
-//  pill), the backend's own error or the fallback one
-//  centred, a failed refresh as a pill over the kept drawing,
+//  canvas says about the day, word for word — "Kraunama…",
+//  the first crawl collecting, "Atnaujinama…", an empty day
+//  (today or past), transactions not fetched yet — no
+//  failure — or refused by the server, with its reason
+//  (centred or as a pill), the backend's own error or the
+//  page's sentence with the reason centred, a failed refresh
+//  with its reason as a pill over the kept drawing, the
+//  backend's failed crawl in its own words (centred, or as a
+//  pill saying the drawing is what was collected before),
 //  their order of urgency, and nothing at all once the day is
 //  drawn and complete; and a malformed answer cleaned before
 //  it is drawn — every transaction without a real txid or a
 //  place to be drawn left out, each once, a waiting one off a
 //  past day, a forgotten block given its column, inputs that
 //  name no outpoint dropped while outputs keep their places,
-//  only text taken as a name or an address, the flags
-//  believed only when plainly true, a body of nulls or
-//  swapped types an empty day.
+//  only text taken as a name, an address or a failure
+//  sentence, the flags believed only when plainly true, a
+//  body of nulls or swapped types an empty day — and a body
+//  that is no object at all a failure, never a quiet day.
 // -----------------------------------------------------------
 
 import { describe, it, expect, beforeEach } from 'vitest';
@@ -60,14 +65,27 @@ beforeEach(() => {
 // -----------------------------------------------------------
 //
 // status is the canvas' message — its status region — if
-// any. showYesterday presses the previous-day stepper
+// any; expectStatus waits for it to read exactly the given
+// text, with or without the spinner, and toneOf names its
+// colour. showYesterday presses the previous-day stepper
 // ("Ankstesnė diena") once. answerPastDay answers the fixture
 // day's window from `steps` (one per request, the last
 // repeating) and every other window as the default handler
 // does. daysAsked captures the day-list requests.
+// CRAWL_FAILED and REFUSED are the backend's sentences for a
+// crawl that could not reach its Electrum server and for a
+// transaction a node without -txindex would not give.
 // -----------------------------------------------------------
 
+const CRAWL_FAILED = 'Nepavyko atnaujinti grafiko: Electrum serveris neatsakė per 15 s.';
+const REFUSED = "Nepavyko gauti transakcijos: Electrum serveris atsakė klaida: daemon error: DaemonError({'code': -5, "
+  + "'message': 'No such mempool transaction. Use -txindex or provide a block hash to enable blockchain transaction "
+  + "queries. Use gettransaction for wallet transactio…";
+
 const status = () => screen.queryByRole('status');
+
+const TONES = { 'text-red-700': 'error', 'text-amber-800': 'warn', 'text-slate-600': 'info' };
+const toneOf = () => Object.entries(TONES).find(([cls]) => status().firstElementChild.classList.contains(cls))?.[1];
 
 async function showYesterday(user) {
   await user.click(await screen.findByRole('button', { name: 'Ankstesnė diena' }));
@@ -86,7 +104,7 @@ function answerPastDay(...steps) {
 const daysAsked = (body = f.utxoTransactionDays()) => given.capture('get', DAYS, body);
 
 async function expectStatus(text, { busy = false } = {}) {
-  await waitFor(() => expect(status()).toHaveTextContent(text));
+  await waitFor(() => expect(status()?.textContent).toBe(text));
   if (busy) expect(within(status()).getByRole('progressbar')).toBeInTheDocument();
   else expect(within(status()).queryByRole('progressbar')).toBeNull();
 }
@@ -425,18 +443,20 @@ describe('What the canvas says', () => {
   });
 
 
-  it('says how many of the day\'s transactions the server did not give, centred when none could be drawn', async () => {
+  it("says how many of the day's transactions are not fetched from the Electrum server yet — no failure — centred when none could be drawn", async () => {
     answerGraph({ transactions: [], missing: 3 });
     renderGraph();
-    await expectStatus('Serveris negrąžino šios dienos transakcijų (3) — parodyti jų negalima');
+    await expectStatus('Šios dienos transakcijų (3) dar negauta iš Electrum serverio');
+    expect(toneOf()).toBe('info');
   });
 
 
-  it('says how many are missing in a pill over the rest of the drawing', async () => {
+  it('says how many are not fetched yet in a pill over the rest of the drawing', async () => {
     answerGraph({ missing: 2 });
     renderGraph();
     await findBox(T.T5);
-    await expectStatus('Serveris negrąžino dalies transakcijų (2) — grafike jų nėra');
+    await expectStatus('Dalies transakcijų (2) dar negauta iš Electrum serverio — grafike jų dar nėra');
+    expect(toneOf()).toBe('info');
     expect(allBoxes()).toHaveLength(5);
   });
 
@@ -448,31 +468,120 @@ describe('What the canvas says', () => {
   });
 
 
-  it('says "Nepavyko gauti transakcijų" when the failure carries no message — a proxy\'s page, a dropped connection', async () => {
+  it('says "Nepavyko gauti transakcijų." and why when the failure carries no sentence — a proxy\'s page, a dropped connection', async () => {
     given.html('get', GRAPH);
     const { unmount } = renderGraph();
-    await expectStatus('Nepavyko gauti transakcijų');
+    await expectStatus('Nepavyko gauti transakcijų. Serveris grąžino klaidą (502).');
+    expect(toneOf()).toBe('error');
     unmount();
 
     given.networkError('get', GRAPH);
     renderGraph();
-    await expectStatus('Nepavyko gauti transakcijų');
+    await expectStatus('Nepavyko gauti transakcijų. Patikrinkite interneto ryšį.');
   });
 
 
-  it('keeps the last drawing on a failed refresh and says so in a pill', async () => {
+  it('says the server answered in a shape the page cannot use when the body is no object — never a quiet day', async () => {
+    const answers = [
+      () => given.json('get', GRAPH, null),
+      () => given.json('get', GRAPH, []),
+      () => given.text('get', GRAPH, 'OK'),
+      () => given.empty('get', GRAPH),
+    ];
+    for (const answer of answers) {
+      answer();
+      const { unmount } = renderGraph();
+      await expectStatus('Nepavyko gauti transakcijų. Serveris atsakė netinkamo formato duomenimis.');
+      expect(toneOf()).toBe('error');
+      unmount();
+    }
+  });
+
+
+  it('keeps the last drawing on a failed refresh and says why in a pill', async () => {
     useFakeClock();
     given.sequence('get', GRAPH, [
       { body: f.utxoGraph({ live: true }) },
       { status: 500, body: { error: 'Vidinė serverio klaida' } },
+      { error: true },
     ]);
     renderGraph();
     await findBox(T.T5);
     expect(status()).toBeNull();
 
+    // The backend's own sentence, then a dropped connection's
+    // reason after the page's
     await advance(5000);
-    await expectStatus('Nepavyko atnaujinti grafiko — rodomi paskutiniai gauti duomenys');
+    await expectStatus('Vidinė serverio klaida. Rodomi paskutiniai gauti duomenys.');
+    expect(toneOf()).toBe('error');
     expect(allBoxes()).toHaveLength(5);
+
+    await advance(5000);
+    await expectStatus('Nepavyko atnaujinti grafiko. Patikrinkite interneto ryšį. Rodomi paskutiniai gauti duomenys.');
+    expect(allBoxes()).toHaveLength(5);
+  });
+
+
+  it("says why the backend's last crawl failed, in its words, centred while nothing is drawn", async () => {
+    answerGraph({ transactions: [], crawl_error: CRAWL_FAILED });
+    renderGraph();
+    await expectStatus(CRAWL_FAILED);
+    expect(toneOf()).toBe('error');
+  });
+
+
+  it('says it in a pill over a drawing, which is what was collected before', async () => {
+    answerGraph({ crawl_error: CRAWL_FAILED });
+    renderGraph();
+    await findBox(T.T5);
+    await expectStatus(`${CRAWL_FAILED} Rodomi anksčiau surinkti duomenys.`);
+    expect(toneOf()).toBe('error');
+    expect(allBoxes()).toHaveLength(5);
+  });
+
+
+  it('says nothing of a crawl once one succeeded — the backend sends null', async () => {
+    useFakeClock();
+    answerGraph({ crawl_error: CRAWL_FAILED }, {});
+    renderGraph();
+    await expectStatus(`${CRAWL_FAILED} Rodomi anksčiau surinkti duomenys.`);
+
+    await advance(5000);
+    await waitFor(() => expect(status()).toBeNull());
+  });
+
+
+  it('puts a failed crawl after an outage and the first crawl collecting, before missing transactions and an empty day', async () => {
+    useFakeClock();
+    given.sequence('get', GRAPH, [
+      { body: { ...f.utxoGraph({ live: true }), crawl_error: CRAWL_FAILED, missing: 2 } },
+      { status: 500, body: { error: 'Vidinė serverio klaida' } },
+    ]);
+    const { unmount } = renderGraph();
+    await expectStatus(`${CRAWL_FAILED} Rodomi anksčiau surinkti duomenys.`);
+    await advance(5000);
+    await expectStatus('Vidinė serverio klaida. Rodomi paskutiniai gauti duomenys.');
+    unmount();
+
+    answerGraph({ updating: true, crawl_error: CRAWL_FAILED });
+    renderGraph();
+    await findBox(T.T1);
+    await expectStatus('Atnaujinama…', { busy: true });
+  });
+
+
+  it("says the missing transactions cannot be shown, with the server's own reason, when it refused them — centred and as a pill", async () => {
+    answerGraph({ transactions: [], missing: 3, missing_error: REFUSED });
+    const { unmount } = renderGraph();
+    await expectStatus(`Šios dienos transakcijų (3) parodyti negalima. ${REFUSED}`);
+    expect(toneOf()).toBe('warn');
+    unmount();
+
+    answerGraph({ missing: 2, missing_error: REFUSED });
+    renderGraph();
+    await findBox(T.T5);
+    await expectStatus(`Dalies transakcijų (2) grafike nėra. ${REFUSED}`);
+    expect(toneOf()).toBe('warn');
   });
 
 
@@ -628,5 +737,12 @@ describe('Malformed answers', () => {
     answerGraph({ transactions: [], updating: 'true', missing: '3', live: 'false' });
     renderGraph();
     await expectStatus('Šiandien čiaupo transakcijų dar nėra');
+  });
+
+
+  it('takes only text as a failure sentence: a failed crawl or a reason of another type is not said', async () => {
+    answerGraph({ transactions: [], crawl_error: 42, missing: 2, missing_error: { why: 'txindex' } });
+    renderGraph();
+    await expectStatus('Šios dienos transakcijų (2) dar negauta iš Electrum serverio');
   });
 });

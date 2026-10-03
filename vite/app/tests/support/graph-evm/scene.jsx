@@ -20,7 +20,7 @@
 //    - renderGraph and the readers of what a student sees:
 //      the canvas (an image named with the day and the
 //      transfer count), the visually hidden table of transfers,
-//      the date bar
+//      the date bar, the notices saying what went wrong
 //
 //  Used by:
 //    - tests/pages/graph-evm/*.test.jsx
@@ -235,7 +235,18 @@ export async function bootedNetwork({ transfers } = {}) {
 // as the sender, receiver and amount texts of every row, in
 // drawing order; dayPicker is the date bar's "Data" dropdown;
 // outageNotice is the notice shown while the backend cannot
-// be reached, or null when there is none.
+// be reached, whatever its words, or null when there is none.
+//
+// The outage notice says what went wrong — the backend's own
+// sentence, or the page's with the reason after it — closed
+// with a full stop when it lacks one, then that the last
+// answers stay drawn: outageText builds it from the failure,
+// and OUTAGE_TEXT holds it for each way backend.js's outage
+// switch fails (error — the 500 with its body, html, drop)
+// and for a 200 that is no transfer list (malformed). A
+// notice saying the graph may be missing transfers — a
+// failed Etherscan refresh, a drawing that threw — closes
+// the way gapText builds.
 //
 // Used by:
 //   - tests/pages/graph-evm/*.test.jsx
@@ -243,9 +254,20 @@ export async function bootedNetwork({ transfers } = {}) {
 
 export const canvas = () => screen.getByRole('img', { name: /^Transakcijų srauto grafikas, / });
 
-export const OUTAGE_TEXT = 'Nepavyko atnaujinti grafiko — rodomi paskutiniai gauti duomenys';
+const closed = (sentence) => (/[.!?…]$/.test(sentence) ? sentence : `${sentence}.`);
 
-export const outageNotice = () => screen.queryByText(OUTAGE_TEXT);
+export const outageText = (failure) => `${closed(failure)} Rodomi paskutiniai gauti duomenys.`;
+
+export const gapText = (failure) => `${closed(failure)} Grafike gali trūkti transakcijų.`;
+
+export const OUTAGE_TEXT = {
+  error: outageText('Vidinė serverio klaida'),
+  html: outageText('Nepavyko atnaujinti grafiko. Serveris grąžino klaidą (502).'),
+  drop: outageText('Nepavyko atnaujinti grafiko. Patikrinkite interneto ryšį.'),
+  malformed: outageText('Nepavyko atnaujinti grafiko. Serveris atsakė netinkamo formato duomenimis.'),
+};
+
+export const outageNotice = () => screen.queryByText(/ Rodomi paskutiniai gauti duomenys\.$/);
 
 // The table is visually hidden (sr-only), not aria-hidden: it
 // is in the accessibility tree like any table

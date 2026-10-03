@@ -191,6 +191,9 @@ ERC20_TEST_CONFIGS = {
 #
 # Used by:
 #   - test_utxo_engine.py
+#   - test_request_flows.py
+#   - test_utxo_graph.py
+#   - test_api_routes.py
 ############################################################
 
 def make_utxo_faucet(configs=None):
@@ -216,6 +219,8 @@ def make_utxo_faucet(configs=None):
 #
 # Used by:
 #   - test_utxo_engine.py
+#   - test_request_flows.py
+#   - test_api_routes.py
 ############################################################
 
 def fake_electrum(faucet, network, utxos):
@@ -244,6 +249,9 @@ def fake_electrum(faucet, network, utxos):
 #
 # Used by:
 #   - test_evm_faucet.py / test_erc20_faucet.py
+#   - test_svm_faucet.py — the address comparison
+#   - test_request_flows.py
+#   - test_api_routes.py
 ############################################################
 
 def make_evm_faucet(configs=None, private_key=TEST_PRIVATE_KEY):
@@ -267,6 +275,8 @@ def make_evm_faucet(configs=None, private_key=TEST_PRIVATE_KEY):
 #
 # Used by:
 #   - test_erc20_faucet.py
+#   - test_request_flows.py
+#   - test_api_routes.py
 ############################################################
 
 def make_erc20_faucet(evm_faucet=None, token_configs=None):
@@ -292,6 +302,8 @@ def make_erc20_faucet(evm_faucet=None, token_configs=None):
 #
 # Used by:
 #   - test_svm_faucet.py
+#   - test_move_faucet.py — the address comparison
+#   - test_api_routes.py
 ############################################################
 
 def make_svm_faucet(configs=None, private_key=TEST_PRIVATE_KEY):
@@ -311,20 +323,22 @@ def make_svm_faucet(configs=None, private_key=TEST_PRIVATE_KEY):
 # fake_solana_rpc
 ############################################################
 #
-#   client = fake_solana_rpc(faucet, 'testsvm', balances={...})
-#
 # Points one network's RPC client at canned data: balances
 # keyed by base58 address (absent reads as 0), a fixed
 # blockhash, and send_transaction recording the broadcast
 # instead of sending it. broadcast_error / balance_error
-# drive the failure paths. Returns the client, so a test can
-# assert on client.sent afterwards.
+# drive the failure paths; balance_errors fails the reads of
+# the addresses it names only, so the faucet's own read can
+# break after the student's went through. Every error knob
+# takes text or an exception (see _as_exception). Returns the
+# client, so a test can assert on client.sent afterwards.
 #
 # Used by:
 #   - test_svm_faucet.py
+#   - test_api_routes.py
 ############################################################
 
-def fake_solana_rpc(faucet, network, balances=None, broadcast_error=None, balance_error=None):
+def fake_solana_rpc(faucet, network, balances=None, broadcast_error=None, balance_error=None, balance_errors=None):
     # A valid base58 32-byte hash — Hash.from_string must parse it
     blockhash = '11111111111111111111111111111111'
     client = faucet._clients[network]
@@ -332,12 +346,14 @@ def fake_solana_rpc(faucet, network, balances=None, broadcast_error=None, balanc
 
     def get_balance(address):
         if balance_error:
-            raise RuntimeError(balance_error)
+            raise _as_exception(balance_error)
+        if str(address) in (balance_errors or {}):
+            raise _as_exception(balance_errors[str(address)])
         return (balances or {}).get(str(address), 0)
 
     def send_transaction(signed_base64):
         if broadcast_error:
-            raise RuntimeError(broadcast_error)
+            raise _as_exception(broadcast_error)
         client.sent.append(signed_base64)
         return 'sig' + '1' * 85
 
@@ -368,15 +384,16 @@ def fake_solana_rpc(faucet, network, balances=None, broadcast_error=None, balanc
 # sign_svm_claim
 ############################################################
 #
-#   address, signature, nonce = sign_svm_claim()
-#
 # A REAL Ed25519 signature over the exact message the SVM
-# faucet verifies — the same wording the EVM flow uses.
-# Signing with a different key than the claimed address is
-# how the 403 path is tested (pass signer_seed).
+# faucet verifies — the same wording the EVM flow uses —
+# handed back with the claimed address and the nonce, in the
+# order request_sol takes them. Signing with a different key
+# than the claimed address is how the 403 path is tested
+# (pass signer_seed).
 #
 # Used by:
 #   - test_svm_faucet.py
+#   - test_api_routes.py
 ############################################################
 
 def sign_svm_claim(nonce='1785666345742', address_seed=None, signer_seed=None):
@@ -408,6 +425,7 @@ def sign_svm_claim(nonce='1785666345742', address_seed=None, signer_seed=None):
 #
 # Used by:
 #   - test_move_faucet.py
+#   - test_api_routes.py
 ############################################################
 
 def make_move_faucet(configs=None, private_key=TEST_PRIVATE_KEY):
@@ -427,21 +445,24 @@ def make_move_faucet(configs=None, private_key=TEST_PRIVATE_KEY):
 # fake_sui_graphql
 ############################################################
 #
-#   client = fake_sui_graphql(faucet, 'testmove', balances={...})
-#
 # Points one network's GraphQL client at canned data: MIST
 # balances keyed by address (absent reads as 0), a fixed
 # node-built transaction, and execute() recording the
 # broadcast instead of sending it. build_error /
-# execute_error / balance_error drive the failure paths.
-# Returns the client, so a test can assert on client.executed
-# afterwards.
+# execute_error / balance_error drive the failure paths;
+# balance_errors fails the reads of the addresses it names
+# only, so the faucet's own read can break after the
+# student's went through. Every error knob takes text or an
+# exception (see _as_exception). Returns the client, so a
+# test can assert on client.executed afterwards.
 #
 # Used by:
 #   - test_move_faucet.py
+#   - test_api_routes.py
 ############################################################
 
-def fake_sui_graphql(faucet, network, balances=None, build_error=None, execute_error=None, balance_error=None):
+def fake_sui_graphql(faucet, network, balances=None, build_error=None, execute_error=None, balance_error=None,
+                     balance_errors=None):
     # What the node would answer from simulateTransaction — any
     # base64 payload works, the faucet only signs it
     built_tx = 'dGVzdC10cmFuc2FjdGlvbi1iY3M='
@@ -450,18 +471,20 @@ def fake_sui_graphql(faucet, network, balances=None, build_error=None, execute_e
 
     def get_balance(address, coin_type):
         if balance_error:
-            raise RuntimeError(balance_error)
+            raise _as_exception(balance_error)
+        if address in (balance_errors or {}):
+            raise _as_exception(balance_errors[address])
         return (balances or {}).get(address, 0)
 
     def build_transfer(sender, recipient_b64, amount_b64):
         if build_error:
-            raise RuntimeError(build_error)
+            raise _as_exception(build_error)
         client.built = {'sender': sender, 'recipient': recipient_b64, 'amount': amount_b64}
         return built_tx
 
     def execute(tx_bcs, signature):
         if execute_error:
-            raise RuntimeError(execute_error)
+            raise _as_exception(execute_error)
         client.executed.append({'tx_bcs': tx_bcs, 'signature': signature})
         return 'digest' + '1' * 38
 
@@ -482,18 +505,19 @@ def fake_sui_graphql(faucet, network, balances=None, build_error=None, execute_e
 # sign_move_claim
 ############################################################
 #
-#   address, signature, nonce = sign_move_claim()
-#
 # A REAL Sui personal-message signature over the exact
 # message the MOVE faucet verifies: Ed25519 over blake2b-256
 # of intent (3,0,0) + the BCS-encoded message, serialized as
 # base64 of flag || sig || pubkey — the scheme was confirmed
-# against the node's own verifySignature. Signing with a
-# different key than the claimed address is how the 403 path
-# is tested (pass signer_seed).
+# against the node's own verifySignature. It comes back with
+# the claimed address and the nonce, in the order
+# request_move takes them. Signing with a different key than
+# the claimed address is how the 403 path is tested (pass
+# signer_seed).
 #
 # Used by:
 #   - test_move_faucet.py
+#   - test_api_routes.py
 ############################################################
 
 def sign_move_claim(nonce='1785666345742', address_seed=None, signer_seed=None):
@@ -526,15 +550,17 @@ def sign_move_claim(nonce='1785666345742', address_seed=None, signer_seed=None):
 # sign_claim
 ############################################################
 #
-#   address, signature, nonce = sign_claim()
-#
 # A REAL signature over the exact message the faucets verify
-# — same wording as useWallet.js. Signing with a different
-# key than the claimed address is how the 403 path is tested
-# (pass signer_key).
+# — same wording as the frontend's useMetamaskWallet.js —
+# handed back with the claimed address and the nonce, in the
+# order request_eth and request_tokens take them. Signing with
+# a different key than the claimed address is how the 403
+# path is tested (pass signer_key).
 #
 # Used by:
 #   - test_request_flows.py — every EVM / ERC-20 claim
+#   - test_evm_faucet.py — the signature tests
+#   - test_api_routes.py
 ############################################################
 
 CLAIM_MESSAGE = 'Pasirašykite žinutę kad patvirtintumėte jog naudojate šią piniginę. Nonce: {nonce}'
@@ -567,7 +593,8 @@ def sign_claim(nonce='1785666345742', address_key=RECIPIENT_PRIVATE_KEY, signer_
 # failure such as web3's ContractLogicError is staged.
 #
 # Used by:
-#   - FakeEth, FakeErc20Contract — every *_error raise
+#   - FakeEth, FakeErc20Contract, fake_solana_rpc,
+#     fake_sui_graphql — every *_error raise
 ############################################################
 
 def _as_exception(error):
@@ -592,9 +619,13 @@ def _as_exception(error):
 # module — so tests exercise real crypto and only the network
 # is faked. broadcast_error makes the send raise, which is
 # how the release-the-cooldown paths are tested (see
-# _as_exception for what the *_error knobs accept). chain_id
-# answers the payout path's config-sanity gate — the test
-# config's id by default, anything else to test the refusal.
+# _as_exception for what the *_error knobs accept).
+# balance_error fails every balance read; balance_errors
+# fails only the reads of the addresses it names, so the
+# faucet's own read can break after the student's went
+# through. chain_id answers the payout path's config-sanity
+# gate — the test config's id by default, anything else to
+# test the refusal.
 #
 # Used by:
 #   - fake_web3 (below)
@@ -602,13 +633,15 @@ def _as_exception(error):
 
 class FakeEth:
 
-    def __init__(self, real_eth, balances, gas_price=1, chain_id=12345, broadcast_error=None, balance_error=None):
+    def __init__(self, real_eth, balances, gas_price=1, chain_id=12345, broadcast_error=None, balance_error=None,
+                 balance_errors=None):
         self._real = real_eth
         self._balances = balances
         self.gas_price = gas_price
         self.chain_id = chain_id
         self.broadcast_error = broadcast_error
         self.balance_error = balance_error
+        self.balance_errors = {k.lower(): v for k, v in (balance_errors or {}).items()}
         self.sent = []
 
     def __getattr__(self, name):
@@ -617,6 +650,8 @@ class FakeEth:
     def get_balance(self, address, *args, **kwargs):
         if self.balance_error:
             raise _as_exception(self.balance_error)
+        if address.lower() in self.balance_errors:
+            raise _as_exception(self.balance_errors[address.lower()])
         return self._balances.get(address.lower(), 0)
 
     def send_transaction(self, tx):
@@ -636,14 +671,14 @@ class FakeEth:
 # fake_web3
 ############################################################
 #
-#   eth = fake_web3(faucet, 'testchain', balances={addr: wei})
-#
 # Swaps one network's w3.eth for a FakeEth and returns it, so
 # a test can assert on eth.sent afterwards. Balance keys are
 # lowercased addresses; anything absent reads as 0.
 #
 # Used by:
 #   - test_request_flows.py — the EVM and ERC-20 flows
+#   - test_evm_faucet.py
+#   - test_api_routes.py
 ############################################################
 
 def fake_web3(faucet, network, balances=None, **kwargs):
@@ -667,7 +702,10 @@ def fake_web3(faucet, network, balances=None, **kwargs):
 # map, transfer records the call and returns a tx hash.
 # transfer_error / estimate_error drive the failure paths
 # (the engine falls back to a fixed gas limit when the
-# estimate raises).
+# estimate raises). balance_error fails every balance read;
+# balance_errors fails only the reads of the addresses it
+# names, so the faucet's own token read can break after the
+# student's went through.
 #
 # Used by:
 #   - fake_token_contract (below)
@@ -675,11 +713,12 @@ def fake_web3(faucet, network, balances=None, **kwargs):
 
 class FakeErc20Contract:
 
-    def __init__(self, balances, transfer_error=None, estimate_error=None, balance_error=None):
+    def __init__(self, balances, transfer_error=None, estimate_error=None, balance_error=None, balance_errors=None):
         self._balances = balances
         self.transfer_error = transfer_error
         self.estimate_error = estimate_error
         self.balance_error = balance_error
+        self.balance_errors = {k.lower(): v for k, v in (balance_errors or {}).items()}
         self.transfers = []
         self.functions = self
 
@@ -690,6 +729,8 @@ class FakeErc20Contract:
             def call(self):
                 if contract.balance_error:
                     raise _as_exception(contract.balance_error)
+                if address.lower() in contract.balance_errors:
+                    raise _as_exception(contract.balance_errors[address.lower()])
                 return contract._balances.get(address.lower(), 0)
 
         return Call()
@@ -722,15 +763,14 @@ class FakeErc20Contract:
 # fake_token_contract
 ############################################################
 #
-#   with fake_token_contract(balances={...}) as contract:
-#       faucet.request_tokens(...)
-#
-# Patches the module-level get_erc20_contract the ERC-20
-# faucet calls, so every token read/write in the block hits
-# the fake. Yields the contract for assertions.
+# A context manager patching the module-level
+# get_erc20_contract the ERC-20 faucet calls, so every token
+# read and write made inside it hits the fake. Yields the
+# contract for assertions.
 #
 # Used by:
 #   - test_request_flows.py — the ERC-20 flows
+#   - test_api_routes.py
 ############################################################
 
 def fake_token_contract(balances=None, **kwargs):
@@ -763,7 +803,6 @@ def fake_token_contract(balances=None, **kwargs):
 #
 # Used by:
 #   - test_request_flows.py — the local-checks-first tests
-#   - test_evm_defects.py — RpcFailuresAreRememberedTests
 ############################################################
 
 class UnreachableEth(FakeEth):
@@ -840,17 +879,18 @@ def lock_watching_web3(faucet, network, balances=None):
 # import_main
 ############################################################
 #
-#   main = helpers.import_main(db_path)
-#
 # main wires the WHOLE app at import — every faucet is built
 # (warmups patched out here, so nothing touches a network),
 # the schema and demo chain go into db_path, and the real
 # config's <PLACEHOLDERS> resolve against dummy values when
-# the environment has none. Reloads on every call, so each
-# test gets a fresh app object.
+# the environment has none. Reloads on every call and hands
+# back the reloaded module, so each test gets a fresh app
+# object.
 #
 # Used by:
 #   - test_main.py
+#   - test_utxo_graph.py
+#   - test_api_routes.py
 ############################################################
 
 def import_main(db_path):
@@ -886,8 +926,6 @@ def import_main(db_path):
 ############################################################
 # FollowingElectrum
 ############################################################
-#
-#   server = FollowingElectrum(faucet, 'btc4', utxos)
 #
 # A canned Electrum server whose UTXO set FOLLOWS the payouts:
 # a broadcast removes the inputs it spends and adds the change

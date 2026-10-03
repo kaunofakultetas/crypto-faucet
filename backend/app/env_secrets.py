@@ -19,16 +19,21 @@
 #  a logger filter runs before any handler — including the
 #  one unittest's assertLogs installs.
 #
+#  The same scrub (redact) also cleans the failure reasons the
+#  faucets send back, which reach every student's screen.
+#
 #  Used by:
 #    - app/evm_faucet/evm_faucet.py, app/svm_faucet/svm_faucet.py,
 #      app/move_faucet/move_faucet.py — rpc_url templates
 #    - app/evm_faucet/explorer.py — the Etherscan API key
+#    - app/failure_reasons.py — redact
 ############################################################
 
 
 import os
 import re
 import logging
+from urllib.parse import quote
 
 
 PLACEHOLDER = re.compile(r'<(\w+)>')
@@ -82,8 +87,12 @@ def resolve_placeholders(template, label='config'):
 # remember_secret
 ############################################################
 #
-# Register a value the log must never show. Empty values are
-# ignored — replacing '' would corrupt every message.
+# Register a value the log must never show — in its percent-
+# encoded spellings too: requests encodes a URL before it puts
+# it into an exception's text, so a secret with a character
+# outside plain ASCII letters and digits shows up there only
+# in encoded form. Empty values are ignored — replacing ''
+# would corrupt every message.
 #
 # Used by:
 #   - resolve_placeholders (above)
@@ -92,7 +101,8 @@ def resolve_placeholders(template, label='config'):
 
 def remember_secret(value):
     if value:
-        _secrets.add(str(value))
+        value = str(value)
+        _secrets.update({value, quote(value), quote(value, safe='')})
 
 
 
@@ -135,11 +145,11 @@ class RedactSecretsFilter(logging.Filter):
         if not _secrets:
             return True
 
-        record.msg = _scrub(record.getMessage())
+        record.msg = redact(record.getMessage())
         record.args = ()
 
         if record.exc_info:
-            record.exc_text = _scrub(logging.Formatter().formatException(record.exc_info))
+            record.exc_text = redact(logging.Formatter().formatException(record.exc_info))
             record.exc_info = None
 
         return True
@@ -152,14 +162,19 @@ class RedactSecretsFilter(logging.Filter):
 
 
 ############################################################
-# _scrub
+# redact
 ############################################################
+#
+# The text with every remembered secret replaced by
+# <redacted> — the same scrub the log gets, for text that
+# leaves the backend another way.
 #
 # Used by:
 #   - RedactSecretsFilter.filter (above)
+#   - app/failure_reasons.py — every reason a student sees
 ############################################################
 
-def _scrub(text):
+def redact(text):
     for secret in _secrets:
         text = text.replace(secret, '<redacted>')
     return text

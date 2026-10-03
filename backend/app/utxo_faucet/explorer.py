@@ -55,6 +55,13 @@
 #  request/response and treats an unsolicited notification as
 #  a broken session, so notifications arrive on the watcher's.
 #
+#  Whatever the Electrum side fails to do reaches the page in
+#  words (failure_reasons.py) instead of a day that only looks
+#  quiet: why the network's last crawl failed, why the server
+#  would not give a transaction the window is missing, and why
+#  one transaction asked for cannot be shown — "not found"
+#  only when the node itself said so.
+#
 #  Used by:
 #    - utxo_routes.py — the graph endpoints
 ############################################################
@@ -70,10 +77,11 @@ from zoneinfo import ZoneInfo
 
 from embit.transaction import Transaction
 
-from .electrum_client import ElectrumClient
+from .electrum_client import ELECTRUM_TIMEOUT_S, ElectrumClient
 from .electrum_watcher import ElectrumWatcher
 from .utxo_faucet import _electrum_scripthash
 from ..database.db import get_db_connection
+from ..failure_reasons import failure_sentence
 
 
 # Hops a crawl follows from the faucet — the EVM graph's reach
@@ -120,6 +128,22 @@ MAX_NAME_LENGTH = 64
 
 # A txid: 64 hex characters, compared lowercase
 TXID_PATTERN = re.compile(r'^[0-9a-f]{64}$')
+
+# Bitcoin Core's words for a transaction in neither its mempool
+# nor its chain. ElectrumX passes the node's error on inside
+# its own error answer, which ElectrumClient raises as a
+# RuntimeError: the server answered, the connection was fine.
+# Only a node keeping the full transaction index says these
+# words; one without it answers a mined transaction with "Use
+# -txindex" under the SAME error code — it could not look,
+# which is no proof of absence — so the words decide, not the
+# code
+NOT_FOUND = 'No such mempool or blockchain transaction'
+
+# A node still building its transaction index answers with the
+# same not-found words and this phrase after them: it could
+# not look yet, which is no proof of absence either
+STILL_INDEXING = 'still in the process of being indexed'
 
 # SQLite's bound on host parameters, with room to spare — IN
 # lists are sent in chunks of this size
@@ -355,6 +379,46 @@ def _ordered(transactions, root):
 
 
 ############################################################
+# _given_up
+############################################################
+#
+# What the explorer answers for a transaction it gave up on —
+# the HTTP status and the sentence saying why — decided once,
+# when it gives up. `refused` says which way it gave up: the
+# Electrum server answered with a refusal, or it sent a
+# transaction embit could not decode. A refusal in the words
+# of NOT_FOUND is the node's own statement that the
+# transaction does not exist: a 404 — unless the node adds
+# that it is still indexing (STILL_INDEXING), which is no
+# proof of absence. Any other refusal (a node without
+# -txindex cannot look a mined transaction up at all)
+# and an undecodable answer are the Electrum side failing to
+# give a usable answer: a 502, quoting the server's or the
+# decoder's own words.
+#
+# Used by:
+#   - UtxoGraphExplorer._ensure_decoded — kept in
+#     _undecodable, read by get_transaction and
+#     _window_payload
+############################################################
+
+def _given_up(error, refused):
+    text = str(error).lower()
+    if refused and NOT_FOUND.lower() in text and STILL_INDEXING not in text:
+        return 404, f'Transakcija nerasta: tinklo mazgas jos neturi nei blokuose, nei tinklo eilėje ({NOT_FOUND}).'
+    if refused:
+        return 502, failure_sentence('Nepavyko gauti transakcijos', error, 'electrum', ELECTRUM_TIMEOUT_S)
+    return 502, failure_sentence('Nepavyko perskaityti Electrum serverio atsiųstos transakcijos', error,
+                                 'electrum', ELECTRUM_TIMEOUT_S)
+
+
+
+
+
+
+
+
+############################################################
 # UtxoGraphExplorer
 ############################################################
 #
@@ -407,24 +471,29 @@ class UtxoGraphExplorer:
 
         # Guards the crawl and watch records below: which networks
         # are crawling right now, when each (network, window) was
-        # last crawled, which windows have had a crawl land, the
-        # live window of each network last asked for (from, to,
-        # when), which networks a change wants crawled at once,
-        # and the watchers with the addresses they follow
-        # (scripthash → address)
+        # last crawled, which windows have had a crawl land, why
+        # each network's last crawl failed (None once one
+        # succeeded), the live window of each network last asked
+        # for (from, to, when), which networks a change wants
+        # crawled at once, and the watchers with the addresses
+        # they follow (scripthash → address)
         self._lock = threading.Lock()
         self._crawling = set()
         self._last_crawl = {}
         self._completed = set()
+        self._crawl_errors = {}
         self._live = {}
         self._nudged = set()
         self._watchers = {}
         self._watched = {}
 
-        # txids the server answered with something embit cannot
-        # decode (a Litecoin MWEB transaction, say) — not asked
-        # for again by this process
-        self._undecodable = set()
+        # txids the explorer gave up on — the server refused them
+        # or answered with something embit cannot decode (a
+        # Litecoin MWEB transaction, say) — not asked for again by
+        # this process, each with the status and the sentence
+        # _given_up chose for it. Entries are only ever added, one
+        # at a time, so the threads share it without the lock
+        self._undecodable = {}
 
 
 
@@ -462,7 +531,11 @@ class UtxoGraphExplorer:
     # window is live, whether its first crawl is still to land
     # (`updating` — the later, routine ones are not announced),
     # the window's blocks and transactions, how many of them
-    # cannot be shown yet (`missing`), and the names.
+    # cannot be shown yet (`missing`, with `missing_error` when
+    # the server refused one), and the names. `crawl_error` is
+    # the sentence saying why the network's last crawl failed,
+    # None once one succeeds again — so a dead Electrum server
+    # shows on the graph instead of a day that looks quiet.
     #
     # Used by:
     #   - utxo_routes.py — GET /api/utxo/<network>/graph
@@ -485,6 +558,7 @@ class UtxoGraphExplorer:
 
         with self._lock:
             payload['updating'] = (network, from_ts, to_ts) not in self._completed
+            payload['crawl_error'] = self._crawl_errors.get(network)
         return payload, 200
 
 
@@ -542,7 +616,11 @@ class UtxoGraphExplorer:
     # day on screen. A transaction the cache lacks is fetched
     # right here (with its parents, and its status from one of
     # its addresses' histories): a handful of Electrum calls,
-    # bounded by MAX_TX_FETCHES_PER_REQUEST.
+    # bounded by MAX_TX_FETCHES_PER_REQUEST. What the cache holds
+    # is served even when part of that failed; a transaction it
+    # does not hold is answered with the reason — a 404 only
+    # when the node said no such transaction exists, never when
+    # the Electrum server could not be asked.
     #
     # Used by:
     #   - utxo_routes.py — GET /api/utxo/<network>/transaction/<txid>
@@ -560,24 +638,36 @@ class UtxoGraphExplorer:
         # its status known — failures fall through to the cache
         # ========================================================
         budget = {'fetches': MAX_TX_FETCHES_PER_REQUEST}
+        failure = None
         try:
             if self._ensure_decoded(network, txid, budget):
                 self._ensure_parents(network, txid, budget)
                 self._locate(network, txid)
-        except Exception:
+        except Exception as error:
             logging.exception(f"[UTXO graph] fetching {txid} on {network} failed; serving what the cache has")
+            failure = error
 
 
-        # STEP 2: answer from the cache
-        # =============================
+        # STEP 2: answer from the cache — what it holds is shown,
+        # whatever failed on the way
+        # =======================================================
         with get_db_connection() as conn:
             payloads = self._transaction_payloads(conn, network, [txid])
-            if not payloads:
-                return {"error": "Transakcija nerasta"}, 404
-            addresses = {coin['address'] for coin in payloads[0]['inputs'] + payloads[0]['outputs'] if coin['address']}
-            names = self._names(conn, addresses)
+            if payloads:
+                addresses = {coin['address'] for coin in payloads[0]['inputs'] + payloads[0]['outputs'] if coin['address']}
+                return {"transaction": payloads[0], "names": self._names(conn, addresses)}, 200
 
-        return {"transaction": payloads[0], "names": names}, 200
+
+        # STEP 3: the cache lacks it — say why. The server not
+        # reached, silent or cut off mid-answer is a 503; a
+        # transaction the explorer gave up on answers what
+        # _given_up chose for it
+        # ====================================================
+        if failure is not None:
+            return {"error": failure_sentence('Nepavyko gauti transakcijos', failure, 'electrum',
+                                              ELECTRUM_TIMEOUT_S)}, 503
+        status, sentence = self._undecodable.get((network, txid), (404, 'Transakcija nerasta.'))
+        return {"error": sentence}, status
 
 
 
@@ -673,26 +763,31 @@ class UtxoGraphExplorer:
     #
     # The crawl thread's body: the crawl itself — a live one then
     # watches every address it followed — a failure logged (the
-    # cache keeps serving, the next due request retries), and,
-    # whatever happened, the window marked as crawled and the
-    # network released. A change that came in during the crawl
-    # starts the next one right away.
+    # cache keeps serving, the next due request retries) and put
+    # into words for the page, and, whatever happened, the window
+    # marked as crawled and the network released. The sentence
+    # stays the network's crawl_error until a crawl succeeds
+    # (get_graph answers it). A change that came in during the
+    # crawl starts the next one right away.
     #
     # Used by:
     #   - _maybe_start_crawl (above) — as the thread target
     ############################################################
 
     def _crawl(self, network, from_ts, to_ts, live):
+        failure = None
         try:
             followed = self._crawl_window(network, from_ts, to_ts, live)
             if live:
                 self._watch(network, followed)
-        except Exception:
+        except Exception as error:
             logging.exception(f"[UTXO graph] {network} crawl failed; the cache keeps serving")
+            failure = failure_sentence('Nepavyko atnaujinti grafiko', error, 'electrum', ELECTRUM_TIMEOUT_S)
         finally:
             with self._lock:
                 self._crawling.discard(network)
                 self._completed.add((network, from_ts, to_ts))
+                self._crawl_errors[network] = failure
                 again = network in self._nudged
             if again:
                 self._kick(network)
@@ -1037,8 +1132,11 @@ class UtxoGraphExplorer:
     # budget is spent (the caller stops). A transaction the server
     # refuses (an error ANSWER — a broken connection raises on) or
     # sends in a form embit cannot decode is logged, remembered
-    # in _undecodable and skipped: one bad transaction must not
-    # stop the crawl.
+    # in _undecodable with the answer _given_up chose for it, and
+    # skipped: one bad transaction must not stop the crawl. The
+    # two are told apart HERE, where each is caught — embit
+    # raises RuntimeError too, for a transaction cut short, so
+    # the exception's type alone cannot say which it was.
     #
     # Used by:
     #   - _crawl_window, _ensure_parents, get_transaction
@@ -1061,13 +1159,13 @@ class UtxoGraphExplorer:
             # The server's answer says it all (a node without
             # -txindex refuses every mined transaction) — no traceback
             logging.warning(f"[UTXO graph] the server refused {txid} on {network} — skipped: {error}")
-            self._undecodable.add((network, txid))
+            self._undecodable[(network, txid)] = _given_up(error, refused=True)
             return True
         try:
             self._store_transaction(network, txid, raw_hex)
-        except Exception:
+        except Exception as error:
             logging.warning(f"[UTXO graph] {txid} on {network} could not be decoded — skipped", exc_info=True)
-            self._undecodable.add((network, txid))
+            self._undecodable[(network, txid)] = _given_up(error, refused=False)
         return True
 
 
@@ -1277,6 +1375,9 @@ class UtxoGraphExplorer:
     # while a crawl runs — or refused by the server (a node
     # without -txindex serves no mined transaction), which the
     # page must say rather than look like a quiet day.
+    # `missing_error` says why in the words _given_up chose for
+    # the first missing one the explorer gave up on; None while
+    # every missing one may simply be still to fetch.
     #
     # Used by:
     #   - get_graph (above)
@@ -1323,12 +1424,20 @@ class UtxoGraphExplorer:
         for tx in transactions:
             addresses.update(coin['address'] for coin in tx['inputs'] + tx['outputs'] if coin['address'])
 
+
+        # STEP 3: why the missing ones are missing, when the
+        # explorer gave up on one of them
+        # ==================================================
+        given_up = [self._undecodable[(network, txid)] for txid in sorted(missing)
+                    if (network, txid) in self._undecodable]
+
         return {
             "faucet_address": root,
             "live": live,
             "blocks": [{"height": height, "time": block_time} for height, block_time in blocks],
             "transactions": transactions,
             "missing": len(missing),
+            "missing_error": given_up[0][1] if given_up else None,
             "names": self._names(conn, addresses),
         }
 

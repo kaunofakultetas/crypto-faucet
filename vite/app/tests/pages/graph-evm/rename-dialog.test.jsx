@@ -6,16 +6,19 @@
 //  the browser's own menu there), prefilled with the node's
 //  name, its full read-only address and the "n/64" counter;
 //  Išsaugoti sends GET /api/evm/set-address-name?address=
-//  &name= through fetch (captured — trimmed, URL-encoded, an
-//  empty name clears the label), closes the dialog and
-//  relabels the node and its table rows in place, and the
-//  name outlives the next sweep because the backend now holds
-//  it; a failed save (500, the proxy's HTML page, a dropped
-//  connection) keeps the dialog open with "Nepavyko išsaugoti
-//  pavadinimo. Bandykite dar kartą." under the field; Atšaukti,
-//  × and Escape leave without a request; the copy button puts
+//  &name= (captured — trimmed, URL-encoded, an empty name
+//  clears the label), closes the dialog and relabels the node
+//  and its table rows in place, and the name outlives the
+//  next sweep because the backend now holds it; a failed save
+//  keeps the dialog open with what went wrong under the field
+//  — the backend's own sentence (a 500, the database refusing
+//  the write), or "Nepavyko išsaugoti pavadinimo." with the
+//  reason after it (the proxy's HTML page, a dropped
+//  connection, a 200 without the backend's OK); Atšaukti, ×
+//  and Escape leave without a request; the copy button puts
 //  the address on the clipboard with a one-second
-//  "Nukopijuota" hint — only when the copy worked.
+//  "Nukopijuota" hint — only when the copy worked, and when it
+//  did not, the reason under the address.
 // -----------------------------------------------------------
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -37,7 +40,15 @@ beforeEach(() => startGraphSlate());
 afterEach(() => endGraphSlate());
 
 
-const SAVE_FAILED = 'Nepavyko išsaugoti pavadinimo. Bandykite dar kartą.';
+// What a failed save says under the field: the backend's own
+// sentence when it sent one, otherwise the page's with the
+// reason after it
+const SAVE_FAILED = {
+  error: 'Vidinė serverio klaida',
+  html: 'Nepavyko išsaugoti pavadinimo. Serveris grąžino klaidą (502).',
+  drop: 'Nepavyko išsaugoti pavadinimo. Patikrinkite interneto ryšį.',
+  malformed: 'Nepavyko išsaugoti pavadinimo. Serveris atsakė netinkamo formato duomenimis.',
+};
 
 
 
@@ -264,26 +275,54 @@ describe('Saving a name', () => {
 // When saving fails
 // -----------------------------------------------------------
 //
-// A lost write is shown under the field; the dialog, the
-// draft and the old label stay.
+// A lost write is shown under the field, saying what went
+// wrong; the dialog, the draft and the old label stay.
 // -----------------------------------------------------------
 
 describe('When saving fails', () => {
 
   it.each([
-    ['a 500 { error } answer', true],
-    ['the proxy\'s HTML 502 page', 'html'],
-    ['a dropped connection', 'drop'],
-  ])('%s keeps the dialog open with the error under the field and the old label', async (_, outage) => {
+    ['a 500 { error } answer', true, SAVE_FAILED.error],
+    ['the proxy\'s HTML 502 page', 'html', SAVE_FAILED.html],
+    ['a dropped connection', 'drop', SAVE_FAILED.drop],
+  ])('%s keeps the dialog open with what went wrong under the field and the old label', async (_, outage, failure) => {
     const { user, dialog, backend, network } = await openFor(ADDR.JONAS);
     backend.renameOutage = outage;
     await user.clear(nameField(dialog));
     await user.type(nameField(dialog), 'Jonas Jonaitis');
     await user.click(button(dialog, 'Išsaugoti'));
 
-    await waitFor(() => expect(nameField(dialog)).toHaveAccessibleDescription(SAVE_FAILED));
+    await waitFor(() => expect(nameField(dialog)).toHaveAccessibleDescription(failure));
     expect(nameField(dialog)).toHaveAttribute('aria-invalid', 'true');
     expect(nameField(dialog)).toHaveValue('Jonas Jonaitis');
+    expect(screen.getByRole('dialog', { name: 'Adreso nustatymai' })).toBeInTheDocument();
+    expect(firstLine(network, ADDR.JONAS)).toBe('Jonas');
+  });
+
+
+  it('the database refusing the write is said in the backend\'s words', async () => {
+    const backend = installGraphBackend({ transfers: DAY_TRANSFERS, addresses: NAMES });
+    // Installed after the model, so it answers the rename
+    given.error('get', '/api/evm/set-address-name',
+      'Nepavyko išsaugoti pavadinimo: duomenų bazė atverta tik skaitymui (attempt to write a readonly database).', 500);
+    const { user, dialog, network } = await openFor(ADDR.JONAS, { backend });
+    await user.click(button(dialog, 'Išsaugoti'));
+
+    await waitFor(() => expect(nameField(dialog)).toHaveAccessibleDescription(
+      'Nepavyko išsaugoti pavadinimo: duomenų bazė atverta tik skaitymui (attempt to write a readonly database).'));
+    expect(firstLine(network, ADDR.JONAS)).toBe('Jonas');
+  });
+
+
+  it('a 200 without the backend\'s OK is no saved name — a malformed answer, the dialog stays', async () => {
+    const backend = installGraphBackend({ transfers: DAY_TRANSFERS, addresses: NAMES });
+    given.text('get', '/api/evm/set-address-name', '<html><body>Prisijunkite prie tinklo</body></html>');
+    const { user, dialog, network } = await openFor(ADDR.JONAS, { backend });
+    await user.clear(nameField(dialog));
+    await user.type(nameField(dialog), 'Jonas Jonaitis');
+    await user.click(button(dialog, 'Išsaugoti'));
+
+    await waitFor(() => expect(nameField(dialog)).toHaveAccessibleDescription(SAVE_FAILED.malformed));
     expect(screen.getByRole('dialog', { name: 'Adreso nustatymai' })).toBeInTheDocument();
     expect(firstLine(network, ADDR.JONAS)).toBe('Jonas');
   });
@@ -295,7 +334,7 @@ describe('When saving fails', () => {
     await user.clear(nameField(dialog));
     await user.type(nameField(dialog), 'Jonas Jonaitis');
     await user.click(button(dialog, 'Išsaugoti'));
-    await waitFor(() => expect(nameField(dialog)).toHaveAccessibleDescription(SAVE_FAILED));
+    await waitFor(() => expect(nameField(dialog)).toHaveAccessibleDescription(SAVE_FAILED.error));
 
     backend.renameOutage = false;
     await user.click(button(dialog, 'Išsaugoti'));
@@ -311,7 +350,7 @@ describe('When saving fails', () => {
     await user.clear(nameField(dialog));
     await user.type(nameField(dialog), 'Jonas Jonaitis');
     await user.click(button(dialog, 'Išsaugoti'));
-    await waitFor(() => expect(nameField(dialog)).toHaveAccessibleDescription(SAVE_FAILED));
+    await waitFor(() => expect(nameField(dialog)).toHaveAccessibleDescription(SAVE_FAILED.error));
     await user.click(button(dialog, 'Atšaukti'));
     await dialogGone();
 
@@ -388,7 +427,9 @@ describe('Leaving without saving', () => {
 // -----------------------------------------------------------
 //
 // The copy button: the full address on the clipboard and a
-// one-second "Nukopijuota" hint — only when the copy worked.
+// one-second "Nukopijuota" hint — only when the copy worked;
+// a copy the browser would not make is said under the
+// address, until the dialog closes.
 // -----------------------------------------------------------
 
 describe('Copying the address', () => {
@@ -405,13 +446,30 @@ describe('Copying the address', () => {
   });
 
 
-  it('a refused clipboard shows no hint and reports the failure on the console', async () => {
+  it('a refused clipboard shows no hint and says why under the address — the browser\'s words kept', async () => {
     const { user, dialog } = await openFor(ADDR.JONAS);
-    vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new Error('NotAllowedError'));
+    vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new DOMException('Write permission denied.', 'NotAllowedError'));
     const logged = vi.spyOn(console, 'error');
     await user.click(button(dialog, 'copy'));
-    await settle(100);
+    await waitFor(() => expect(addressField(dialog)).toHaveAccessibleDescription(
+      'Nepavyko nukopijuoti adreso: naršyklė neleido įrašyti į iškarpinę (NotAllowedError: Write permission denied.).'));
+    expect(addressField(dialog)).toHaveAttribute('aria-invalid', 'true');
     expect(screen.queryByRole('tooltip')).toBeNull();
-    expect(logged).toHaveBeenCalledWith('Failed to copy to clipboard:', expect.any(Error));
+    expect(logged).toHaveBeenCalledWith('Failed to copy to clipboard:', expect.any(DOMException));
+  });
+
+
+  it('without a clipboard API (a plain-http host) the dialog says so — and the next opening starts clean', async () => {
+    const { user, dialog, network } = await openFor(ADDR.JONAS);
+    vi.spyOn(navigator, 'clipboard', 'get').mockReturnValue(undefined);
+    await user.click(button(dialog, 'copy'));
+    await waitFor(() => expect(addressField(dialog)).toHaveAccessibleDescription(
+      'Nepavyko nukopijuoti adreso: naršyklė šiame puslapyje iškarpinės nepasiekia — ji veikia tik saugiu (HTTPS) ryšiu.'));
+
+    await user.click(button(dialog, 'Atšaukti'));
+    await dialogGone();
+    await network.rightClick(ADDR.EGLE);
+    const reopened = await screen.findByRole('dialog', { name: 'Adreso nustatymai' });
+    expect(addressField(reopened)).not.toHaveAccessibleDescription();
   });
 });

@@ -257,7 +257,7 @@ describe('structural rules — the backend calls', () => {
     }
     // the transaction-days call, whose URL starts on the next line
     expect(calls).toContainEqual({ file: 'src/pages/Graph/Page.jsx', method: 'GET', url: '/api/evm/:param/transaction-days' });
-    // the rename, a fetch whose URL starts on the next line
+    // the rename, an axios call whose URL starts on the next line
     expect(calls).toContainEqual({ file: 'src/pages/Graph/hooks/useTransactionGraph.js', method: 'GET', url: '/api/evm/set-address-name' });
   });
 

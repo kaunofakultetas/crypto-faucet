@@ -111,10 +111,13 @@ export const STUDENT_SUI_MIST = 2250000000;
 
 // GET /api/erc20/token/<symbol>[?address=] — the token and its
 // deployments; wallet_native_wei is the asking wallet's gas
-// money on each chain (null without ?address=)
+// money on each chain (null without ?address=), and each
+// balance that could not be read comes with the backend's
+// sentence saying why (null when it was read)
 export const erc20Token = (symbol = 'LINK', address = null) => ({
   deployments: erc20TokensMap[symbol].networks.map((network) => ({
     balance: symbol === 'LINK' ? 145.0 : 200.0,
+    balance_error: null,
     block_explorer_urls: evmNetworksMap[network].block_explorer_urls,
     chain_id: evmNetworksMap[network].chain_id,
     chain_name: evmNetworksMap[network].chain_name,
@@ -127,6 +130,7 @@ export const erc20Token = (symbol = 'LINK', address = null) => ({
     rpc_urls: evmNetworksMap[network].rpc_urls,
     short_name: evmNetworksMap[network].short_name,
     wallet_native_wei: address ? '41603571384332010457' : null,
+    wallet_native_error: null,
   })),
   faucet_address: FAUCET_EVM,
   token: {
@@ -178,7 +182,10 @@ export const evmTransactionDays = () => ({
 });
 
 // GET /api/evm/<network>/get-stored-transactions?address=&from=&to=
+// — refresh_error is the sentence of the address' latest
+// failed Etherscan refresh, null while none failed
 export const evmStoredTransactions = () => ({
+  refresh_error: null,
   transactions: [
     { count: 1, from_addr_contract: 0, from_addr_hub: null, from_address: FAUCET_EVM, from_name: 'KNF Faucet', from_timestamp: 1789034000, to_addr_contract: 0, to_addr_hub: null, to_address: STUDENT_EVM, to_name: 'Jonas', to_timestamp: 1789034000, value: 0.2 },
     { count: 1, from_addr_contract: 0, from_addr_hub: null, from_address: STUDENT_EVM, from_name: 'Jonas', from_timestamp: 1789034568, to_addr_contract: 0, to_addr_hub: null, to_address: FAUCET_EVM, to_name: 'KNF Faucet', to_timestamp: 1789034568, value: 0.199752074200623 },
@@ -270,14 +277,18 @@ const utxoDayTransactions = [
 export const utxoNames = { [FAUCET_UTXO]: "Faucet'as", [JONAS]: 'Jonas', [EGLE]: 'Eglė' };
 
 // GET /api/utxo/<network>/graph?from=&to= — the mempool (T5)
-// only on a live window, like the backend
+// only on a live window, like the backend; the two failure
+// sentences (why the last crawl failed, why transactions are
+// missing) null on a day that had no failure
 export const utxoGraph = ({ live = true } = {}) => {
   const transactions = utxoDayTransactions.filter((tx) => live || tx.status !== 'mempool');
   return {
     blocks: utxoBlocks,
+    crawl_error: null,
     faucet_address: FAUCET_UTXO,
     live,
     missing: 0,
+    missing_error: null,
     names: { ...utxoNames },
     transactions: structuredClone(transactions),
     updating: false,

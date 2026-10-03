@@ -43,6 +43,8 @@ from web3.exceptions import ContractLogicError
 from .token_contracts import get_erc20_contract
 from ..cooldown import CooldownTable
 from ..icons import icon_url
+from ..failure_reasons import failure_sentence
+from ..evm_faucet.evm_faucet import RPC_TIMEOUT_S
 
 
 
@@ -134,9 +136,9 @@ class ERC20Faucet:
     def _warm_up_tokens(self):
 
         def warm(symbol, network, contract_address, decimals):
-            balance = self._token_balance(symbol, network, contract_address, decimals)
+            balance, failure = self._token_balance(symbol, network, contract_address, decimals)
             if balance is None:
-                print(f"[ERC20] {symbol} on {network} FAILED to warm up — check the contract address")
+                print(f"[ERC20] {symbol} on {network} FAILED to warm up — {failure}")
             else:
                 print(f"[ERC20] {symbol} on {network} ready — faucet holds {balance}")
 
@@ -213,9 +215,12 @@ class ERC20Faucet:
     ############################################################
     #
     # The faucet's balance of one token on one chain, in whole
-    # tokens, cached for BALANCE_CACHE_TTL seconds. Returns
-    # None when the call fails (logged) — the page renders a
-    # dash instead of losing the whole row.
+    # tokens, cached for BALANCE_CACHE_TTL seconds, together
+    # with the sentence saying why it could not be read. A
+    # failed call (logged) gives no balance and that sentence —
+    # the page renders a dash with the reason under it instead
+    # of losing the whole row — and it is cached as well, so an
+    # outage costs one call per TTL, not one per poll.
     #
     # Used by:
     #   - get_token (below)
@@ -225,19 +230,20 @@ class ERC20Faucet:
         cache_key = (token_symbol, network)
         cached = self._balance_cache.get(cache_key)
         if cached and int(time.time()) - cached[0] < self.BALANCE_CACHE_TTL:
-            return cached[1]
+            return cached[1], cached[2]
 
-        balance = None
+        balance, failure = None, None
         try:
             w3 = self.evm_faucet.w3_instances[network]
             contract = get_erc20_contract(w3, contract_address)
             raw = contract.functions.balanceOf(self.evm_faucet.FAUCET_ADDRESS).call()
             balance = raw / (10 ** decimals)
-        except Exception:
+        except Exception as error:
             logging.exception(f"Failed to fetch {token_symbol} balance on {network}")
+            failure = failure_sentence(f'Nepavyko gauti čiaupo {token_symbol} balanso', error, 'rpc', RPC_TIMEOUT_S)
 
-        self._balance_cache[cache_key] = (int(time.time()), balance)
-        return balance
+        self._balance_cache[cache_key] = (int(time.time()), balance, failure)
+        return balance, failure
 
 
 
@@ -302,6 +308,11 @@ class ERC20Faucet:
     # makes the frontend fail open — request_tokens still
     # enforces the rule.
     #
+    # A balance that could not be read comes with the sentence
+    # saying why — balance_error for the faucet's token
+    # balance, wallet_native_error for the wallet's native one
+    # — and the page shows it under the missing number.
+    #
     # Used by:
     #   - erc20_routes.py — GET /api/erc20/token/<symbol>
     ############################################################
@@ -320,12 +331,16 @@ class ERC20Faucet:
             metamask_config = network_config.get('metamask', {})
             w3 = self.evm_faucet.w3_instances[network]
 
-            wallet_native_wei = None
+            wallet_native_wei, wallet_native_error = None, None
             if wallet_address:
                 try:
                     wallet_native_wei = str(w3.eth.get_balance(w3.to_checksum_address(wallet_address)))
-                except Exception:
+                except Exception as error:
                     logging.exception(f"Failed to fetch native balance of {wallet_address} on {network}")
+                    wallet_native_error = failure_sentence('Nepavyko patikrinti jūsų piniginės balanso tinklo '
+                                                           'mokesčiams', error, 'rpc', RPC_TIMEOUT_S)
+
+            balance, balance_error = self._token_balance(token_symbol, network, contract_address, config['decimals'])
 
             deployments.append({
                 'network': network,
@@ -338,11 +353,13 @@ class ERC20Faucet:
                 'rpc_urls': metamask_config.get('rpc_urls', []),
                 'block_explorer_urls': metamask_config.get('block_explorer_urls', []),
                 'contract_address': contract_address,
-                'balance': self._token_balance(token_symbol, network, contract_address, config['decimals']),
+                'balance': balance,
+                'balance_error': balance_error,
                 # Strings, not ints: 0.025 ETH is 2.5e16 wei — past
                 # JavaScript's safe-integer range
                 'min_native_wei': str(self._min_native_wei(network)),
                 'wallet_native_wei': wallet_native_wei,
+                'wallet_native_error': wallet_native_error,
             })
 
         return {
@@ -399,7 +416,9 @@ class ERC20Faucet:
     # sequence). The student's wallet does NOT have to be on
     # the target chain — the signature only proves address
     # ownership. Returns a (payload, http_status) tuple;
-    # user-facing errors are Lithuanian.
+    # user-facing errors are Lithuanian, and a failure on the
+    # chain's side names its cause — the RPC server's, the
+    # node's or the token contract's (failure_sentence).
     #
     # Used by:
     #   - erc20_routes.py —
@@ -437,9 +456,10 @@ class ERC20Faucet:
         # round-trip) rather than pay out over a misconfigured RPC.
         try:
             if not self.evm_faucet._verify_chain_id(network):
-                return {"error": "Tinklo konfigūracijos klaida. Praneškite dėstytojui."}, 500
-        except Exception:
-            return {"error": "Tinklas nepasiekiamas. Bandykite vėliau."}, 503
+                return {"error": self.evm_faucet.wrong_chain_sentence(network)}, 500
+        except Exception as error:
+            return {"error": failure_sentence('Tinklas nepasiekiamas', error, 'rpc', RPC_TIMEOUT_S,
+                                              then='Bandykite vėliau.')}, 503
 
 
         # STEP 2: signature check — the exact message the frontend
@@ -467,8 +487,8 @@ class ERC20Faucet:
         try:
             native_balance = w3.eth.get_balance(to_address)
             user_balance = contract.functions.balanceOf(to_address).call()
-        except Exception:
-            return {"error": "Nepavyko gauti naudotojo balanso"}, 500
+        except Exception as error:
+            return {"error": failure_sentence('Nepavyko gauti jūsų piniginės balanso', error, 'rpc', RPC_TIMEOUT_S)}, 500
 
         if native_balance < self._min_native_wei(network):
             network_config = self.evm_faucet.NETWORK_CONFIGS[network]
@@ -491,9 +511,10 @@ class ERC20Faucet:
 
         try:
             faucet_token_balance = contract.functions.balanceOf(self.evm_faucet.FAUCET_ADDRESS).call()
-        except Exception:
+        except Exception as error:
             self.cooldowns.release(cooldown_key)
-            return {"error": "Nepavyko gauti čiaupo balanso"}, 500
+            return {"error": failure_sentence(f'Nepavyko gauti čiaupo {token_symbol} balanso', error, 'rpc',
+                                              RPC_TIMEOUT_S)}, 500
 
         if faucet_token_balance < amount_to_send:
             self.cooldowns.release(cooldown_key)
@@ -517,17 +538,20 @@ class ERC20Faucet:
 
         # estimate_gas EXECUTES the transfer against current state: a
         # ContractLogicError is the node saying it reverts (the faucet
-        # drained by an unmined payout, a wrong contract address) —
-        # refuse rather than broadcast a transfer that burns gas and
-        # moves nothing. Any other failure is an estimator that merely
-        # can't estimate (zkSync-style chains): fall back to a fixed
-        # limit, as before.
+        # drained by an unmined payout, a wrong contract address, a
+        # token whose transfers are still locked — FOLD before its
+        # token generation event) — refuse rather than broadcast a
+        # transfer that burns gas and moves nothing, naming the
+        # contract's own error. Any other failure is an estimator
+        # that merely can't estimate (zkSync-style chains): fall back
+        # to a fixed limit, as before.
         try:
             gas_limit = int(transfer_fn.estimate_gas({'from': self.evm_faucet.FAUCET_ADDRESS}) * 1.5)
-        except ContractLogicError:
+        except ContractLogicError as error:
             logging.exception(f"{token_symbol} transfer on {network} would revert — payout refused")
             self.cooldowns.release(cooldown_key)
-            return {"error": "Čiaupas nebeturi žetonų. Praneškite dėstytojui."}, 503
+            return {"error": failure_sentence(f'Nepavyko išsiųsti {token_symbol}', error, 'rpc', RPC_TIMEOUT_S,
+                                              then='Praneškite dėstytojui.')}, 503
         except Exception:
             gas_limit = 100000
 
@@ -537,9 +561,10 @@ class ERC20Faucet:
         try:
             gas_price = w3.eth.gas_price
             faucet_native = w3.eth.get_balance(self.evm_faucet.FAUCET_ADDRESS)
-        except Exception:
+        except Exception as error:
             self.cooldowns.release(cooldown_key)
-            return {"error": "Nepavyko gauti čiaupo balanso"}, 500
+            return {"error": failure_sentence('Nepavyko gauti čiaupo balanso tinklo mokesčiams', error, 'rpc',
+                                              RPC_TIMEOUT_S)}, 500
 
         if faucet_native < gas_limit * gas_price:
             native_symbol = self.evm_faucet.NETWORK_CONFIGS[network]['faucet']['short_name']
@@ -553,19 +578,22 @@ class ERC20Faucet:
                     'gas': gas_limit,
                     'gasPrice': gas_price,
                 })
-        except Exception:
+        except Exception as error:
             logging.exception(f"Failed to broadcast {token_symbol} payout on {network}")
             self.cooldowns.release(cooldown_key)
-            return {"error": "Nepavyko išsiųsti transakcijos. Bandykite dar kartą."}, 500
+            return {"error": failure_sentence('Nepavyko išsiųsti transakcijos', error, 'rpc', RPC_TIMEOUT_S)}, 500
 
         # Success — the cooldown slot claimed in STEP 3 stays, and
         # the cached balance is dropped so the page shows the new
         # number on its next poll.
         self._balance_cache.pop((token_symbol, network), None)
 
+        # The hash in its 0x form — the one MetaMask shows and the
+        # page links to the block explorer. web3 7's .hex() drops
+        # the prefix.
         return {
             "message": f"{token_symbol} sent successfully",
-            "transaction_hash": tx_hash.hex(),
+            "transaction_hash": w3.to_hex(tx_hash),
             "amount": float(config['chunk_size']),
             "token": token_symbol,
             "network": network,

@@ -82,6 +82,24 @@ const TXID = f.svmPayout().transaction_id;
 // What a failed claim says when nobody had words of their own
 const CLAIM_FAILED = 'Nepavyko išsiųsti kriptovaliutos.';
 
+// The page's own sentences for a failed read; the reason
+// follows them when the backend sent no sentence of its own
+const FAUCET_FAILED = 'Nepavyko gauti čiaupo informacijos.';
+const NETWORKS_FAILED = 'Nepavyko gauti tinklų sąrašo.';
+const MALFORMED = 'Serveris atsakė netinkamo formato duomenimis.';
+
+// The student's balance row's sentence when the public cluster
+// RPC could not read the balance; the RPC's own reason follows
+const WALLET_FAILED = 'Nepavyko gauti jūsų Phantom balanso.';
+
+// The backend's own sentence when the chain's server did not
+// answer its balance read
+const RPC_SILENT = 'Nepavyko gauti čiaupo balanso: tinklo RPC serveris neatsakė per 20 s.';
+
+// The network list's error card: the failure, closed with a
+// full stop when it lacks one, then the next step
+const networksCard = (failure) => `${failure.endsWith('.') ? failure : `${failure}.`} Perkraukite puslapį.`;
+
 // A second SVM network on another cluster, for the switch
 const SOLANA_TESTNET = {
   ...f.svmNetworksMap.solanaDevnet,
@@ -293,13 +311,12 @@ describe('The page and its numbers', () => {
   });
 
 
-  it("says the faucet info could not be read — in its own words, not the backend's — on a page whose wallet steps still work", async () => {
-    given.error('get', '/api/svm/:network/faucet-balance', 'Solana RPC nepasiekiamas', 500);
+  it("says what went wrong where the numbers stand — the backend's own sentence — on a page whose wallet steps still work", async () => {
+    given.error('get', '/api/svm/:network/faucet-balance', RPC_SILENT, 500);
     installPhantom();
     const { user } = renderSvm();
-    expect(await screen.findByRole('alert')).toHaveTextContent(/^Nepavyko gauti čiaupo informacijos$/);
+    expect((await screen.findByRole('alert')).textContent).toBe(RPC_SILENT);
     expect(screen.getByRole('heading', { level: 1, name: "Solana Devnet faucet'as" })).toBeInTheDocument();
-    expect(screen.queryByText('Solana RPC nepasiekiamas')).toBeNull();
     expect(screen.queryByText('Čiaupo balansas:')).toBeNull();
     // No return card for a faucet the page knows nothing about
     expect(screen.queryByText(/^Grąžinkite nebereikalingą/)).toBeNull();
@@ -315,10 +332,10 @@ describe('The page and its numbers', () => {
     ['the balance as text', () => given.json('get', '/api/svm/:network/faucet-balance', { ...f.svmBalance(), balance: '498.25' })],
     ['no payout size', () => given.json('get', '/api/svm/:network/faucet-balance', { ...f.svmBalance(), chunk_size: null })],
     ["a proxy's page answered 200", () => given.text('get', '/api/svm/:network/faucet-balance', '<html><body>Palaukite…</body></html>')],
-  ])('takes faucet info of another shape for a failed read, never a blank number: %s', async (_, answer) => {
+  ])('takes faucet info of another shape for a failed read — said as the wrong shape, never a blank number: %s', async (_, answer) => {
     answer();
     renderSvm();
-    expect(await screen.findByRole('alert')).toHaveTextContent(/^Nepavyko gauti čiaupo informacijos$/);
+    expect((await screen.findByRole('alert')).textContent).toBe(`${FAUCET_FAILED} ${MALFORMED}`);
     expect(screen.queryByText(/NaN/)).toBeNull();
     expect(qrCodes()).toHaveLength(0);
   });
@@ -348,7 +365,7 @@ describe('The page and its numbers', () => {
     expect(claim).toHaveAttribute('aria-disabled', 'true');
     await advance(5000);
     await waitFor(() => expect(row('Čiaupo balansas:')).toHaveTextContent('498.250 devSOL'));
-    expect(screen.queryByText('Nepavyko gauti čiaupo informacijos')).toBeNull();
+    expect(screen.queryByText('Vidinė serverio klaida')).toBeNull();
     expect(qrCodes()).toHaveLength(1);
     expect(screen.getByRole('button', { name: 'Gauti Solana Devnet valiutos' })).toHaveAttribute('aria-disabled', 'false');
   });
@@ -651,14 +668,15 @@ describe("The student's own balance", () => {
 
 
   it.each([
-    ['a JSON-RPC error answered with HTTP 200', () => given.json('post', RPC, { jsonrpc: '2.0', id: 1, error: { code: -32005, message: 'Node is behind by 42 slots' } })],
-    ['an HTTP 500', () => given.error('post', RPC, 'Internal error', 500)],
-    ['a rate limit (429)', () => given.json('post', RPC, { jsonrpc: '2.0', id: 1, error: { code: 429, message: 'Too many requests for a specific RPC call' } }, { status: 429 })],
-    ['a dropped connection', () => given.networkError('post', RPC)],
-  ])('shows a dash — never a zero, never a lasting "Kraunama…" — for %s', async (_, answer) => {
+    ['a JSON-RPC error answered with HTTP 200', () => given.json('post', RPC, { jsonrpc: '2.0', id: 1, error: { code: -32005, message: 'Node is behind by 42 slots' } }), 'Solana RPC atsakė: Node is behind by 42 slots.'],
+    ['an HTTP 500', () => given.error('post', RPC, 'Internal error', 500), 'Solana RPC atsakė: Internal error.'],
+    ['a rate limit (429)', () => given.json('post', RPC, { jsonrpc: '2.0', id: 1, error: { code: 429, message: 'Too many requests for a specific RPC call' } }, { status: 429 }), 'Per daug užklausų — palaukite ir bandykite vėl.'],
+    ['a dropped connection', () => given.networkError('post', RPC), 'Patikrinkite interneto ryšį.'],
+  ])('shows a dash — never a zero, never a lasting "Kraunama…" — and says why under it, for %s', async (_, answer, reason) => {
     answer();
     await atClaimStep();
     await waitFor(() => expect(studentBalance()).toHaveTextContent(/^Jūsų Phantom balansas:-$/));
+    expect(await screen.findByText(`${WALLET_FAILED} ${reason}`)).toBeInTheDocument();
   });
 
 
@@ -689,10 +707,11 @@ describe("The student's own balance", () => {
     ["a proxy's page answered 200", () => given.text('post', RPC, '<html><body>Palaukite…</body></html>')],
     ['a JSON-RPC answer with neither result nor error', () => given.json('post', RPC, { jsonrpc: '2.0', id: 1 })],
     ['a result without a number in it', () => given.json('post', RPC, { jsonrpc: '2.0', id: 1, result: { context: { slot: 1 }, value: null } })],
-  ])('shows a dash — never a lasting "Kraunama…" — for an RPC answer that carries no balance: %s', async (_, answer) => {
+  ])('shows a dash — never a lasting "Kraunama…" — and says the answer had no balance, for: %s', async (_, answer) => {
     answer();
     await atClaimStep();
     await waitFor(() => expect(studentBalance()).toHaveTextContent(/^Jūsų Phantom balansas:-$/), { timeout: 1500 });
+    expect(screen.getByText(`${WALLET_FAILED} Solana RPC atsakė netinkamo formato duomenimis.`)).toBeInTheDocument();
   });
 });
 
@@ -1039,10 +1058,10 @@ describe('Unknown networks and a missing network list', () => {
   });
 
 
-  it('says the network list could not be read instead of showing a page', async () => {
+  it('says why the network list could not be read instead of showing a page', async () => {
     given.error('get', '/api/svm/networks', 'Vidinė serverio klaida', 500);
     renderSvm();
-    expect(await screen.findByText('Nepavyko gauti tinklų sąrašo. Perkraukite puslapį.')).toBeInTheDocument();
+    expect(await screen.findByText('Vidinė serverio klaida. Perkraukite puslapį.')).toBeInTheDocument();
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
   });
 
@@ -1054,7 +1073,7 @@ describe('Unknown networks and a missing network list', () => {
   ])('says the network list could not be read when it answers 200 without a networks map, instead of a skeleton forever: %s', async (_, answer) => {
     answer();
     renderSvm();
-    expect(await screen.findByText('Nepavyko gauti tinklų sąrašo. Perkraukite puslapį.')).toBeInTheDocument();
+    expect(await screen.findByText(networksCard(`${NETWORKS_FAILED} ${MALFORMED}`))).toBeInTheDocument();
     expect(screen.queryByText('Kraunami tinklo duomenys…')).toBeNull();
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
   });
@@ -1093,7 +1112,7 @@ describeEndpointContract({
   fixture: f.svmNetworks,
   render: () => renderSvm(),
   loaded: async () => { await pageLoaded(); },
-  failed: async () => { await screen.findByText('Nepavyko gauti tinklų sąrašo. Perkraukite puslapį.'); },
+  failed: async (says) => { await screen.findByText(networksCard(says(NETWORKS_FAILED))); },
   loading: () => screen.getByRole('status'),
 });
 
@@ -1105,9 +1124,9 @@ describeEndpointContract({
   // The page's title once loaded, its loading status before
   chrome: () => screen.queryByRole('heading', { level: 1, name: "Solana Devnet faucet'as" }) ?? screen.getByRole('status'),
   loaded: async () => { await waitFor(() => expect(row('Čiaupo balansas:')).toHaveTextContent('498.250 devSOL')); },
-  failed: async () => {
+  failed: async (says) => {
     await waitFor(() => expect(screen.queryByText('Kraunami tinklo duomenys…')).toBeNull(), { timeout: 1000 });
-    expect(screen.getByText(/Nepavyko/)).toBeInTheDocument();
+    expect(screen.getByText(says(FAUCET_FAILED))).toBeInTheDocument();
   },
   loading: () => screen.getByRole('status'),
 });
@@ -1146,6 +1165,9 @@ describeEndpointContract({
   },
   chrome: () => screen.getByRole('heading', { level: 1, name: "Solana Devnet faucet'as" }),
   loaded: async () => { await waitFor(() => expect(studentBalance()).toHaveTextContent(/^Jūsų Phantom balansas:1\.500 devSOL$/)); },
-  failed: async () => { await waitFor(() => expect(studentBalance()).toHaveTextContent(/^Jūsų Phantom balansas:-$/)); },
+  failed: async () => {
+    await waitFor(() => expect(studentBalance()).toHaveTextContent(/^Jūsų Phantom balansas:-$/));
+    expect(await screen.findByText((text) => text.startsWith(`${WALLET_FAILED} `))).toBeInTheDocument();
+  },
   loading: () => studentBalance().textContent === 'Jūsų Phantom balansas:Kraunama…',
 });

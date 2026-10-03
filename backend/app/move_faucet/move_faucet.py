@@ -55,10 +55,11 @@ from solders.pubkey import Pubkey
 from solders.signature import Signature
 
 from .chains import chain_params
-from .graphql_client import SuiGraphqlClient
+from .graphql_client import SUI_TIMEOUT_S, SuiGraphqlClient
 from ..cooldown import CooldownTable
 from ..icons import icon_url
 from ..env_secrets import resolve_placeholders, install_log_redaction
+from ..failure_reasons import failure_sentence
 
 
 # Sui signature flag byte → the signing scheme. Only flag 0
@@ -558,8 +559,8 @@ class MoveFaucet:
     #
     # The faucet address and its balance on one network.
     # Returns (payload, http_status) — the route just
-    # jsonify()s it. Failures log the real exception and
-    # answer with a generic Lithuanian error.
+    # jsonify()s it. A failure logs the real exception and
+    # answers with its cause in Lithuanian (failure_sentence).
     #
     # Used by:
     #   - move_routes.py — GET /api/move/<network>/faucet-balance
@@ -580,9 +581,9 @@ class MoveFaucet:
                 "symbol": params['symbol'],
                 "chunk_size": float(self.NETWORK_CONFIGS[network]['faucet']['chunk_size']),
             }, 200
-        except Exception:
+        except Exception as error:
             logging.exception(f"Failed to get MOVE faucet balance for {network}")
-            return {"error": "Nepavyko gauti čiaupo informacijos"}, 500
+            return {"error": failure_sentence('Nepavyko gauti čiaupo balanso', error, 'graphql', SUI_TIMEOUT_S)}, 500
 
 
 
@@ -597,7 +598,9 @@ class MoveFaucet:
     # node build one chunk-sized transfer, sign it and execute
     # — under the network's send lock. Returns a
     # (payload, http_status) tuple; user-facing errors are
-    # Lithuanian.
+    # Lithuanian, and a failure on the chain's side names its
+    # cause — the GraphQL server's or the node's
+    # (failure_sentence).
     #
     # Used by:
     #   - move_routes.py — GET /api/move/<network>/request
@@ -658,9 +661,10 @@ class MoveFaucet:
         # ======================================================
         try:
             user_mist = client.get_balance(to_address, params['coin_type'])
-        except Exception:
+        except Exception as error:
             logging.exception(f"Failed to read {to_address} balance on {network}")
-            return {"error": "Nepavyko gauti naudotojo balanso"}, 500
+            return {"error": failure_sentence('Nepavyko gauti jūsų piniginės balanso', error, 'graphql',
+                                              SUI_TIMEOUT_S)}, 500
 
         if user_mist >= amount_mist:
             return {"error": f"Jūsų piniginėje jau yra pakankamai {params['symbol']}."}, 400
@@ -675,10 +679,10 @@ class MoveFaucet:
 
         try:
             faucet_mist = client.get_balance(self.FAUCET_ADDRESS, params['coin_type'])
-        except Exception:
+        except Exception as error:
             self.cooldowns.release(cooldown_key)
             logging.exception(f"Failed to read the faucet balance on {network}")
-            return {"error": "Nepavyko gauti čiaupo balanso"}, 500
+            return {"error": failure_sentence('Nepavyko gauti čiaupo balanso', error, 'graphql', SUI_TIMEOUT_S)}, 500
 
         if faucet_mist < amount_mist + params['fee_mist']:
             self.cooldowns.release(cooldown_key)
@@ -700,10 +704,10 @@ class MoveFaucet:
                     base64.b64encode(amount_mist.to_bytes(8, 'little')).decode(),
                 )
                 digest = client.execute(tx_bcs, self._sign_transaction(tx_bcs))
-        except Exception:
+        except Exception as error:
             logging.exception(f"Failed to broadcast {network} payout")
             self.cooldowns.release(cooldown_key)
-            return {"error": "Nepavyko išsiųsti transakcijos. Bandykite dar kartą."}, 500
+            return {"error": failure_sentence('Nepavyko išsiųsti transakcijos', error, 'graphql', SUI_TIMEOUT_S)}, 500
 
         # Success — the cooldown slot claimed above stays, and the
         # cached balance is dropped so the page shows the payout on

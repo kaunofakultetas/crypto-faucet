@@ -16,8 +16,8 @@
 //  to the chain's explorer (plain text without a usable one),
 //  the cleared field, the balance refetched — and every
 //  refusal (the cooldown, the empty faucet, the node's
-//  too-long mempool chain, a bad address, a 500's hidden
-//  details, a 200 carrying an error, a 200 that names no
+//  too-long mempool chain, a bad address, a 500's extra
+//  fields, a 200 carrying an error, a 200 that names no
 //  transaction, a bare 429, a proxy's page, a dropped
 //  connection — the page's own sentence with the reason after
 //  it where the backend gave none); the return address card
@@ -62,6 +62,20 @@ const LEGACY_P2SH = '2N3oefVeg6stiTb5Kh3ozCSkaqmx91FDbsm';
 
 // The txid every default payout answers with
 const TXID = f.utxoPayout().transaction_id;
+
+// The page's own sentences for a failed read; the reason
+// follows them when the backend sent no sentence of its own
+const FAUCET_FAILED = 'Nepavyko gauti čiaupo informacijos.';
+const NETWORKS_FAILED = 'Nepavyko gauti tinklų sąrašo.';
+const MALFORMED = 'Serveris atsakė netinkamo formato duomenimis.';
+
+// The backend's own sentence when Electrum did not answer its
+// balance read
+const ELECTRUM_SILENT = 'Nepavyko gauti čiaupo balanso: Electrum serveris neatsakė per 15 s.';
+
+// The network list's error card: the failure, closed with a
+// full stop when it lacks one, then the next step
+const networksCard = (failure) => `${failure.endsWith('.') ? failure : `${failure}.`} Perkraukite puslapį.`;
 
 
 
@@ -248,11 +262,10 @@ describe('The faucet card', () => {
   });
 
 
-  it("says the faucet info could not be read — in its own words, not the backend's — and keeps the button disabled", async () => {
-    given.error('get', '/api/utxo/:network/faucet-balance', 'Electrum serveris nepasiekiamas', 500);
+  it("says what went wrong — the backend's own sentence — and keeps the button disabled", async () => {
+    given.error('get', '/api/utxo/:network/faucet-balance', ELECTRUM_SILENT, 500);
     const { user } = renderUtxo();
-    expect(await screen.findByRole('alert')).toHaveTextContent(/^Nepavyko gauti čiaupo informacijos$/);
-    expect(screen.queryByText('Electrum serveris nepasiekiamas')).toBeNull();
+    expect((await screen.findByRole('alert')).textContent).toBe(ELECTRUM_SILENT);
     await user.click(addressField());
     await user.paste(f.JONAS);
     expect(screen.getByRole('button', { name: 'Gauti tBTC4' })).toBeDisabled();
@@ -362,10 +375,10 @@ describe('The balance repoll', () => {
       { body: f.utxoBalance() },
     ]);
     renderUtxo();
-    expect(await screen.findByText('Nepavyko gauti čiaupo informacijos')).toBeInTheDocument();
+    expect(await screen.findByText('Vidinė serverio klaida')).toBeInTheDocument();
     await advance(5000);
     expect(await screen.findByText('1250.605 tBTC4')).toBeInTheDocument();
-    expect(screen.queryByText('Nepavyko gauti čiaupo informacijos')).toBeNull();
+    expect(screen.queryByText('Vidinė serverio klaida')).toBeNull();
     expect(screen.getByRole('link', { name: 'Transakcijų grafikas' })).toBeInTheDocument();
   });
 });
@@ -627,7 +640,7 @@ describe('Refusals', () => {
   });
 
 
-  it('shows the curated sentence of a 500, never its debugging details', async () => {
+  it('shows only the sentence of a 500, never another field it carries', async () => {
     given.json('get', '/api/utxo/:network/request-btc', { error: 'Nepavyko išsiųsti transakcijos. Bandykite dar kartą.', details: 'electrum timeout at 10.0.0.5:50001' }, { status: 500 });
     const { user } = renderUtxo();
     await balancesLoaded();
@@ -846,10 +859,10 @@ describe('Routes, unknown networks and a missing network list', () => {
   });
 
 
-  it('says the network list could not be read instead of showing a page', async () => {
+  it('says why the network list could not be read instead of showing a page', async () => {
     given.error('get', '/api/utxo/networks', 'Vidinė serverio klaida', 500);
     renderUtxo();
-    expect(await screen.findByText('Nepavyko gauti tinklų sąrašo. Perkraukite puslapį.')).toBeInTheDocument();
+    expect(await screen.findByText('Vidinė serverio klaida. Perkraukite puslapį.')).toBeInTheDocument();
     expect(screen.queryByRole('heading', { level: 1 })).toBeNull();
     expect(screen.queryByRole('textbox')).toBeNull();
   });
@@ -875,7 +888,7 @@ describe('Routes, unknown networks and a missing network list', () => {
     answer();
     const calls = given.capture('get', '/api/utxo/:network/faucet-balance', f.utxoBalance());
     renderUtxo();
-    expect(await screen.findByText('Nepavyko gauti tinklų sąrašo. Perkraukite puslapį.')).toBeInTheDocument();
+    expect(await screen.findByText(networksCard(`${NETWORKS_FAILED} ${MALFORMED}`))).toBeInTheDocument();
     expect(screen.queryByRole('heading', { level: 1, name: "Bitcoin faucet'as" })).toBeNull();
     expect(screen.queryByRole('textbox', { name: 'Jūsų BTC adresas' })).toBeNull();
     expect(calls).toHaveLength(0);
@@ -920,7 +933,7 @@ describeEndpointContract({
   fixture: f.utxoNetworks,
   render: () => renderUtxo(),
   loaded: async () => { await screen.findByRole('heading', { level: 1, name: "Bitcoin Testnet4 faucet'as" }); },
-  failed: async () => { await screen.findByText('Nepavyko gauti tinklų sąrašo. Perkraukite puslapį.'); },
+  failed: async (says) => { await screen.findByText(networksCard(says(NETWORKS_FAILED))); },
   loading: () => screen.getByRole('heading', { level: 1, name: "Bitcoin faucet'as" }),
 });
 
@@ -931,7 +944,7 @@ describeEndpointContract({
   render: () => renderUtxo(),
   chrome: () => screen.getByRole('heading', { level: 1, name: "Bitcoin Testnet4 faucet'as" }),
   loaded: async () => { await screen.findByText('1250.605 tBTC4'); },
-  failed: async () => { expect(await screen.findByRole('alert')).toHaveTextContent(/^Nepavyko gauti čiaupo informacijos$/); },
+  failed: async (says) => { expect((await screen.findByRole('alert')).textContent).toBe(says(FAUCET_FAILED)); },
   // MUI's Skeleton has no role — its class is the only handle
   loading: () => document.querySelector('.MuiSkeleton-root'),
 });

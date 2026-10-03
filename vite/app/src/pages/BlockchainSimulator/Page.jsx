@@ -11,7 +11,10 @@
 //  taken on trust: it is re-linked and re-hashed on arrival,
 //  like a chain the student typed, so a block edited in the
 //  database after it was mined shows as broken, and so does
-//  every block after it.
+//  every block after it. A load that fails says why — the
+//  backend's own sentence, the request's reason, an answer
+//  that is no chain or an empty one — and so does a copy the
+//  browser would not make.
 //
 //  The hash preimage is load-bearing: calculateHash hashes
 //  the previous hash, the nonce and the transactions joined
@@ -35,6 +38,7 @@
 //  Split into (root component last):
 //
 //    TRIES                       — the tries counter's noun
+//    EXAMPLE_FAILED              — a failed load's own sentence
 //    LITHUANIAN_NAMES            — cast for the transactions
 //    randomName                  — random cast member
 //    generateCoinbaseTransaction — a block's reward line
@@ -66,11 +70,18 @@ import { GiMining } from "react-icons/gi";
 import AddCircleOutlinedIcon from '@mui/icons-material/AddCircleOutlined';
 
 import { pluralForm } from '@/utils/plural';
+import { MalformedAnswerError, requestErrorText, withNextStep } from '@/utils/requestError';
+import { clipboardFailure } from '@/utils/clipboardError';
 
 
 // The pickaxe's count noun in its Lithuanian forms, for the
 // plural categories utils/plural.js sorts a count into
 const TRIES = { one: 'bandymas', few: 'bandymai', other: 'bandymų' };
+
+// What a failed load of the example chain says when the
+// backend gave no sentence of its own — requestErrorText adds
+// the reason
+const EXAMPLE_FAILED = 'Nepavyko užkrauti pavyzdinės blokų grandinės.';
 
 
 // Cast of characters for the generated transactions — sender
@@ -180,9 +191,9 @@ const createFirstBlock = (genesisBlock) => {
 // that block and every later one; the mining of one block,
 // with the running search's block and tries (nothing while
 // idle) and its stop; adding an unmined block; and loading
-// the example chain, with that request's progress and its
-// failure — a failed load leaves the student's chain as it
-// was.
+// the example chain, with that request's progress and the
+// error it failed with — a failed load leaves the student's
+// chain as it was.
 //
 // Used by:
 //   - BlockchainSimulator (below)
@@ -321,21 +332,25 @@ function useBlockchain() {
   // the backend. A mutation, not a query: the student decides
   // when their edits are thrown away, and on failure the
   // current chain stays untouched while the control panel
-  // shows the error. The answer is checked before it replaces
-  // anything — an emptied table (dbgate) or a wrong shape is a
-  // failure, not a chain of nothing. A chain that passes is
-  // still not shown as stored: it is re-linked and re-hashed
-  // from the genesis on, the same ripple an edit runs, so a
-  // block whose text was changed in dbgate after it was mined
-  // — and every block after it — shows as broken instead of
-  // keeping its old, valid-looking hash.
+  // says what went wrong. The answer is checked before it
+  // replaces anything — an emptied table (dbgate) or a wrong
+  // shape is a failure, not a chain of nothing, and each is
+  // said as what it is. A chain that passes is still not
+  // shown as stored: it is re-linked and re-hashed from the
+  // genesis on, the same ripple an edit runs, so a block whose
+  // text was changed in dbgate after it was mined — and every
+  // block after it — shows as broken instead of keeping its
+  // old, valid-looking hash.
   const exampleChain = useMutation({
     mutationFn: async () => {
       const { data } = await axios.get('/api/get-example-blockchain');
-      const wellFormed = Array.isArray(data) && data.length > 0 && data.every(
+      if (Array.isArray(data) && data.length === 0) {
+        throw new Error('Nepavyko užkrauti pavyzdinės blokų grandinės: serverio duomenų bazėje nėra nė vieno bloko.');
+      }
+      const wellFormed = Array.isArray(data) && data.every(
         (block) => typeof block?.hash === 'string' && typeof block?.previousHash === 'string' && typeof block?.data === 'string',
       );
-      if (!wellFormed) throw new Error('Malformed example chain');
+      if (!wellFormed) throw new MalformedAnswerError();
       return data;
     },
     onSuccess: (data) => setBlocks(recalculateFromIndex(data, 0)),
@@ -354,7 +369,7 @@ function useBlockchain() {
     addBlock,
     loadExampleBlockchain: exampleChain.mutate,
     exampleLoading: exampleChain.isPending,
-    exampleError: exampleChain.isError,
+    exampleError: exampleChain.error,
   };
 }
 
@@ -445,9 +460,9 @@ function CopiedToast({ copiedMessage }) {
 // The difficulty selector (how many leading zeros a hash
 // needs) plus the tool buttons: load the pre-mined example
 // chain from the backend (disabled while the request runs,
-// with the failure reported right under it), or open the
-// external SHA256 tool students use to verify copied block
-// text.
+// with what went wrong said right under it, and the retry the
+// button offers), or open the external SHA256 tool students
+// use to verify copied block text.
 //
 // Used by:
 //   - BlockchainSimulator (below)
@@ -496,7 +511,7 @@ function ControlPanel({ difficulty, onDifficultyChange, onLoadExample, exampleLo
 
       {exampleError && (
         <Typography color="error" sx={{ marginTop: 2 }}>
-          Nepavyko užkrauti pavyzdinės blokų grandinės. Bandykite dar kartą.
+          {withNextStep(requestErrorText(exampleError, EXAMPLE_FAILED), 'Bandykite dar kartą.')}
         </Typography>
       )}
 
@@ -522,7 +537,8 @@ function ControlPanel({ difficulty, onDifficultyChange, onLoadExample, exampleLo
 // Green while valid, red once broken. Owns the copy flow
 // end-to-end: puts the exact hash preimage on the clipboard
 // and flashes its own "Nukopijuota!" toast at the cursor —
-// only when the copy actually happened.
+// only when the copy actually happened; a copy that did not
+// happen says why under the buttons until the next try.
 //
 // Used by:
 //   - BlockchainSimulator (below) — one per block
@@ -531,6 +547,7 @@ function ControlPanel({ difficulty, onDifficultyChange, onLoadExample, exampleLo
 function BlockCard({ block, index, isValid, mining, miningElsewhere, onNonceChange, onDataChange, onMine, onStop }) {
 
   const [copiedMessage, setCopiedMessage] = useState({ visible: false, x: 0, y: 0 });
+  const [copyFailure, setCopyFailure] = useState(null);
 
 
   // Copies the block's exact hash preimage (what calculateHash
@@ -539,16 +556,18 @@ function BlockCard({ block, index, isValid, mining, miningElsewhere, onNonceChan
   // The clipboard API is missing on a plain-http dev host and
   // rejects on denied permission — neither may claim success,
   // or the student verifies a stale clipboard in the SHA256
-  // tool and blames the simulator.
+  // tool and blames the simulator; the card says which it was.
   const copyBlockData = async (event) => {
     const { clientX, clientY } = event;
     try {
       await navigator.clipboard.writeText(`${block.previousHash}\n${block.nonce}\n${block.data}`);
     } catch (error) {
       console.warn('Copy failed:', error);
+      setCopyFailure(`Nepavyko nukopijuoti bloko teksto: ${clipboardFailure(error)}.`);
       return;
     }
 
+    setCopyFailure(null);
     setCopiedMessage({
       visible: true,
       x: clientX + window.scrollX,
@@ -630,6 +649,12 @@ function BlockCard({ block, index, isValid, mining, miningElsewhere, onNonceChan
               : <GiMining size={35} aria-hidden="true" />}
           </Button>
         </div>
+
+        {copyFailure && (
+          <Typography color="error" variant="body2" sx={{ marginTop: 2 }}>
+            {copyFailure}
+          </Typography>
+        )}
 
       </div>
     </RoundedBox>

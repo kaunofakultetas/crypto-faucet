@@ -6,8 +6,9 @@
 //  lines (the green "Patvirtinta · blokas #N" chip and the
 //  local time, the amber mempool chip, the grey "Būsena
 //  nežinoma" with its reason on hover, the full txid and its
-//  copy button — "Nukopijuota!" and a check for 1.5 s, or
-//  "Nepavyko nukopijuoti" without a clipboard — and the
+//  copy button — "Nukopijuota!" and a check for 1.5 s, or why
+//  it could not copy: no clipboard outside https, a write the
+//  browser refused, else the browser's own words — and the
 //  "Siuntėjas" line, several people named as a PayJoin /
 //  CoinJoin, none for a coinbase); the input and output cards
 //  (who controls the address — a name, "Nežinomas valdytojas"
@@ -21,20 +22,22 @@
 //  outputs = fee with its rate per vbyte, or the sentence for
 //  a coinbase and for an unknown input; walking the chain
 //  (links inside the day, a transaction past the day fetched
-//  with its names, a 404's "Transakcija nerasta — serveris
-//  jos negrąžino.", any other failure — an answer holding no
-//  transaction included, never "Kraunama…" for ever — a
-//  malformed one showing what it can, Atgal back through
-//  every step, a waiting transaction turning confirmed in
-//  place, a fresh start on every opening);
-//  naming an address
-//  (the pencil, Enter or the check saving through the backend
-//  and the graph asking again, trimming and the 64-character
-//  cap, an empty name clearing it, a refusal keeping the
-//  editor open with "Nepavyko išsaugoti — bandykite dar
-//  kartą", Esc and Atšaukti dropping the edit, the wait while
-//  saving, one row at a time, a link dropping the edit, a
-//  fetched transaction's names refreshed); and leaving with an
+//  with its names, every failure said word for word — the
+//  backend's sentence, a 404's in the node's words included,
+//  else "Nepavyko gauti transakcijos." with the reason, an
+//  answer holding no transaction as one in a shape the page
+//  cannot use, never "Kraunama…" for ever — a malformed one
+//  showing what it can, Atgal back through every step, a
+//  waiting transaction turning confirmed in place, a fresh
+//  start on every opening); naming an address (the pencil,
+//  Enter or the check saving through the backend and the
+//  graph asking again, trimming and the 64-character cap, an
+//  empty name clearing it, a name not stored keeping the
+//  editor open with the reason — the backend's refusal, or
+//  "Nepavyko išsaugoti vardo." with why the request failed —
+//  Esc and Atšaukti dropping the edit, the wait while saving,
+//  one row at a time, a link dropping the edit, a fetched
+//  transaction's names refreshed); and leaving with an
 //  unsaved name (the × and the backdrop — and Esc outside the
 //  field — asking "Atmesti pakeitimus?", an unchanged name
 //  closing at once, the footer's "Uždaryti" closing at once).
@@ -79,7 +82,17 @@ beforeEach(() => {
 // name deletes), the graph and the transaction endpoint read
 // it — and it captures all three. closeButtons are the
 // header's × and the footer's button, both named "Uždaryti".
+// NOT_FOUND and UNREACHABLE are the backend's sentences for a
+// transaction the node does not know (the default handler's
+// 404) and for an Electrum server that did not answer;
+// MALFORMED is the dialog's own for an answer that holds no
+// transaction.
 // -----------------------------------------------------------
+
+const NOT_FOUND = 'Transakcija nerasta: tinklo mazgas jos neturi nei blokuose, nei tinklo eilėje '
+  + '(No such mempool or blockchain transaction).';
+const UNREACHABLE = 'Nepavyko gauti transakcijos: Electrum serveris neatsakė per 15 s.';
+const MALFORMED = 'Nepavyko gauti transakcijos. Serveris atsakė netinkamo formato duomenimis.';
 
 function renderDialog(tx, { names = f.utxoNames, known = true, renameAddress = vi.fn(async () => true), onClose = vi.fn() } = {}) {
   const rendered = renderPage(
@@ -261,24 +274,36 @@ describe('Status, txid and sender', () => {
   });
 
 
-  it('says "Nepavyko nukopijuoti" when the clipboard refuses', async () => {
+  it("says why in the browser's own words when the clipboard fails for another reason", async () => {
     const { user } = renderGraph();
     const dialog = await openTransaction(user, T.T2);
     vi.stubGlobal('navigator', { userAgent: 'test', language: 'lt', clipboard: { writeText: vi.fn(async () => { throw new Error('denied'); }) } });
     const copy = within(dialog).getByRole('button', { name: 'Kopijuoti transakcijos ID' });
     await user.click(copy);
-    expect(await screen.findByRole('tooltip')).toHaveTextContent('Nepavyko nukopijuoti');
+    expect((await screen.findByRole('tooltip')).textContent).toBe('Nepavyko nukopijuoti: naršyklei nepavyko įrašyti į iškarpinę (Error: denied)');
     expect(within(copy).getByTestId('ContentCopyIcon')).toBeInTheDocument();
   });
 
 
-  it('says "Nepavyko nukopijuoti" where there is no clipboard at all (no secure context)', async () => {
+  it('says the browser refused the write when it answers NotAllowedError', async () => {
+    const { user } = renderGraph();
+    const dialog = await openTransaction(user, T.T2);
+    const refuse = vi.fn(async () => { throw new DOMException('Write permission denied.', 'NotAllowedError'); });
+    vi.stubGlobal('navigator', { userAgent: 'test', language: 'lt', clipboard: { writeText: refuse } });
+    await user.click(within(dialog).getByRole('button', { name: 'Kopijuoti transakcijos ID' }));
+    expect((await screen.findByRole('tooltip')).textContent)
+      .toBe('Nepavyko nukopijuoti: naršyklė neleido įrašyti į iškarpinę (NotAllowedError: Write permission denied.)');
+  });
+
+
+  it('says the clipboard needs https where there is no clipboard at all (no secure context)', async () => {
     const { user } = renderGraph();
     const dialog = await openTransaction(user, T.T1);
     vi.stubGlobal('navigator', { userAgent: 'test', language: 'lt' });
     const card = cardsIn(dialog, 'Įvestys')[0];
     await user.click(within(card).getByRole('button', { name: 'Kopijuoti adresą' }));
-    expect(await screen.findByRole('tooltip')).toHaveTextContent('Nepavyko nukopijuoti');
+    expect((await screen.findByRole('tooltip')).textContent)
+      .toBe('Nepavyko nukopijuoti: naršyklė šiame puslapyje iškarpinės nepasiekia — ji veikia tik saugiu (HTTPS) ryšiu');
   });
 
 
@@ -592,34 +617,47 @@ describe('Walking the chain', () => {
   });
 
 
-  it('says "Transakcija nerasta — serveris jos negrąžino." for a transaction the backend does not have, and Atgal still walks back', async () => {
+  it("says the backend's 404 in the node's words for a transaction it does not know, and Atgal still walks back", async () => {
     const { user } = renderGraph();
     const dialog = await openTransaction(user, T.T1);
     await user.click(within(dialog).getByRole('button', { name: 'a0a0a0…a0a0:0' }));
     await user.click(await within(dialog).findByRole('button', { name: '0f0f0f…0f0f:0' }));
 
-    expect(await within(dialog).findByText('Transakcija nerasta — serveris jos negrąžino.')).toBeInTheDocument();
+    expect(await within(dialog).findByText(NOT_FOUND)).toBeInTheDocument();
     await user.click(within(dialog).getByRole('button', { name: 'Atgal' }));
     expect(await within(dialog).findByText(T.T0)).toBeInTheDocument();
   });
 
 
-  it('says "Nepavyko gauti transakcijos — bandykite dar kartą vėliau." for any other failure', async () => {
-    given.error('get', TRANSACTION, 'Vidinė serverio klaida', 500);
+  it("says the backend's sentence word for word for any other failure it explains — an Electrum server that did not answer", async () => {
+    given.error('get', TRANSACTION, UNREACHABLE, 503);
     const { user } = renderGraph();
     const dialog = await openTransaction(user, T.T1);
     await user.click(within(dialog).getByRole('button', { name: 'a0a0a0…a0a0:0' }));
-    expect(await within(dialog).findByText('Nepavyko gauti transakcijos — bandykite dar kartą vėliau.')).toBeInTheDocument();
+    expect(await within(dialog).findByText(UNREACHABLE)).toBeInTheDocument();
   });
 
 
-  it('says the transaction could not be had when a 200 answer holds none', async () => {
+  it('says "Nepavyko gauti transakcijos." and why when the failure carries no sentence — a dropped connection, a proxy\'s page', async () => {
+    const failures = [
+      [() => given.networkError('get', TRANSACTION), 'Nepavyko gauti transakcijos. Patikrinkite interneto ryšį.'],
+      [() => given.html('get', TRANSACTION), 'Nepavyko gauti transakcijos. Serveris grąžino klaidą (502).'],
+    ];
+    for (const [answer, sentence] of failures) {
+      answer();
+      const { unmount } = renderDialog(lostTx(), { known: false });
+      const dialog = await findDialog();
+      expect(await within(dialog).findByText(sentence)).toBeInTheDocument();
+      unmount();
+    }
+  });
+
+
+  it('says the server answered in a shape the page cannot use when a 200 answer holds no transaction', async () => {
     given.json('get', TRANSACTION, {});
     renderDialog(lostTx(), { known: false });
     const dialog = await findDialog();
-    expect(await within(dialog).findByText(
-      'Nepavyko gauti transakcijos — bandykite dar kartą vėliau.', {}, { timeout: 1000 },
-    )).toBeInTheDocument();
+    expect(await within(dialog).findByText(MALFORMED, {}, { timeout: 1000 })).toBeInTheDocument();
     expect(within(dialog).queryByText('Kraunama…')).toBeNull();
   });
 
@@ -636,7 +674,7 @@ describe('Walking the chain', () => {
       answer();
       const { unmount } = renderDialog(lostTx(), { known: false });
       const dialog = await findDialog();
-      expect(await within(dialog).findByText('Nepavyko gauti transakcijos — bandykite dar kartą vėliau.')).toBeInTheDocument();
+      expect(await within(dialog).findByText(MALFORMED)).toBeInTheDocument();
       expect(within(dialog).queryByText('Kraunama…')).toBeNull();
       unmount();
     }
@@ -781,16 +819,16 @@ describe('Naming an address', () => {
   });
 
 
-  it('keeps the editor open with "Nepavyko išsaugoti — bandykite dar kartą" when the backend does not take the name', async () => {
+  it("keeps the editor open with the backend's refusal, word for word, when it does not take the name", async () => {
     const graph = answerGraph();
-    given.error('get', RENAME, 'Vidinė serverio klaida', 500);
+    given.error('get', RENAME, 'Neteisingas adresas', 400);
     const { user } = renderGraph();
     const dialog = await openTransaction(user, T.T5);
     const field = await startEditing(user, cardsIn(dialog, 'Išvestys')[0]);
     const asked = graph.length;
     await user.type(field, 'Hubas{Enter}');
 
-    expect(await within(dialog).findByText('Nepavyko išsaugoti — bandykite dar kartą')).toBeInTheDocument();
+    expect(await within(dialog).findByText('Neteisingas adresas')).toBeInTheDocument();
     expect(field).toHaveValue('Hubas');
     expect(field).toBeEnabled();
     expect(field).toHaveAttribute('aria-invalid', 'true');
@@ -799,7 +837,19 @@ describe('Naming an address', () => {
 
     // Typing on clears the refusal
     await user.type(field, '!');
-    expect(within(dialog).queryByText('Nepavyko išsaugoti — bandykite dar kartą')).toBeNull();
+    expect(within(dialog).queryByText('Neteisingas adresas')).toBeNull();
+  });
+
+
+  it('says "Nepavyko išsaugoti vardo." and why when the request failed without the backend\'s words', async () => {
+    given.networkError('get', RENAME);
+    const { user } = renderGraph();
+    const dialog = await openTransaction(user, T.T5);
+    const field = await startEditing(user, cardsIn(dialog, 'Išvestys')[0]);
+    await user.type(field, 'Hubas{Enter}');
+
+    expect(await within(dialog).findByText('Nepavyko išsaugoti vardo. Patikrinkite interneto ryšį.')).toBeInTheDocument();
+    expect(field).toBeEnabled();
   });
 
 

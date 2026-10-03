@@ -52,6 +52,7 @@ import theme from '@/theme';
 import Navbar, { FAUCET_TYPES, useFaucetCatalogs, faucetTargetFor } from '@/components/Navbar';
 import Footer from '@/components/Footer';
 import ErrorBoundary from '@/components/ErrorBoundary';
+import { requestErrorText } from '@/utils/requestError';
 
 // Pages
 import FaucetEVM from '@/pages/Faucet_EVM/Page';
@@ -92,7 +93,7 @@ import NotFoundPage from '@/pages/NotFound/Page';
 
 function DynamicDefaultRedirect() {
 
-  const { loading, failed, refetch, families } = useFaucetCatalogs();
+  const { loading, failed, error, refetch, families } = useFaucetCatalogs();
 
   // Decide on data, never on an unfinished fetch
   if (loading) return null;
@@ -111,7 +112,7 @@ function DynamicDefaultRedirect() {
     if (target) return <Navigate to={`/faucet/${type.key}/${target}`} replace />;
   }
 
-  if (failed) return <CatalogUnavailable onRetry={refetch} />;
+  if (failed) return <CatalogUnavailable error={error} onRetry={refetch} />;
 
   return null;
 }
@@ -127,19 +128,20 @@ function DynamicDefaultRedirect() {
 // -----------------------------------------------------------
 //
 // "/" when the catalog request failed and nothing is cached:
-// a blank grey page looked like "every family disabled". The
-// teaching pages work without the backend, so they are
-// offered alongside the retry.
+// a blank grey page looked like "every family disabled". It
+// says what went wrong — no connection, or the error the
+// server answered with — and offers the teaching pages, which
+// work without the backend, alongside the retry.
 //
 // Used by:
 //   - DynamicDefaultRedirect (above)
 // -----------------------------------------------------------
 
-function CatalogUnavailable({ onRetry }) {
+function CatalogUnavailable({ error, onRetry }) {
   return (
     <Box className="p-4">
       <div className="card-surface mx-auto my-4 w-full min-w-[320px] max-w-[640px] p-4 text-center">
-        <p className="mb-3 text-red-600">Faucet&apos;ų sąrašas nepasiekiamas. Serveris gali būti perkraunamas.</p>
+        <p className="mb-3 text-red-600">{requestErrorText(error, "Faucet'ų sąrašas nepasiekiamas.")}</p>
         <div className="flex flex-wrap justify-center gap-2">
           <Button variant="contained" onClick={() => onRetry()}>Bandyti dar kartą</Button>
           <Button component={Link} to="/sha256" variant="outlined">Blokų grandinės simuliatorius</Button>

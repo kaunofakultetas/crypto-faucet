@@ -13,6 +13,9 @@
 #    - the balance cache is dropped after a payout
 #    - every refusal maps to the right HTTP status
 #      (400 / 403 / 429 / 500 / 503)
+#    - a failure on the chain's side names its cause in the
+#      student's answer — the server's, the node's, the
+#      contract's — and never a secret
 #
 #  Everything is offline: Electrum, the Web3 transport and the
 #  token contract are faked (tests/helpers.py), but the
@@ -22,6 +25,7 @@
 
 
 import copy
+import socket
 import logging
 import unittest
 
@@ -31,7 +35,8 @@ from embit import hashes as embit_hashes
 from embit import script as embit_script
 from embit.transaction import Transaction
 
-from web3.exceptions import ContractLogicError
+import requests
+from web3.exceptions import ContractCustomError, ContractLogicError, Web3RPCError
 
 from tests import helpers
 
@@ -66,6 +71,10 @@ class UtxoRequestFlowTests(unittest.TestCase):
 
     # Enough to cover the 0.01 BTC chunk plus fees
     UTXOS = [{'tx_hash': 'aa' * 32, 'tx_pos': 0, 'value': 2_000_000}]
+
+    # The fee the balance gate adds to the chunk: one SegWit input
+    # and two outputs at btc4's 10 sat/vB
+    FEE_1_IN_2_OUT = (91 + 2 * 31 + 10) * 10
 
     # A node's broadcast rejections, as the Electrum client raises
     # them (ElectrumX relays the node's reason inside the message)
@@ -152,14 +161,16 @@ class UtxoRequestFlowTests(unittest.TestCase):
         self.assertFalse(self.claimed())
         self.assertFalse(self.faucet._recently_spent.get('btc4'))
 
-    def test_other_node_rejections_keep_the_generic_error(self):
-        # Only that one reason means "wait for a block"
+    def test_other_node_rejections_are_named_not_called_a_wait(self):
+        # Only that one reason means "wait for a block" — any other
+        # is translated, with the node's own words in parentheses
         self.client.request = lambda method, params: (_ for _ in ()).throw(RuntimeError(self.MISSING_INPUTS))
 
         data, status = self.faucet.request_crypto('btc4', self.recipient)
 
         self.assertEqual(status, 500)
-        self.assertNotIn('naujas blokas', data['error'])
+        self.assertEqual(data['error'], 'Nepavyko išsiųsti transakcijos: čiaupo monetos, kurias bandyta išleisti, '
+                                        'jau išleistos arba tinklas jų dar nemato (bad-txns-inputs-missingorspent).')
         self.assertFalse(self.claimed())
 
     def test_empty_faucet_is_503_and_releases_the_cooldown(self):
@@ -234,6 +245,30 @@ class UtxoRequestFlowTests(unittest.TestCase):
 
         self.assertIn('electrum down', '\n'.join(captured.output))
 
+    def test_an_unreachable_electrum_server_is_named(self):
+        # Told by what the server did, never by its address
+        refused = ConnectionRefusedError(111, 'Connection refused')
+        self.client.request = lambda method, params: (_ for _ in ()).throw(refused)
+
+        data, status = self.faucet.request_crypto('btc4', self.recipient)
+
+        self.assertEqual(status, 500)
+        self.assertEqual(data, {'error': 'Nepavyko išsiųsti transakcijos: nepavyko prisijungti prie Electrum serverio.'})
+        self.assertFalse(self.claimed())
+
+    def test_a_failed_balance_read_in_a_claim_is_named_and_releases_the_slot(self):
+        def silent(scripthash):
+            raise socket.timeout('timed out')
+
+        self.client.get_balance = silent
+
+        data, status = self.faucet.request_crypto('btc4', self.recipient)
+
+        self.assertEqual(status, 500)
+        self.assertEqual(data['error'], 'Nepavyko gauti čiaupo balanso: Electrum serveris neatsakė per 15 s.')
+        self.assertNotIn('raw', self.captured)
+        self.assertFalse(self.claimed())
+
     def test_chunk_size_converts_to_satoshis_by_rounding(self):
         # 0.29 * 1e8 is 28999999.999999996 in binary — the wire must
         # carry the 0.29 the message promises
@@ -276,13 +311,41 @@ class UtxoRequestFlowTests(unittest.TestCase):
         self.assertIn('Čiaupas nebeturi', data['error'])
         self.assertFalse(self.claimed())
 
-    def test_a_funded_balance_with_nothing_spendable_is_the_friendly_503(self):
+    def test_a_balance_exactly_at_chunk_plus_fee_pays(self):
+        # The gate refuses only BELOW the chunk plus a 1-in/2-out
+        # fee — at exactly that much, the last student still gets
+        # paid
+        balance = 0.01 + self.FEE_1_IN_2_OUT / 1e8
+        self.client.get_balance = lambda scripthash: {'confirmed': balance, 'unconfirmed': 0.0, 'total': balance}
+
+        data, status = self.faucet.request_crypto('btc4', self.recipient)
+
+        self.assertEqual(status, 200, data)
+
+    def test_a_balance_one_satoshi_short_is_refused_before_any_coin_is_picked(self):
+        # The confirmed balance decides, whatever the server lists:
+        # a spendable coin is there, but the gate still says no
+        balance = 0.01 + (self.FEE_1_IN_2_OUT - 1) / 1e8
+        self.client.get_balance = lambda scripthash: {'confirmed': balance, 'unconfirmed': 0.0, 'total': balance}
+
+        data, status = self.faucet.request_crypto('btc4', self.recipient)
+
+        self.assertEqual(status, 503)
+        self.assertNotIn('raw', self.captured)
+        self.assertFalse(self.claimed())
+
+    def test_a_funded_balance_with_no_free_coin_is_a_503_saying_so(self):
+        # The confirmed balance is there, but every coin is tied up
+        # in payouts not yet confirmed — not the same as an empty
+        # faucet, and the sentence says which
         helpers.fake_electrum(self.faucet, 'btc4', [])
 
         data, status = self.faucet.request_crypto('btc4', self.recipient)
 
         self.assertEqual(status, 503)
-        self.assertIn('Čiaupas nebeturi', data['error'])
+        self.assertEqual(data['error'], 'Čiaupas šiuo metu neturi laisvų monetų — visos jos panaudotos dar '
+                                        'nepatvirtintose išmokose. Palaukite naujo bloko; jei nepadės, '
+                                        'praneškite dėstytojui.')
         self.assertFalse(self.claimed())
 
     def test_a_just_spent_outpoint_is_not_spent_again_on_the_next_claim(self):
@@ -370,6 +433,14 @@ class EvmRequestFlowTests(unittest.TestCase):
 
         self.assertEqual(status, 400)
         self.assertEqual(eth.probes, 0)
+
+    def test_an_unreachable_rpc_is_named_in_the_refusal(self):
+        helpers.unreachable_web3(self.faucet, 'testchain')
+        data, status = self.claim()
+
+        self.assertEqual(status, 503)
+        self.assertEqual(data['error'], 'Tinklas nepasiekiamas: nepavyko prisijungti prie tinklo RPC serverio. '
+                                        'Bandykite vėliau.')
 
     def test_unreachable_chain_id_probe_is_not_repeated_per_claim(self):
         # An outage costs one probe (and its timeout), not one per
@@ -491,10 +562,50 @@ class EvmRequestFlowTests(unittest.TestCase):
         self.fake()
         self.assertEqual(self.claim()[1], 200)
 
-    def test_broadcast_failure_never_leaks_the_raw_error(self):
-        self.fake(broadcast_error='insufficient funds for gas * price + value')
+    def test_a_broadcast_the_node_refuses_names_its_reason(self):
+        # The node's reason translated, its own words in parentheses
+        # — what the lecturer reads off the student's screen
+        refusal = Web3RPCError('refused', rpc_response={'error': {
+            'code': -32000, 'message': 'insufficient funds for gas * price + value'}})
+        self.fake(broadcast_error=refusal)
+        data, status = self.claim()
+
+        self.assertEqual(status, 500)
+        self.assertEqual(data['error'], 'Nepavyko išsiųsti transakcijos: čiaupo piniginėje nepakanka lėšų sumai ir '
+                                        'tinklo mokesčiui padengti (insufficient funds for gas * price + value).')
+        self.assertFalse(self.claimed())
+
+    def test_a_failure_never_shows_the_rpc_secret(self):
+        # requests puts the full RPC URL into its errors — the value
+        # <TEST_RPC_SECRET> resolved to must never reach the student
+        self.fake(broadcast_error=RuntimeError('POST http://127.0.0.1:9/sekretas-iš-env failed'))
         data, _ = self.claim()
-        self.assertNotIn('gas * price', str(data))
+
+        self.assertNotIn('sekretas-iš-env', data['error'])
+        self.assertIn('<redacted>', data['error'])
+
+    def test_a_failed_faucet_balance_read_releases_the_cooldown(self):
+        # The slot is claimed before the faucet reads its own
+        # balance — one RPC hiccup there must not lock the student
+        # out for the whole cooldown
+        eth = self.fake(balance_errors={self.faucet.FAUCET_ADDRESS: requests.ConnectionError('refused')})
+        data, status = self.claim()
+
+        self.assertEqual(status, 500)
+        self.assertEqual(data['error'], 'Nepavyko gauti čiaupo balanso: nepavyko prisijungti prie tinklo RPC serverio.')
+        self.assertEqual(eth.sent, [])
+        self.assertFalse(self.claimed())
+
+        self.fake()
+        self.assertEqual(self.claim()[1], 200)
+
+    def test_a_failed_student_balance_read_is_500_without_claiming(self):
+        self.fake(balance_errors={self.address: requests.ReadTimeout('read timed out')})
+        data, status = self.claim()
+
+        self.assertEqual(status, 500)
+        self.assertEqual(data['error'], 'Nepavyko gauti jūsų piniginės balanso: tinklo RPC serveris neatsakė per 10 s.')
+        self.assertFalse(self.claimed())
 
     def test_unsupported_network_is_400(self):
         data, status = self.faucet.request_eth('nosuchnet', self.address, self.signature, self.nonce)
@@ -515,7 +626,8 @@ class EvmRequestFlowTests(unittest.TestCase):
         data, status = self.claim()
 
         self.assertEqual(status, 500)
-        self.assertIn('konfigūracijos', data['error'])
+        self.assertEqual(data['error'], 'Tinklo konfigūracijos klaida: RPC serveris priklauso kitam tinklui '
+                                        '(jo grandinės ID 999, o turi būti 12345). Praneškite dėstytojui.')
         self.assertEqual(eth.sent, [])
         self.assertFalse(self.claimed())
 
@@ -572,6 +684,11 @@ class Erc20RequestFlowTests(unittest.TestCase):
     def claimed(self):
         return ('testchain', 'TST', self.address.lower()) in self.faucet.cooldowns._last_claim
 
+    def word(self, address):
+        # An address as one 32-byte ABI word, the way revert data
+        # carries a custom error's arguments
+        return address.lower().removeprefix('0x').rjust(64, '0')
+
     def test_missing_parameters_are_400_without_touching_the_rpc(self):
         # Same rule as the native flow: local checks before any RPC
         eth = helpers.unreachable_web3(self.evm, 'testchain')
@@ -589,7 +706,24 @@ class Erc20RequestFlowTests(unittest.TestCase):
             data, status = self.claim()
 
         self.assertEqual(status, 503)
-        self.assertIn('Čiaupas nebeturi', data['error'])
+        self.assertEqual(data['error'], 'Nepavyko išsiųsti TST: žetono sutartis atmetė pervedimą, nenurodžiusi '
+                                        'priežasties. Praneškite dėstytojui.')
+        self.assertEqual(contract.transfers, [])
+        self.assertFalse(self.claimed())
+
+    def test_a_token_with_locked_transfers_is_named_not_called_empty(self):
+        # FOLD's answer on Sepolia before its token generation event:
+        # the custom error TransferRestricted(from, to). The faucet
+        # holds the tokens — "the faucet is empty" would be a lie.
+        locked = ContractCustomError('0xcede7487', data='0xcede7487' + self.word(self.evm.FAUCET_ADDRESS)
+                                     + self.word(self.address))
+        self.fake()
+        with helpers.fake_token_contract(self.TOKENS, estimate_error=locked) as contract:
+            data, status = self.claim()
+
+        self.assertEqual(status, 503)
+        self.assertEqual(data['error'], 'Nepavyko išsiųsti TST: žetono sutartis kol kas neleidžia pervedimų '
+                                        '(TransferRestricted). Praneškite dėstytojui.')
         self.assertEqual(contract.transfers, [])
         self.assertFalse(self.claimed())
 
@@ -615,6 +749,26 @@ class Erc20RequestFlowTests(unittest.TestCase):
         self.assertIn('mokesčiams', data['error'])
         self.assertEqual(contract.transfers, [])
         self.assertFalse(self.claimed())
+
+    def test_a_faucet_wallet_one_wei_short_of_the_gas_is_503(self):
+        # The transfer costs its 90 000 gas limit times the gas
+        # price: one wei short of that is "tell the lecturer", at
+        # exactly that much the payout goes out
+        gas_price = 20_000_000_000                          # 20 gwei
+        gas_cost = 90_000 * gas_price
+
+        self.fake(faucet_native_balance=gas_cost - 1, gas_price=gas_price)
+        with helpers.fake_token_contract(self.TOKENS) as contract:
+            data, status = self.claim()
+
+        self.assertEqual(status, 503)
+        self.assertIn('mokesčiams', data['error'])
+        self.assertEqual(contract.transfers, [])
+        self.assertFalse(self.claimed())
+
+        self.fake(faucet_native_balance=gas_cost, gas_price=gas_price)
+        with helpers.fake_token_contract(self.TOKENS):
+            self.assertEqual(self.claim()[1], 200)
 
     def test_happy_path_transfers_the_chunk(self):
         self.fake()
@@ -691,6 +845,40 @@ class Erc20RequestFlowTests(unittest.TestCase):
             data, status = self.claim()
 
         self.assertEqual(status, 500)
+        self.assertFalse(self.claimed())
+
+    def test_a_failed_faucet_token_balance_read_releases_the_cooldown(self):
+        # Claimed first, then the faucet's token balance is read —
+        # a hiccup there must not cost the student their slot
+        self.fake()
+        failing = {self.evm.FAUCET_ADDRESS: requests.ReadTimeout('read timed out')}
+        with helpers.fake_token_contract(self.TOKENS, balance_errors=failing) as contract:
+            data, status = self.claim()
+
+        self.assertEqual(status, 500)
+        self.assertEqual(data['error'], 'Nepavyko gauti čiaupo TST balanso: tinklo RPC serveris neatsakė per 10 s.')
+        self.assertEqual(contract.transfers, [])
+        self.assertFalse(self.claimed())
+
+    def test_a_failed_faucet_gas_balance_read_releases_the_cooldown(self):
+        # The faucet's own native coin is read last, to pay the gas
+        self.fake(balance_errors={self.evm.FAUCET_ADDRESS: requests.ConnectionError('refused')})
+        with helpers.fake_token_contract(self.TOKENS) as contract:
+            data, status = self.claim()
+
+        self.assertEqual(status, 500)
+        self.assertEqual(data['error'], 'Nepavyko gauti čiaupo balanso tinklo mokesčiams: nepavyko prisijungti '
+                                        'prie tinklo RPC serverio.')
+        self.assertEqual(contract.transfers, [])
+        self.assertFalse(self.claimed())
+
+    def test_a_failed_student_balance_read_is_500_without_claiming(self):
+        self.fake(balance_errors={self.address: requests.ReadTimeout('read timed out')})
+        with helpers.fake_token_contract(self.TOKENS):
+            data, status = self.claim()
+
+        self.assertEqual(status, 500)
+        self.assertEqual(data['error'], 'Nepavyko gauti jūsų piniginės balanso: tinklo RPC serveris neatsakė per 10 s.')
         self.assertFalse(self.claimed())
 
     def test_gas_estimate_failure_falls_back_to_a_fixed_limit(self):

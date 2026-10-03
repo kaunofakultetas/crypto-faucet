@@ -54,6 +54,7 @@ import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import CurrencyBitcoinIcon from '@mui/icons-material/CurrencyBitcoin';
 
 import FaucetPicker from './FaucetPicker';
+import { requestErrorText } from '@/utils/requestError';
 
 
 // The white outline every navbar button shares
@@ -187,9 +188,10 @@ export const FAUCET_TYPES = [
 // and never a partial answer to reconcile. Each entry's own
 // itemsOf turns its slice into ready picker items. A fetch
 // that failed with NOTHING cached is reported as `failed`
-// (with refetch to try again) — every family is empty then,
-// but that is an outage, not five disabled families; a
-// failed refresh of a payload already on screen keeps it.
+// (with the error behind it, and refetch to try again) —
+// every family is empty then, but that is an outage, not
+// five disabled families; a failed refresh of a payload
+// already on screen keeps it.
 //
 // The last successful payload is ALSO persisted to
 // localStorage (CATALOG_CACHE_KEY) and used as initialData
@@ -224,7 +226,7 @@ const readCatalogCache = () => {
 
 export function useFaucetCatalogs() {
 
-  const { data, isPending, isError, refetch } = useQuery({
+  const { data, isPending, isError, error, refetch } = useQuery({
     queryKey: ['faucet-catalog'],
     queryFn: async () => {
       const { data: catalog } = await axios.get('/api/faucet/catalog');
@@ -239,6 +241,7 @@ export function useFaucetCatalogs() {
   return {
     loading: isPending,
     failed: isError && !data,
+    error,
     refetch,
     families: Object.fromEntries(FAUCET_TYPES.map((type) => [type.key, {
       items: data?.[type.key] ? type.itemsOf(data[type.key]) : [],
@@ -350,16 +353,22 @@ function FaucetTypeSwitch({ types, faucetType, onChange }) {
 //
 // The catalog request failed and nothing is cached: instead
 // of silently hiding every family (the shape a disabled
-// family has), say so and offer a retry.
+// family has), say so — with the reason, in smaller type —
+// and offer a retry.
 //
 // Used by:
 //   - Navbar (below) — in place of the faucet controls
 // -----------------------------------------------------------
 
-function CatalogFailedNotice({ onRetry }) {
+function CatalogFailedNotice({ error, onRetry }) {
+
+  const reason = requestErrorText(error, '');
+
+
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
       <span className="text-sm font-normal">Faucet&apos;ų sąrašas nepasiekiamas</span>
+      {reason && <span className="text-xs font-normal opacity-90">{reason}</span>}
       <Button onClick={() => onRetry()} variant="outlined" size="small" sx={{ ...WHITE_OUTLINED_SX, textTransform: 'none' }}>
         Bandyti dar kartą
       </Button>
@@ -489,7 +498,7 @@ export default function Navbar() {
   const location = useLocation();
   const navigate = useNavigate();
 
-  const { loading, failed, refetch, families } = useFaucetCatalogs();
+  const { loading, failed, error, refetch, families } = useFaucetCatalogs();
 
   const urlType = location.pathname.match(/^\/faucet\/(evm|erc20|utxo|svm|move)(\/|$)/)?.[1] ?? null;
 
@@ -542,7 +551,7 @@ export default function Navbar() {
             quick-open button everywhere else */}
         <div className="ml-4">
           {failed ? (
-            <CatalogFailedNotice onRetry={refetch} />
+            <CatalogFailedNotice error={error} onRetry={refetch} />
           ) : urlTypeDisabled ? (
             <FamilyDisabledNotice />
           ) : urlType ? (

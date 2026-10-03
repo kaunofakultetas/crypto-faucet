@@ -19,9 +19,10 @@
 //  receiver pair with the summed value and the count, both
 //  sides' names and contract / hub flags (null for an address
 //  the backend never classified — its LEFT JOIN) and each
-//  side's last-seen time inside the window. set-address-name
-//  upserts the name like set_address_name does (trimmed, cut
-//  at 64).
+//  side's last-seen time inside the window — and, next to the
+//  flows, refresh_error: the sentence of the address' latest
+//  failed Etherscan refresh, or null. set-address-name upserts
+//  the name like set_address_name does (trimmed, cut at 64).
 //
 //  installGraphBackend seeds the model with the transfers and
 //  addresses a test passes and hands it back to steer and to
@@ -34,7 +35,10 @@
 //  stored-transactions request fail — true answers the
 //  backend's 500 with its error body, 'html' the proxy's 502
 //  page, 'drop' a dropped connection — and renameOutage does
-//  the same for set-address-name. hold makes the requests wait
+//  the same for set-address-name. refreshErrors maps an
+//  address to the refresh_error its answers carry (a refused
+//  key, a rate limit — the backend's sentence); an address
+//  not in it answers null. hold makes the requests wait
 //  until the release function it returns is called, with
 //  inFlight and maxInFlight counting the ones waiting; asked
 //  lists the requests about one address; answerOnce gives the
@@ -146,6 +150,7 @@ export function installGraphBackend({ transfers = [], addresses = {} } = {}) {
     renames: [],
     outage: false,
     renameOutage: false,
+    refreshErrors: {},
     inFlight: 0,
     maxInFlight: 0,
 
@@ -194,7 +199,11 @@ export function installGraphBackend({ transfers = [], addresses = {} } = {}) {
         onceBodies.delete(asked.address);
         return HttpResponse.json(body);
       }
-      return HttpResponse.json({ transactions: flowsOf(model, asked.address?.toLowerCase(), asked.from, asked.to) });
+      const address = asked.address?.toLowerCase();
+      return HttpResponse.json({
+        transactions: flowsOf(model, address, asked.from, asked.to),
+        refresh_error: model.refreshErrors[address] ?? null,
+      });
     }),
 
     http.get(url('/api/evm/set-address-name'), ({ request }) => {

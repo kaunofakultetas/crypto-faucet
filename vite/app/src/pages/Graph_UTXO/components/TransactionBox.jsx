@@ -40,7 +40,7 @@
 
 import { COLORS, NODE_CONFIG } from '../constants';
 import { rowCenterY, rowTop, transactionHeight } from '../hooks/useNodePositions';
-import { formatAmount, groupThousands, isChange, nameOf, senderOf, shortTxid, spendStateOf } from '../hooks/useTransactionGraph';
+import { amountText, groupThousands, isChange, nameOf, senderOf, shortTxid, spendStateOf } from '../hooks/useTransactionGraph';
 
 
 // Room between a row's text and the box edge
@@ -72,7 +72,7 @@ const STATE_TEXT = { unspent: 'neišleista', unknown: 'nežinoma, ar išleista',
 
 function inputLabels(input, sender, names, faucetAddress, unit) {
 
-  const amount = `${formatAmount(input.value)} ${unit}`;
+  const amount = amountText(input.value, unit);
   const tooltip = `${input.address ?? 'adresas nežinomas'} — ${amount} — ${input.txid}:${input.vout}`;
 
 
@@ -107,7 +107,7 @@ function inputLabels(input, sender, names, faucetAddress, unit) {
 function outputLabels(output, change, state, names, faucetAddress, unit) {
 
   const name = nameOf(output.address, names, output.script_type);
-  const amount = `${formatAmount(output.value)} ${unit}`;
+  const amount = amountText(output.value, unit);
   const tooltip = [output.address ?? name, amount, change && 'grąža', STATE_TEXT[state]]
     .filter(Boolean)
     .join(' — ');
@@ -218,7 +218,9 @@ function CoinbaseRow() {
 // x / y is the box's top-left on the canvas; handlers are
 // useNodePositions' bindBox (drag, click, keys) plus the
 // canvas' focus tracking, which sets `focused`. id lets the
-// canvas draw the box being dragged once more on top.
+// canvas draw the box being dragged once more on top. unit
+// follows every amount — null while the network's unit is
+// not known, and the amounts then go without one.
 //
 // Used by:
 //   - UtxoFlowGraph.jsx — one per transaction

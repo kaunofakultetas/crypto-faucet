@@ -2,7 +2,7 @@
 #  [*] UTXO transaction graph tests
 #
 #  Offline checks of the UTXO graph's explorer and endpoints,
-#  in six parts:
+#  in seven parts:
 #
 #    dialects — an output script back to its address on every
 #               address family (bech32, bech32m, base58), and
@@ -20,6 +20,14 @@
 #               first lands, the day list in the browser's
 #               zone, single transactions (fetched and located
 #               when missing, coinbases), names
+#    failures — what the page is told when the Electrum side
+#               fails: a single transaction's reason and status
+#               (no answer in time, no connection, unknown to
+#               the node, refused by a node without -txindex,
+#               sent undecodable), what the cache holds served
+#               all the same, a failed crawl said on the graph
+#               until one succeeds, and why the missing
+#               transactions are missing
 #    watch    — what a live crawl watches, and a notification
 #               crawling the window at once
 #    routes   — the four endpoints reach the explorer
@@ -49,7 +57,9 @@ from embit.transaction import Transaction, TransactionInput, TransactionOutput
 import helpers
 from app.database.db import get_db_connection
 from app.database.db_init import init_db_tables
+from app.failure_reasons import failure_sentence
 from app.utxo_faucet import explorer as explorer_module
+from app.utxo_faucet.electrum_client import ELECTRUM_TIMEOUT_S
 from app.utxo_faucet.explorer import UtxoGraphExplorer, _ordered, _vsize, HUB_HISTORY_THRESHOLD
 from app.utxo_faucet.utxo_faucet import _electrum_scripthash
 
@@ -86,6 +96,27 @@ PAST = (TIMES[1100] - 3600, TIMES[1100] + 3600)
 # (100..) whose blocks fall in no window the tests ask for
 FILLER = [{'tx_hash': f'{i:064x}', 'height': 100 + i} for i in range(HUB_HISTORY_THRESHOLD + 1)]
 
+# ElectrumX's refusals of blockchain.transaction.get, as the
+# Electrum client raises them — bitcoind's own error inside the
+# server's daemon-error answer: a node with the full index that
+# has no such transaction, and a node without -txindex asked
+# for a mined one
+NOT_FOUND_ERROR = ("Electrum error: {'code': 2, 'message': \"daemon error: DaemonError({'code': -5, 'message': "
+                   "'No such mempool or blockchain transaction. Use gettransaction for wallet transactions.'})\"}")
+NO_TXINDEX_ERROR = ("Electrum error: {'code': 2, 'message': \"daemon error: DaemonError({'code': -5, 'message': "
+                    "'No such mempool transaction. Use -txindex or provide a block hash to enable blockchain "
+                    "transaction queries. Use gettransaction for wallet transactions.'})\"}")
+
+# A node with the index still being built: the not-found words,
+# then the reason it could not look
+INDEXING_ERROR = ("Electrum error: {'code': 2, 'message': \"daemon error: DaemonError({'code': -5, 'message': "
+                  "'No such mempool or blockchain transaction. Blockchain transactions are still in the process "
+                  "of being indexed.'})\"}")
+
+# How a Litecoin MWEB transaction starts — the SegWit marker
+# with the MWEB flag — which embit cannot decode
+UNDECODABLE = '0200000000080100'
+
 
 
 
@@ -121,10 +152,13 @@ def header(height):
 #
 # One network's ElectrumX as the explorer sees it: histories
 # by scripthash, raw transactions by txid, a header for any
-# height. `refused` txids answer with a server error (a
-# RuntimeError, as ElectrumClient raises it), `broken` makes
-# every call fail like a dead connection. Every call is
-# recorded as (method, params).
+# height. A txid it holds no transaction for is refused the
+# way ElectrumX refuses an unknown one, and `refused` txids
+# the way a node without -txindex refuses a mined one (each a
+# RuntimeError, as ElectrumClient raises a server's error
+# answer); `failure`, when set, is raised by every call — a
+# dead or silent server, as the client gives up on it. Every
+# call is recorded as (method, params).
 #
 # Used by:
 #   - GraphWorld (below)
@@ -136,18 +170,23 @@ class FakeGraphElectrum:
         self.histories = {}
         self.raw = {}
         self.refused = set()
-        self.broken = False
+        self.indexing = set()
+        self.failure = None
         self.calls = []
 
     def request(self, method, params):
         self.calls.append((method, list(params)))
-        if self.broken:
-            raise OSError('connection reset')
+        if self.failure is not None:
+            raise self.failure
         if method == 'blockchain.scripthash.get_history':
             return [dict(entry) for entry in self.histories.get(params[0], [])]
         if method == 'blockchain.transaction.get':
-            if params[0] in self.refused or params[0] not in self.raw:
-                raise RuntimeError(f"Electrum error: no such transaction {params[0]}")
+            if params[0] in self.refused:
+                raise RuntimeError(NO_TXINDEX_ERROR)
+            if params[0] in self.indexing:
+                raise RuntimeError(INDEXING_ERROR)
+            if params[0] not in self.raw:
+                raise RuntimeError(NOT_FOUND_ERROR)
             return self.raw[params[0]]
         if method == 'blockchain.block.headers':
             first, count = params
@@ -159,6 +198,9 @@ class FakeGraphElectrum:
 
     def header_calls(self):
         return [params for method, params in self.calls if method == 'blockchain.block.headers']
+
+    def transaction_calls(self):
+        return [params[0] for method, params in self.calls if method == 'blockchain.transaction.get']
 
 
 
@@ -345,7 +387,7 @@ def recording_threads(started):
 # FakeWatcher.
 #
 # Used by:
-#   - CrawlTests, ServeTests, WatchTests (below)
+#   - CrawlTests, ServeTests, FailureTests, WatchTests (below)
 ############################################################
 
 class ExplorerTestCase(unittest.TestCase):
@@ -692,7 +734,7 @@ class CrawlTests(ExplorerTestCase):
         self.assertEqual(payload['missing'], 2)
 
     def test_a_broken_connection_ends_the_crawl_but_not_the_service(self):
-        self.world.electrum.broken = True
+        self.world.electrum.failure = ConnectionResetError(104, 'Connection reset by peer')
         self.explorer._crawling.add('btc4')
         self.explorer._crawl('btc4', *TODAY, True)
 
@@ -739,7 +781,7 @@ class ServeTests(ExplorerTestCase):
 
     def test_a_failed_first_crawl_still_ends_updating(self):
         # The page must not poll fast forever over a dead server
-        self.world.electrum.broken = True
+        self.world.electrum.failure = ConnectionResetError(104, 'Connection reset by peer')
         started = []
         with patch.object(explorer_module, 'threading', recording_threads(started)):
             self.explorer.get_graph('btc4', *TODAY)
@@ -788,10 +830,6 @@ class ServeTests(ExplorerTestCase):
         self.assertTrue(tx['coinbase'])
         self.assertEqual((tx['inputs'], tx['fee'], tx['block']), ([], None, 1000))
 
-    def test_a_transaction_the_server_cannot_give_is_404(self):
-        self.world.electrum.refused.add(self.world.id['t3'])
-        self.assertEqual(self.explorer.get_transaction('btc4', self.world.id['t3'])[1], 404)
-
     def test_names_are_validated_per_network_and_served(self):
         self.assertEqual(self.explorer.set_address_name('btc4', self.world.jonas, '  Jonas  ')[1], 200)
         self.assertEqual(self.explorer.set_address_name('btc4', self.world.egle, 'E' * 100)[1], 200)
@@ -806,6 +844,143 @@ class ServeTests(ExplorerTestCase):
         # An empty name clears it
         self.explorer.set_address_name('btc4', self.world.jonas, '')
         self.assertNotIn(self.world.jonas, self.graph()['names'])
+
+
+
+
+
+
+
+
+############################################################
+# FailureTests
+############################################################
+#
+# What the page is told when the Electrum side fails — every
+# sentence word for word, and for a single transaction the
+# status as well: "not found" only when the node said so,
+# never for a server that could not be asked.
+############################################################
+
+class FailureTests(ExplorerTestCase):
+
+    def lookup(self, txid):
+        payload, status = self.explorer.get_transaction('btc4', txid)
+        return status, payload.get('error')
+
+    def refusal(self, error):
+        return failure_sentence('Nepavyko gauti transakcijos', RuntimeError(error), 'electrum', ELECTRUM_TIMEOUT_S)
+
+    def test_a_server_that_cannot_be_asked_is_503_never_not_found(self):
+        for failure, sentence in (
+            (TimeoutError('timed out'), 'Nepavyko gauti transakcijos: Electrum serveris neatsakė per 15 s.'),
+            (ConnectionRefusedError(111, 'Connection refused'),
+             'Nepavyko gauti transakcijos: nepavyko prisijungti prie Electrum serverio.'),
+        ):
+            with self.subTest(failure=type(failure).__name__):
+                self.world.electrum.failure = failure
+                self.assertEqual(self.lookup(self.world.id['t1']), (503, sentence))
+
+    def test_the_server_is_asked_again_once_it_is_back(self):
+        # Nothing was learnt about the transaction, so nothing is
+        # remembered
+        self.world.electrum.failure = TimeoutError('timed out')
+        self.lookup(self.world.id['t1'])
+        self.world.electrum.failure = None
+
+        self.assertEqual(self.explorer.get_transaction('btc4', self.world.id['t1'])[1], 200)
+
+    def test_a_transaction_the_node_does_not_know_is_404_in_its_words(self):
+        unknown = 'ab' * 32
+        expected = (404, 'Transakcija nerasta: tinklo mazgas jos neturi nei blokuose, nei tinklo eilėje '
+                         '(No such mempool or blockchain transaction).')
+
+        self.assertEqual(self.lookup(unknown), expected)
+        # Remembered: asked again, the answer is the same and the
+        # server is not asked
+        self.assertEqual(self.lookup(unknown), expected)
+        self.assertEqual(self.world.electrum.transaction_calls().count(unknown), 1)
+
+    def test_a_node_without_txindex_is_502_in_its_own_words(self):
+        # The node could not look — no proof the transaction does
+        # not exist
+        self.world.electrum.refused.add(self.world.id['t3'])
+        status, sentence = self.lookup(self.world.id['t3'])
+
+        self.assertEqual((status, sentence), (502, self.refusal(NO_TXINDEX_ERROR)))
+        self.assertIn('Use -txindex', sentence)
+
+    def test_a_node_still_indexing_is_502_never_not_found(self):
+        # The same not-found words, but the node says it could not
+        # look yet — no proof of absence
+        self.world.electrum.indexing.add(self.world.id['t3'])
+
+        self.assertEqual(self.lookup(self.world.id['t3']), (
+            502, 'Nepavyko gauti transakcijos: tinklo mazgas dar indeksuoja blokų transakcijas (No such mempool or '
+                 'blockchain transaction. Blockchain transactions are still in the process of being indexed.).'))
+
+    def test_a_transaction_that_cannot_be_decoded_is_502(self):
+        self.world.electrum.raw[self.world.id['t3']] = UNDECODABLE
+        self.assertEqual(self.lookup(self.world.id['t3']), (
+            502, 'Nepavyko perskaityti Electrum serverio atsiųstos transakcijos: TransactionError: Invalid segwit marker.'))
+
+    def test_what_the_cache_holds_is_served_while_the_server_is_down(self):
+        # t1 came in as t2's parent; its own parent is still to
+        # fetch, and that fetch fails
+        self.crawl()
+        self.world.electrum.failure = TimeoutError('timed out')
+        payload, status = self.explorer.get_transaction('btc4', self.world.id['t1'])
+
+        self.assertEqual(status, 200)
+        self.assertEqual(payload['transaction']['txid'], self.world.id['t1'])
+        self.assertIsNone(payload['transaction']['inputs'][0]['address'])
+
+    def test_a_failed_crawl_is_said_on_the_graph_until_one_succeeds(self):
+        self.assertIsNone(self.graph()['crawl_error'])
+
+        self.world.electrum.failure = ConnectionRefusedError(111, 'Connection refused')
+        self.explorer._crawl('btc4', *TODAY, True)
+        self.assertEqual(self.graph()['crawl_error'],
+                         'Nepavyko atnaujinti grafiko: nepavyko prisijungti prie Electrum serverio.')
+
+        # The latest failure is the one said
+        self.world.electrum.failure = TimeoutError('timed out')
+        self.explorer._crawl('btc4', *TODAY, True)
+        self.assertEqual(self.graph()['crawl_error'], 'Nepavyko atnaujinti grafiko: Electrum serveris neatsakė per 15 s.')
+
+        self.world.electrum.failure = None
+        self.explorer._crawl('btc4', *TODAY, True)
+        payload = self.graph()
+        self.assertIsNone(payload['crawl_error'])
+        self.assertEqual(len(payload['transactions']), 4)
+
+    def test_a_failed_crawl_is_said_only_on_its_own_network(self):
+        self.world.electrum.failure = TimeoutError('timed out')
+        self.explorer._crawl('btc4', *TODAY, True)
+        with patch.object(self.explorer, '_maybe_start_crawl', lambda *args: None):
+            payload, status = self.explorer.get_graph('ltc4', *TODAY)
+
+        self.assertEqual(status, 200)
+        self.assertIsNone(payload['crawl_error'])
+        self.assertIsNotNone(self.graph()['crawl_error'])
+
+    def test_missing_transactions_the_server_refused_say_why(self):
+        self.world.electrum.refused.update([self.world.id['t2'], self.world.id['t3']])
+        self.crawl()
+        payload = self.graph()
+
+        self.assertEqual(payload['missing'], 2)
+        self.assertEqual(payload['missing_error'], self.refusal(NO_TXINDEX_ERROR))
+
+    def test_missing_transactions_merely_still_to_fetch_give_no_reason(self):
+        # One fetch: the first of t2 / t3 comes in, the other waits
+        # for the next crawl
+        with patch.object(explorer_module, 'MAX_TX_FETCHES_PER_CRAWL', 1):
+            self.crawl()
+        payload = self.graph()
+
+        self.assertEqual(payload['missing'], 1)
+        self.assertIsNone(payload['missing_error'])
 
 
 

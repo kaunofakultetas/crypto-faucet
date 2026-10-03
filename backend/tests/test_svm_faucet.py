@@ -18,6 +18,8 @@ import json
 import logging
 import unittest
 
+import requests
+
 from app.svm_faucet.chains import chain_params
 from app.svm_faucet.chains import solana as solana_chain
 from tests import helpers
@@ -250,7 +252,8 @@ class SvmRequestFlowTests(unittest.TestCase):
         data, status = self.claim()
 
         self.assertEqual(status, 500)
-        self.assertIn('konfigūracijos', data['error'])
+        self.assertEqual(data['error'], 'Tinklo konfigūracijos klaida: RPC serveris priklauso testnet klasteriui, '
+                                        'o turi priklausyti devnet klasteriui. Praneškite dėstytojui.')
         self.assertEqual(client.sent, [])
         self.assertFalse(self.claimed())
 
@@ -387,15 +390,43 @@ class SvmRequestFlowTests(unittest.TestCase):
         self.assertNotIn(secret, '\n'.join(captured.output))
 
     def test_broadcast_failure_releases_the_cooldown(self):
-        self.fake(broadcast_error='blockhash not found')
+        # The node's refusal as the client raises it — translated,
+        # its own words in parentheses
+        self.fake(broadcast_error="Solana RPC error: {'code': -32002, "
+                                  "'message': 'Transaction simulation failed: Blockhash not found'}")
         data, status = self.claim()
 
         self.assertEqual(status, 500)
         self.assertFalse(self.claimed())
-        self.assertNotIn('blockhash', str(data))       # no raw RPC text to students
+        self.assertEqual(data['error'], 'Nepavyko išsiųsti transakcijos: tinklas nebeatpažįsta transakcijos bloko '
+                                        'maišos — transakcija paseno (Transaction simulation failed: Blockhash not '
+                                        'found).')
 
         self.fake()
         self.assertEqual(self.claim()[1], 200)          # retry works immediately
+
+    def test_a_failed_faucet_balance_read_releases_the_cooldown(self):
+        # The slot is claimed before the faucet reads its own
+        # balance — one RPC hiccup there must not lock the student
+        # out for the whole cooldown
+        client = self.fake(balance_errors={self.faucet.FAUCET_ADDRESS: requests.ConnectionError('refused')})
+        data, status = self.claim()
+
+        self.assertEqual(status, 500)
+        self.assertEqual(data['error'], 'Nepavyko gauti čiaupo balanso: nepavyko prisijungti prie tinklo RPC serverio.')
+        self.assertEqual(client.sent, [])
+        self.assertFalse(self.claimed())
+
+        self.fake()
+        self.assertEqual(self.claim()[1], 200)
+
+    def test_a_failed_student_balance_read_is_500_without_claiming(self):
+        self.fake(balance_errors={self.address: requests.ReadTimeout('read timed out')})
+        data, status = self.claim()
+
+        self.assertEqual(status, 500)
+        self.assertEqual(data['error'], 'Nepavyko gauti jūsų piniginės balanso: tinklo RPC serveris neatsakė per 20 s.')
+        self.assertFalse(self.claimed())
 
     def test_invalid_address_never_claims_a_slot(self):
         self.fake()

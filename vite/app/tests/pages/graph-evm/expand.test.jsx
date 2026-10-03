@@ -199,7 +199,7 @@ describe('When the expansion fails', () => {
     const { network } = await openPastDay(backend, { transfers: 2 });
     backend.outage = true;
     await network.doubleClick(ADDR.JONAS);
-    expect(await screen.findByText(OUTAGE_TEXT)).toBeInTheDocument();
+    expect(await screen.findByText(OUTAGE_TEXT.error)).toBeInTheDocument();
     expect(network.nodes()).toHaveLength(3);
     expect(transferRows()).toHaveLength(2);
   });
@@ -215,7 +215,7 @@ describe('When the expansion fails', () => {
     await view.user.click(option);
     await waitFor(() => expect(backend.requests.at(-1)).toMatchObject(WINDOW[DAY]));
     const network = await bootedNetwork({ transfers: 0 });
-    expect(await screen.findByText(OUTAGE_TEXT)).toBeInTheDocument();
+    expect(await screen.findByText(OUTAGE_TEXT.error)).toBeInTheDocument();
 
     backend.outage = false;
     await network.doubleClick(ADDR.FAUCET);

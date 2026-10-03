@@ -30,6 +30,8 @@
 //
 //    TOKEN_REFRESH_MS  — token payload repoll cadence
 //    CLAIM_FAILED      — the claim's own failure sentence
+//    TOKEN_FAILED      — the token read's failure sentence
+//    sentenceOf        — a backend failure sentence, or nothing
 //    isPlainObject     — the shape check's building block
 //    isTokenPayload    — a token answer the page can use
 //    useToken          — the token + its deployments, polled
@@ -65,7 +67,8 @@ import { WalletStepper, WalletGateButton, FadingAlert, useAlerts } from '@/compo
 import AssetIcon from '@/components/AssetIcon';
 import ErrorCard from '@/components/ErrorCard';
 import PayoutMessage from '@/components/PayoutMessage';
-import { requestErrorText } from '@/utils/requestError';
+import FailureNote from '@/components/FailureNote';
+import { MalformedAnswerError, requestErrorText } from '@/utils/requestError';
 import { payoutTxid } from '@/utils/payout';
 
 
@@ -76,6 +79,31 @@ const TOKEN_REFRESH_MS = 10000;
 // What a failed claim says when neither the backend nor the
 // wallet gave a reason of their own
 const CLAIM_FAILED = 'Nepavyko išsiųsti žetonų.';
+
+// What a failed read of the token says when the backend gave
+// no sentence of its own
+const TOKEN_FAILED = 'Nepavyko gauti žetono informacijos.';
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// sentenceOf
+// -----------------------------------------------------------
+//
+// A failure sentence the backend sent about one of a chain
+// card's reads — the faucet's balance, the gas check — or
+// nothing when the field holds no readable text, so a card
+// never shows an empty note.
+//
+// Used by:
+//   - ChainCard (below)
+// -----------------------------------------------------------
+
+const sentenceOf = (value) => (typeof value === 'string' && value.trim() ? value : null);
 
 
 
@@ -151,8 +179,9 @@ const isTokenPayload = (body) => isPlainObject(body)
 // An answer without the payload's shape fails the query just
 // like an error status does. The error handed back is set
 // only when the query NEVER got an answer: the backend's own
-// message (an unknown token), or the page's sentence when
-// there is none. A failed repoll keeps the last payload on
+// message (an unknown token), or the page's sentence with the
+// reason after it when there is none. A failed repoll keeps
+// the last payload on
 // screen, and a 4xx stops the interval so a stale bookmark
 // doesn't repoll forever. The reload handed back (called
 // after a claim) invalidates the query for an immediate
@@ -178,7 +207,7 @@ function useToken(symbol, account) {
     queryFn: async () => {
       const suffix = account ? `?address=${account}` : '';
       const body = (await axios.get(`/api/erc20/token/${symbol}${suffix}`)).data;
-      if (!isTokenPayload(body)) throw new Error('Unexpected /api/erc20/token answer');
+      if (!isTokenPayload(body)) throw new MalformedAnswerError();
       return body;
     },
     // Keep the previous payload only across an ACCOUNT change —
@@ -190,9 +219,7 @@ function useToken(symbol, account) {
   // Only a query that never got data is an error for the page —
   // the library keeps data through a failed repoll, so a blip
   // never blanks a page that is already showing the token
-  const error = isLoadingError
-    ? (queryError.response?.data?.error || 'Nepavyko gauti žetono informacijos')
-    : null;
+  const error = isLoadingError ? requestErrorText(queryError, TOKEN_FAILED) : null;
 
   const reload = () => queryClient.invalidateQueries({ queryKey: ['erc20-token', symbol] });
 
@@ -525,7 +552,10 @@ function GasNoticeCard({ gasless }) {
 // alerts, passed in already filtered by network, so results
 // appear right where the student clicked. A faucet balance
 // the backend could not read — or sent as anything but a
-// number — is a dash.
+// number — is a dash, with the backend's sentence saying why
+// under it; a gas check the backend could not run says so
+// above the action row, since the claim then goes ahead
+// unchecked.
 //
 // needsGas (the wallet holds less than the backend's
 // min_native_wei — half the native chunk — on this chain)
@@ -559,11 +589,18 @@ function ChainCard({ deployment, token, isCurrentChain, walletReady, needsGas, b
           {Number.isFinite(deployment.balance) ? `${deployment.balance.toFixed(3)} ${token.symbol}` : '—'}
         </span>
       </div>
+      {!Number.isFinite(deployment.balance) && sentenceOf(deployment.balance_error) && (
+        <FailureNote>{deployment.balance_error}</FailureNote>
+      )}
 
       <div className="my-2">
         <span>Žetono adresas:</span>
         <AddressRow value={deployment.contract_address} />
       </div>
+
+      {sentenceOf(deployment.wallet_native_error) && (
+        <FailureNote>{deployment.wallet_native_error}</FailureNote>
+      )}
 
       <div className="mt-3 flex gap-2">
         <Tooltip describeChild title="Persijungti į šį tinklą ir parodyti žetoną MetaMask sąraše">

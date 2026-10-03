@@ -13,11 +13,17 @@
 //  requests in flight, new addresses followed at most five
 //  hops per sweep, contracts and public hubs never asked
 //  about, new transfers appearing live — and the outage
-//  notice "Nepavyko atnaujinti grafiko — rodomi paskutiniai
-//  gauti duomenys": shown while the backend fails (a 500, the
-//  proxy's HTML page, a dropped connection), the last drawn
-//  graph kept under it, gone once an answer comes back. Late
-//  answers of a torn-down graph never reach the next one.
+//  notice, saying what went wrong and closing with "Rodomi
+//  paskutiniai gauti duomenys.": shown while the backend fails
+//  (a 500 in the backend's words, the proxy's HTML page or a
+//  dropped connection with the reason after "Nepavyko
+//  atnaujinti grafiko."), the last drawn graph kept under it,
+//  gone once an answer comes back. Late answers of a
+//  torn-down graph never reach the next one. The backend's
+//  word on a failed Etherscan refresh (refresh_error — a
+//  refused API key, a rate limit) is shown over the canvas in
+//  its words while an address still swept carries it, and
+//  goes once its refresh recovers.
 // -----------------------------------------------------------
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -27,7 +33,7 @@ import { liveNetwork } from '../../support/graph-evm/vis-network';
 import { installGraphBackend } from '../../support/graph-evm/backend';
 import {
   startGraphSlate, endGraphSlate, advance, renderGraph, bootedNetwork, transferRows,
-  outageNotice, OUTAGE_TEXT, dayPicker, at, ADDR, NAMES, DAY_TRANSFERS, TODAY, WINDOW,
+  outageNotice, gapText, OUTAGE_TEXT, dayPicker, at, ADDR, NAMES, DAY_TRANSFERS, TODAY, WINDOW,
 } from '../../support/graph-evm/scene';
 
 
@@ -330,10 +336,10 @@ describe('Live sweeps', () => {
 describe('The outage notice', () => {
 
   it.each([
-    ['a 500 { error } answer', true],
-    ['the proxy\'s HTML 502 page', 'html'],
-    ['a dropped connection', 'drop'],
-  ])('%s during a sweep shows the notice and keeps the last drawn graph under it', async (_, outage) => {
+    ['a 500 { error } answer', true, OUTAGE_TEXT.error],
+    ['the proxy\'s HTML 502 page', 'html', OUTAGE_TEXT.html],
+    ['a dropped connection', 'drop', OUTAGE_TEXT.drop],
+  ])('%s during a sweep shows the notice saying what went wrong and keeps the last drawn graph under it', async (_, outage, notice) => {
     const backend = installGraphBackend({ transfers: DAY_TRANSFERS, addresses: NAMES });
     renderGraph();
     const network = await bootedNetwork({ transfers: 3 });
@@ -341,7 +347,7 @@ describe('The outage notice', () => {
 
     backend.outage = outage;
     await advance(1_000);
-    expect(await screen.findByText(OUTAGE_TEXT)).toBeInTheDocument();
+    expect(await screen.findByText(notice)).toBeInTheDocument();
     expect(network.nodes()).toHaveLength(3);
     expect(transferRows()).toHaveLength(3);
     expect(liveNetwork()).toBe(network);
@@ -354,7 +360,7 @@ describe('The outage notice', () => {
     await bootedNetwork({ transfers: 3 });
     backend.outage = true;
     await advance(1_000);
-    await screen.findByText(OUTAGE_TEXT);
+    await screen.findByText(OUTAGE_TEXT.error);
 
     backend.outage = false;
     await advance(1_000);
@@ -367,7 +373,7 @@ describe('The outage notice', () => {
     backend.outage = true;
     renderGraph();
     const network = await bootedNetwork({ transfers: 0 });
-    expect(await screen.findByText(OUTAGE_TEXT)).toBeInTheDocument();
+    expect(await screen.findByText(OUTAGE_TEXT.error)).toBeInTheDocument();
     expect(network.nodes().map((node) => node.id)).toEqual([ADDR.FAUCET]);
 
     backend.outage = false;
@@ -385,7 +391,7 @@ describe('The outage notice', () => {
     backend.outage = true;
     await user.click(dayPicker());
     await user.click(await screen.findByRole('option', { name: '2026-09-29' }));
-    expect(await screen.findByText(OUTAGE_TEXT)).toBeInTheDocument();
+    expect(await screen.findByText(OUTAGE_TEXT.error)).toBeInTheDocument();
 
     backend.outage = false;
     const asked = backend.requests.length;
@@ -431,5 +437,104 @@ describe('The outage notice', () => {
     await settle(200);
     expect(network.nodes().map((node) => node.id)).toEqual([ADDR.FAUCET, ADDR.PETRAS]);
     expect(transferRows()).toEqual([['KNF Faucet', '0x9a8b...7263', '0.2000 SepETH (1 tx)']]);
+  });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// The Etherscan refresh notice
+// -----------------------------------------------------------
+//
+// The backend serves its cache when Etherscan refuses it or
+// does not answer, and says why with every answer about the
+// address (refresh_error). The graph shows that sentence —
+// with the warning that transfers may be missing — while any
+// address it still sweeps carries one, the drawn graph under
+// it.
+// -----------------------------------------------------------
+
+describe('The Etherscan refresh notice', () => {
+
+  const KEY_REFUSED = 'Nepavyko atnaujinti transakcijų sąrašo: Etherscan serveris atmetė čiaupo operatoriaus API raktą (Invalid API Key).';
+  const RATE_LIMITED = 'Nepavyko atnaujinti transakcijų sąrašo: Etherscan serveris riboja užklausų skaičių (Max rate limit reached).';
+
+
+  it('a refused Etherscan key the backend reports is shown in its words, the graph drawn under it', async () => {
+    const backend = installGraphBackend({ transfers: DAY_TRANSFERS, addresses: NAMES });
+    backend.refreshErrors[ADDR.FAUCET] = KEY_REFUSED;
+    renderGraph();
+    const network = await bootedNetwork({ transfers: 3 });
+
+    expect(await screen.findByText(gapText(KEY_REFUSED))).toBeInTheDocument();
+    expect(network.nodes()).toHaveLength(3);
+    expect(outageNotice()).toBeNull();
+  });
+
+
+  it('goes once the backend\'s next answer about the address reports its refresh recovered', async () => {
+    const backend = installGraphBackend({ transfers: DAY_TRANSFERS, addresses: NAMES });
+    backend.refreshErrors[ADDR.FAUCET] = KEY_REFUSED;
+    renderGraph();
+    await bootedNetwork({ transfers: 3 });
+    await screen.findByText(gapText(KEY_REFUSED));
+
+    delete backend.refreshErrors[ADDR.FAUCET];
+    await advance(1_000);
+    await waitFor(() => expect(screen.queryByText(gapText(KEY_REFUSED))).toBeNull());
+  });
+
+
+  it('a rate limit on another swept address is shown too, and stays while that address carries it', async () => {
+    const backend = installGraphBackend({ transfers: DAY_TRANSFERS, addresses: NAMES });
+    backend.refreshErrors[ADDR.JONAS] = RATE_LIMITED;
+    renderGraph();
+    await bootedNetwork({ transfers: 3 });
+
+    expect(await screen.findByText(gapText(RATE_LIMITED))).toBeInTheDocument();
+    // The faucet's own answers carry none — they do not take it away
+    await advance(1_000);
+    await settle(50);
+    expect(screen.getByText(gapText(RATE_LIMITED))).toBeInTheDocument();
+
+    delete backend.refreshErrors[ADDR.JONAS];
+    await advance(1_000);
+    await waitFor(() => expect(screen.queryByText(gapText(RATE_LIMITED))).toBeNull());
+  });
+
+
+  it('the last word of an address found to be a public hub goes — the graph never asks about it again', async () => {
+    const backend = installGraphBackend({
+      transfers: [...DAY_TRANSFERS, { from: ADDR.JONAS, to: ADDR.HUB, value: 0.1, at: at(11, 0) }],
+      addresses: NAMES,
+    });
+    backend.refreshErrors[ADDR.HUB] = RATE_LIMITED;
+    renderGraph();
+    await bootedNetwork({ transfers: 4 });
+    expect(await screen.findByText(gapText(RATE_LIMITED))).toBeInTheDocument();
+
+    // The backend flags it, and the next answers say so
+    backend.addresses[ADDR.HUB] = { name: '', contract: false, hub: true };
+    await advance(1_000);
+    await advance(1_000);
+    await waitFor(() => expect(screen.queryByText(gapText(RATE_LIMITED))).toBeNull());
+  });
+
+
+  it('a failed Etherscan refresh and an outage are told side by side', async () => {
+    const backend = installGraphBackend({ transfers: DAY_TRANSFERS, addresses: NAMES });
+    backend.refreshErrors[ADDR.FAUCET] = KEY_REFUSED;
+    renderGraph();
+    await bootedNetwork({ transfers: 3 });
+    await screen.findByText(gapText(KEY_REFUSED));
+
+    backend.outage = 'drop';
+    await advance(1_000);
+    expect(await screen.findByText(OUTAGE_TEXT.drop)).toBeInTheDocument();
+    expect(screen.getByText(gapText(KEY_REFUSED))).toBeInTheDocument();
   });
 });

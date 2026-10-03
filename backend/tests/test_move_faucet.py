@@ -22,6 +22,7 @@ import json
 import logging
 import unittest
 
+import requests
 from solders.pubkey import Pubkey
 from solders.signature import Signature
 
@@ -354,12 +355,14 @@ class MoveRequestFlowTests(unittest.TestCase):
         self.assertEqual(self.claim()[1], 200)
 
     def test_build_failure_releases_the_cooldown(self):
-        self.fake(build_error='simulation failed')
+        # The node's simulation verdict as the client raises it —
+        # translated, its own words in parentheses
+        self.fake(build_error='Sui transaction simulation failed: InsufficientGas')
         data, status = self.claim()
 
         self.assertEqual(status, 500)
         self.assertFalse(self.claimed())
-        self.assertNotIn('simulation', str(data))       # no raw RPC text to students
+        self.assertEqual(data['error'], 'Nepavyko išsiųsti transakcijos: transakcijai pritrūko dujų (InsufficientGas).')
 
         self.fake()
         self.assertEqual(self.claim()[1], 200)          # retry works immediately
@@ -369,6 +372,29 @@ class MoveRequestFlowTests(unittest.TestCase):
         data, status = self.claim()
 
         self.assertEqual(status, 500)
+        self.assertFalse(self.claimed())
+
+    def test_a_failed_faucet_balance_read_releases_the_cooldown(self):
+        # The slot is claimed before the faucet reads its own
+        # balance — one RPC hiccup there must not lock the student
+        # out for the whole cooldown
+        client = self.fake(balance_errors={self.faucet.FAUCET_ADDRESS: requests.ConnectionError('refused')})
+        data, status = self.claim()
+
+        self.assertEqual(status, 500)
+        self.assertEqual(data['error'], 'Nepavyko gauti čiaupo balanso: nepavyko prisijungti prie Sui GraphQL serverio.')
+        self.assertEqual(client.executed, [])
+        self.assertFalse(self.claimed())
+
+        self.fake()
+        self.assertEqual(self.claim()[1], 200)
+
+    def test_a_failed_student_balance_read_is_500_without_claiming(self):
+        self.fake(balance_errors={self.address: requests.ReadTimeout('read timed out')})
+        data, status = self.claim()
+
+        self.assertEqual(status, 500)
+        self.assertEqual(data['error'], 'Nepavyko gauti jūsų piniginės balanso: Sui GraphQL serveris neatsakė per 20 s.')
         self.assertFalse(self.claimed())
 
     def test_invalid_address_never_claims_a_slot(self):

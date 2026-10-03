@@ -12,9 +12,10 @@
 //  time, disabled at the ends) and the slider (named "Diena"
 //  and speaking the day it stands on, keyboard steps commit, a
 //  drag previews the day on the thumb and fetches only on
-//  release) — the single-day bar, a failed or empty list, the
-//  picked day's half-open LOCAL-midnight window in every
-//  request (UTC, Vilnius, the 25-hour autumn day), the
+//  release) — the single-day bar, a failed list (said under
+//  the bar in the backend's words) or an empty one, the picked
+//  day's half-open LOCAL-midnight window in every request
+//  (UTC, Vilnius, the 25-hour autumn day), the
 //  selection kept as a day through a refetched list, and the
 //  midnight tick-over: a tab watching today follows the
 //  calendar, one watching a past day stays put.
@@ -151,11 +152,12 @@ describe('The day list', () => {
   });
 
 
-  it('a failed day list leaves today alone — the dropdown by itself, no steppers, no slider, the graph still drawn', async () => {
-    given.error('get', '/api/evm/:network/transaction-days', 'Vidinė serverio klaida', 500);
+  it('a failed day list is said under the bar and leaves today alone — the dropdown by itself, no steppers, no slider, the graph still drawn', async () => {
+    given.error('get', '/api/evm/:network/transaction-days', 'Nepavyko gauti dienų sąrašo: duomenų bazė užrakinta kitos rašančios užklausos (database is locked).', 500);
     installGraphBackend({ transfers: DAY_TRANSFERS, addresses: NAMES });
     const { user } = renderGraph();
     await bootedNetwork({ transfers: 3 });
+    expect(await screen.findByText('Nepavyko gauti dienų sąrašo: duomenų bazė užrakinta kitos rašančios užklausos (database is locked).')).toBeInTheDocument();
     await settle(100);
     expect(dayPicker()).toHaveValue('2026-09-30 (šiandien)');
     expect(screen.queryByRole('button', { name: 'Ankstesnė diena' })).toBeNull();
@@ -165,12 +167,13 @@ describe('The day list', () => {
   });
 
 
-  it('a faucet with no history yet has today alone', async () => {
+  it('a faucet with no history yet has today alone — and nothing is said to have failed', async () => {
     given.json('get', '/api/evm/:network/transaction-days', { days: [] });
     installGraphBackend();
     const { user } = renderGraph();
     await bootedNetwork({ transfers: 0 });
     await settle(100);
+    expect(screen.queryByText(/^Nepavyko gauti dienų sąrašo/)).toBeNull();
     expect(screen.queryByRole('button', { name: 'Ankstesnė diena' })).toBeNull();
     expect(await dropdownOptions(user)).toEqual(['2026-09-30 (šiandien)']);
   });

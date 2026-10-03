@@ -43,6 +43,8 @@
 import { useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 
+import { RefusalError } from '@/utils/requestError';
+
 
 // How often the user's balance repolls — fast, so students
 // see it tick up right after a claim; a page with no chain
@@ -300,10 +302,10 @@ async function signClaimMessage(account) {
 // Everything a page shows and does with MetaMask: whether it
 // is installed, the connected account, the chain the wallet
 // sits on, the account's balance there (a BigInt of wei, null
-// while unknown) with a flag for a balance read that failed,
-// the step of the ladder, and the three actions — connect,
-// switchNetwork and signMessage — which all reject with a
-// ready-to-display message.
+// while unknown) with a flag for a balance read that failed
+// and the refusal behind it, the step of the ladder, and the
+// three actions — connect, switchNetwork and signMessage —
+// which all reject with a ready-to-display message.
 //
 // The page passes the chain its faucet pays on. The balance
 // is only fetched while the wallet actually sits there, so a
@@ -396,19 +398,24 @@ export default function useMetamaskWallet(expectedChainId) {
   // is what keeps the stepper honest. A wrong-chain wallet
   // reports null so pages never show a number from somewhere
   // else. A poll that FAILS (MetaMask's own RPC rejecting
-  // eth_getBalance) is reported as balanceFailed, so a page
-  // shows a dash instead of "Kraunama…" forever.
-  const { data: balance = null, isError: balanceFailed } = useQuery({
+  // eth_getBalance) is reported as balanceFailed, with the
+  // refusal in MetaMask's words as balanceError, so a page
+  // shows a dash and says why instead of "Kraunama…" forever.
+  const { data: balance = null, isError: balanceFailed, error: balanceError } = useQuery({
     queryKey: ['wallet-balance', account, expectedChainId],
     enabled: Boolean(provider && account && expectedChainId),
     refetchInterval: WALLET_REFRESH_MS,
     retry: false,
     queryFn: async () => {
-      const currentId = parseInt(await provider.request({ method: 'eth_chainId' }), 16);
-      setChainId(currentId);
-      if (currentId !== Number(expectedChainId)) return null;
-      const wei = await provider.request({ method: 'eth_getBalance', params: [account, 'latest'] });
-      return BigInt(wei);
+      try {
+        const currentId = parseInt(await provider.request({ method: 'eth_chainId' }), 16);
+        setChainId(currentId);
+        if (currentId !== Number(expectedChainId)) return null;
+        const wei = await provider.request({ method: 'eth_getBalance', params: [account, 'latest'] });
+        return BigInt(wei);
+      } catch (error) {
+        throw new RefusalError('MetaMask', typeof error?.message === 'string' ? error.message : '');
+      }
     },
   });
 
@@ -471,5 +478,5 @@ export default function useMetamaskWallet(expectedChainId) {
     : 3;
 
 
-  return { installed, account, chainId, balance, balanceFailed, step, connect, switchNetwork, signMessage };
+  return { installed, account, chainId, balance, balanceFailed, balanceError, step, connect, switchNetwork, signMessage };
 }

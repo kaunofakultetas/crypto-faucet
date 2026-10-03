@@ -60,11 +60,15 @@ vi.mock('vis-network', () => ({
 
 
 const SITE = "VU KNF Faucet'as";
-const UNAVAILABLE = "Faucet'ų sąrašas nepasiekiamas. Serveris gali būti perkraunamas.";
-const NETWORKS_FAILED = 'Nepavyko gauti tinklų sąrašo. Perkraukite puslapį.';
-
 // The sentence every failing GET carries in the 500 mode
 const MESSAGE = 'Vidinė serverio klaida';
+
+// What a failed read says in each mode: the backend's sentence
+// when it sent one (the 500 mode), otherwise the page's own
+// with the reason — no connection — after it
+const UNAVAILABLE = (message) => message ?? "Faucet'ų sąrašas nepasiekiamas. Patikrinkite interneto ryšį.";
+const NETWORKS_FAILED = (message) => `${message ? `${message}.` : 'Nepavyko gauti tinklų sąrašo. Patikrinkite interneto ryšį.'} Perkraukite puslapį.`;
+const TOKEN_FAILED = (message) => message ?? 'Nepavyko gauti žetono informacijos. Patikrinkite interneto ryšį.';
 
 const titleOf = (name) => (name ? `${name} — ${SITE}` : SITE);
 
@@ -100,10 +104,11 @@ const status = (words) => async () => {
 //              site name)
 //   shows    — finds what proves the page rendered
 //   failed   — given the failure's message, finds how the
-//              page presents a failed read; the message is the
-//              backend's sentence (500 mode) or null
-//              (connection dropped). None: the page reads
-//              nothing — it simply still shows
+//              page presents a failed read — what went wrong,
+//              in so many words; the message is the backend's
+//              sentence (500 mode) or null (connection
+//              dropped). None: the page reads nothing — it
+//              simply still shows
 //   index    — a family index: on a failed catalog it rests
 //              on "/" with the CatalogUnavailable notice, on a
 //              wrong-shaped one on a blank "/"
@@ -112,13 +117,13 @@ const status = (words) => async () => {
 const FAUCET = { lands: '/faucet/evm/sepolia', title: 'EVM čiaupas', shows: heading("Ethereum Sepolia faucet'as") };
 
 const ROUTES = [
-  { path: '/faucet/evm/sepolia', title: 'EVM čiaupas', shows: heading("Ethereum Sepolia faucet'as"), failed: () => text(NETWORKS_FAILED)() },
-  { path: '/faucet/erc20/LINK', title: 'ERC-20 čiaupas', shows: heading("Chainlink faucet'as"), failed: (message) => text(message ?? 'Nepavyko gauti žetono informacijos')() },
-  { path: '/faucet/utxo/btc4', title: 'UTXO čiaupas', shows: heading("Bitcoin Testnet4 faucet'as"), failed: () => text(NETWORKS_FAILED)() },
-  { path: '/faucet/svm/solanaDevnet', title: 'SVM čiaupas', shows: heading("Solana Devnet faucet'as"), failed: () => text(NETWORKS_FAILED)() },
-  { path: '/faucet/move/suiTestnet', title: 'Move čiaupas', shows: heading("Sui Testnet faucet'as"), failed: () => text(NETWORKS_FAILED)() },
-  { path: '/graph/sepolia', title: 'Transakcijų srautas', shows: heading('Transakcijų srautas — Ethereum Sepolia'), failed: () => text('Nepavyko gauti čiaupo adreso')() },
-  { path: '/graph/utxo/btc4', title: 'UTXO transakcijos', shows: heading('Transakcijų Srautas - Bitcoin Testnet4'), failed: (message) => status(message ?? 'Nepavyko gauti transakcijų')() },
+  { path: '/faucet/evm/sepolia', title: 'EVM čiaupas', shows: heading("Ethereum Sepolia faucet'as"), failed: (message) => text(NETWORKS_FAILED(message))() },
+  { path: '/faucet/erc20/LINK', title: 'ERC-20 čiaupas', shows: heading("Chainlink faucet'as"), failed: (message) => text(TOKEN_FAILED(message))() },
+  { path: '/faucet/utxo/btc4', title: 'UTXO čiaupas', shows: heading("Bitcoin Testnet4 faucet'as"), failed: (message) => text(NETWORKS_FAILED(message))() },
+  { path: '/faucet/svm/solanaDevnet', title: 'SVM čiaupas', shows: heading("Solana Devnet faucet'as"), failed: (message) => text(NETWORKS_FAILED(message))() },
+  { path: '/faucet/move/suiTestnet', title: 'Move čiaupas', shows: heading("Sui Testnet faucet'as"), failed: (message) => text(NETWORKS_FAILED(message))() },
+  { path: '/graph/sepolia', title: 'Transakcijų srautas', shows: heading('Transakcijų srautas — Ethereum Sepolia'), failed: (message) => text(message ?? 'Nepavyko gauti čiaupo adreso. Patikrinkite interneto ryšį.')() },
+  { path: '/graph/utxo/btc4', title: 'UTXO transakcijos', shows: heading('Transakcijų Srautas - Bitcoin Testnet4'), failed: (message) => status(message ?? 'Nepavyko gauti transakcijų. Patikrinkite interneto ryšį.')() },
   { path: '/sha256', title: 'Blokų grandinės simuliatorius', shows: heading('Blokų grandinės simuliatorius') },
   { path: '/presentations', title: 'Prezentacijos', shows: heading('Prezentacijos') },
   { path: '/dapps-server', title: 'DAPPS serveris', shows: heading('DAPPS serveris') },
@@ -195,7 +200,7 @@ const renderFailing = async (path, respond) => {
 const expectFailureShown = async (route, message) => {
   if (route.index) {
     await landsOn('/');
-    expect(await within(main()).findByText(UNAVAILABLE)).toBeInTheDocument();
+    expect(await within(main()).findByText(UNAVAILABLE(message))).toBeInTheDocument();
     return;
   }
   expect(await (route.failed ? route.failed(message) : route.shows())).toBeInTheDocument();

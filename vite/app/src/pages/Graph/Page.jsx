@@ -5,16 +5,20 @@
 //  compact date slider bar on top and the graph below it,
 //  rooted at the network's faucet address (resolved via
 //  GET /api/evm/<network>/faucet-balance — cache key shared
-//  with the faucet page, so it's usually instant).
+//  with the faucet page, so it's usually instant). When the
+//  address cannot be had, the page says why in the graph's
+//  place: the backend's own sentence, or the request's reason
+//  — an answer that names no address is a malformed one.
 //
 //  The slider offers ONLY the days the faucet address itself
 //  transacted on (GET /api/evm/<network>/transaction-days,
 //  bucketed in the browser's IANA zone) plus today,
 //  and defaults to today. Days without root activity would render a lone
 //  faucet node, so they are not listed. A day list the page
-//  cannot read — no list at all, or entries without a date —
-//  counts as no list, so today alone is offered instead of
-//  the page crashing. The picked day
+//  cannot have or read — a failed request, no list at all,
+//  entries without a date — is said under the bar, and the
+//  days that could be read (today at least) are offered
+//  instead of the page crashing. The picked day
 //  travels into every graph fetch as a half-open [from, to)
 //  unix window computed from the STUDENT'S local midnight;
 //  viewing a past day freezes the live sweeps and skips the
@@ -44,6 +48,8 @@ import TodayIcon from '@mui/icons-material/Today';
 import AddIcon from '@mui/icons-material/Add';
 import RemoveIcon from '@mui/icons-material/Remove';
 
+import { MalformedAnswerError, requestErrorText } from '@/utils/requestError';
+
 import CryptoFlowGraph from './components/CryptoFlowGraph';
 
 
@@ -51,6 +57,15 @@ import CryptoFlowGraph from './components/CryptoFlowGraph';
 // month and the day of the month, zero-padded, joined by
 // hyphens — the form transaction-days answers in
 const DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+// What a failed read of the faucet's address says when the
+// backend gave no sentence of its own — requestErrorText adds
+// the reason
+const ADDRESS_FAILED = 'Nepavyko gauti čiaupo adreso.';
+
+// The same for a failed read of the day list, said under the
+// date bar
+const DAYS_FAILED = 'Nepavyko gauti dienų sąrašo.';
 
 // The round brand-colored day-stepper buttons, matching the
 // graph's zoom buttons
@@ -243,10 +258,12 @@ function DateSliderBar({ days, selectedDay, today, onCommit }) {
 // Resolves the faucet address (the graph's root node), loads
 // the used-day list (today is appended even before its first
 // transaction — new claims appear live), holds the picked day
-// and mounts the slider bar + graph. The selection is stored
-// as the day STRING, so it survives the day list growing
-// under it. CryptoFlowGraph rebuilds from scratch on a new
-// window, the same way it does on a network switch.
+// and mounts the slider bar + graph. Either read failing is
+// said in words: the address's in the graph's place, the day
+// list's under the bar. The selection is stored as the day
+// STRING, so it survives the day list growing under it.
+// CryptoFlowGraph rebuilds from scratch on a new window, the
+// same way it does on a network switch.
 //
 // Used by:
 //   - App.jsx — route /graph/:network
@@ -274,12 +291,19 @@ export default function GraphPage() {
   }, [today]);
 
 
-  const { data, isPending, isError } = useQuery({
+  // The graph needs the address and nothing else from this
+  // answer — one without it (a proxy's page, an emptied
+  // object) is a malformed answer, not a faucet that has none
+  const { data, isPending, isError, error } = useQuery({
     queryKey: ['evm-faucet-balance', network],
-    queryFn: async () => (await axios.get(`/api/evm/${network}/faucet-balance`)).data,
+    queryFn: async () => {
+      const body = (await axios.get(`/api/evm/${network}/faucet-balance`)).data;
+      if (typeof body?.address !== 'string' || body.address === '') throw new MalformedAnswerError();
+      return body;
+    },
     staleTime: 60 * 1000,
   });
-  const address = data?.address ?? null;
+  const address = typeof data?.address === 'string' && data.address !== '' ? data.address : null;
 
   // The viewed network's entry — its native currency symbol for
   // the graph's edge labels and whether it has an explorer at
@@ -299,29 +323,41 @@ export default function GraphPage() {
   // below in every season (one fixed offset would put an hour
   // of every winter day on the wrong day when viewed in summer).
   // The zone is part of the query key so a list built under one
-  // zone is never served to a render under another.
+  // zone is never served to a render under another. An answer
+  // that is no list (a proxy's page, a reshaped object) is a
+  // malformed one.
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const { data: daysData } = useQuery({
+  const { data: daysData, error: daysError } = useQuery({
     queryKey: ['evm-tx-days', network, address, timeZone],
     enabled: Boolean(address),
-    queryFn: async () =>
-      (await axios.get(
+    queryFn: async () => {
+      const body = (await axios.get(
         `/api/evm/${network}/transaction-days?address=${address}&tz=${encodeURIComponent(timeZone)}`
-      )).data,
+      )).data;
+      if (!Array.isArray(body?.days)) throw new MalformedAnswerError();
+      return body;
+    },
     staleTime: 60 * 1000,
   });
 
   // Today is always offered, even before its first transaction.
-  // An answer that is no list (a proxy's page, a reshaped
-  // object) counts as none, and an entry without a readable
-  // date is left out — mapping the raw answer during render
-  // took the whole page down, and a day that is no date would
-  // leave rangeOfDay nothing to build a window from
-  const days = useMemo(() => {
+  // An entry without a readable date is left out — mapping the
+  // raw answer during render took the whole page down, and a
+  // day that is no date would leave rangeOfDay nothing to build
+  // a window from — but it is counted, so the page can say the
+  // list came back malformed
+  const { days, unreadable } = useMemo(() => {
     const listed = Array.isArray(daysData?.days) ? daysData.days : [];
     const known = listed.map((entry) => entry?.day).filter((day) => typeof day === 'string' && DAY_PATTERN.test(day));
-    return known.includes(today) ? known : [...known, today];
+    return { days: known.includes(today) ? known : [...known, today], unreadable: known.length < listed.length };
   }, [daysData, today]);
+
+  // What went wrong with the day list, if anything: the request
+  // failed, the answer was no list, or some of its entries
+  // carried no date
+  const daysFailure = daysError || unreadable
+    ? requestErrorText(daysError ?? new MalformedAnswerError(), DAYS_FAILED)
+    : null;
 
 
   // Live sweeps only make sense for today — a past day is
@@ -336,12 +372,15 @@ export default function GraphPage() {
     return <div className="p-4 text-center">Kraunama…</div>;
   }
 
-  if (isError) {
-    return <div className="p-4 text-center text-red-600">Nepavyko gauti čiaupo adreso</div>;
-  }
-
-  if (!address) {
-    return <div className="p-4 text-center">Adresas nerastas</div>;
+  // A failed read, or an answer that names no address — the
+  // query refuses one, but the faucet page fills the same
+  // cache entry
+  if (isError || !address) {
+    return (
+      <div className="p-4 text-center text-red-600">
+        {requestErrorText(error ?? new MalformedAnswerError(), ADDRESS_FAILED)}
+      </div>
+    );
   }
 
   return (
@@ -351,6 +390,9 @@ export default function GraphPage() {
     <div className="flex min-h-0 flex-1 flex-col p-4">
       <h1 className="sr-only">Transakcijų srautas — {networkInfo?.full_name ?? network}</h1>
       <DateSliderBar days={days} selectedDay={selectedDay} today={today} onCommit={setSelectedDay} />
+      {daysFailure && (
+        <p className="mx-auto -mt-2 mb-3 w-full max-w-[760px] text-center text-sm text-red-600">{daysFailure}</p>
+      )}
 
       <CryptoFlowGraph
         faucetAddress={address}

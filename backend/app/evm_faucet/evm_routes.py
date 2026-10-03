@@ -147,7 +147,9 @@ def get_networks():
 # view — refreshes the local cache from Etherscan (via the
 # explorer, not the faucet). ?from and ?to (unix seconds,
 # half-open [from, to) window) select the day the page's date
-# slider picked; both are required.
+# slider picked; both are required. Next to the flows rides
+# refresh_error: why the address' latest Etherscan refresh
+# failed, in a sentence, or null.
 #
 # Used by:
 #   - Graph/CryptoFlowGraph.jsx — useTransactionGraph's
@@ -210,8 +212,9 @@ def get_transaction_days(network):
 # nodes of the transaction graph.
 #
 # Used by:
-#   - Graph/CryptoFlowGraph.jsx — renameNode's fire-and-forget
-#     save
+#   - Graph/hooks/useTransactionGraph.js — renameNode, the
+#     right-click dialog's save (a failure is shown under the
+#     name field)
 ############################################################
 
 @bp_evm_faucet.route('/api/evm/set-address-name', methods=['GET'])

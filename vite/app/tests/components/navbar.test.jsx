@@ -390,16 +390,26 @@ describe('Navbar — the catalog', () => {
     given.error('get', '/api/faucet/catalog', 'Vidinė serverio klaida', 500);
     renderNavbar(route);
     expect(await within(navbar()).findByText("Faucet'ų sąrašas nepasiekiamas")).toBeInTheDocument();
+    // The reason beside it — here the backend's own sentence
+    expect(within(navbar()).getByText('Vidinė serverio klaida')).toBeInTheDocument();
     expect(within(navbar()).getByRole('button', { name: 'Bandyti dar kartą' })).toBeInTheDocument();
     expect(within(navbar()).queryByRole('group')).toBeNull();
     expect(within(navbar()).queryByRole('button', { name: "Atidaryti faucet'ą" })).toBeNull();
   });
 
 
-  it('a dropped connection is a failure too', async () => {
+  it('a dropped connection is a failure too, said as such', async () => {
     given.networkError('get', '/api/faucet/catalog');
     renderNavbar('/faucet/evm/sepolia');
     expect(await within(navbar()).findByText("Faucet'ų sąrašas nepasiekiamas")).toBeInTheDocument();
+    expect(within(navbar()).getByText('Patikrinkite interneto ryšį.')).toBeInTheDocument();
+  });
+
+
+  it("names the status of a proxy's error page beside the notice", async () => {
+    given.html('get', '/api/faucet/catalog');
+    renderNavbar('/faucet/evm/sepolia');
+    expect(await within(navbar()).findByText('Serveris grąžino klaidą (502).')).toBeInTheDocument();
   });
 
 

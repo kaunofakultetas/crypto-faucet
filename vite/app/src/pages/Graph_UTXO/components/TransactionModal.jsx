@@ -25,9 +25,17 @@
 //  stored by the backend: a rename relabels the whole graph, an
 //  empty name clears it, Enter saves and Esc drops the edit
 //  without closing the dialog; a name the backend did not take
-//  keeps the editor open with the error. While a changed name
+//  keeps the editor open with the reason. While a changed name
 //  is unsaved, a backdrop click or the × asks before throwing
 //  it away.
+//
+//  Whatever fails is said with its reason. A transaction that
+//  cannot be fetched and a name that was not saved go through
+//  requestErrorText: the backend's own sentence — which tells
+//  a transaction the node does not know from an Electrum
+//  server that could not be asked — else the dialog's with
+//  why the request failed. A copy the browser refused says
+//  why in its tooltip.
 //
 //  Split into (root component last):
 //
@@ -63,6 +71,8 @@ import ScheduleIcon from '@mui/icons-material/Schedule';
 import TollIcon from '@mui/icons-material/Toll';
 
 import UniversalModal from '@/components/UniversalModal';
+import { requestErrorText } from '@/utils/requestError';
+import { clipboardFailure } from '@/utils/clipboardError';
 
 import { COLORS, NAME_MAX_LENGTH } from '../constants';
 import {
@@ -124,9 +134,10 @@ function avatarOf(name, isFaucet) {
 // -----------------------------------------------------------
 //
 // An icon button copying `text`; its tooltip reports the
-// result for 1.5 s. The clipboard API exists only in a secure
-// context (https, localhost) — elsewhere it is missing or
-// rejects, and the tooltip says so instead of pretending.
+// result for 1.5 s — "Nukopijuota!", or why the copy failed,
+// worded once for every copy button (clipboardFailure): no
+// clipboard outside a secure page, the browser refusing the
+// write, or the browser's own words for anything else.
 //
 // Used by:
 //   - TransactionModal (below) — the txid
@@ -135,6 +146,7 @@ function avatarOf(name, isFaucet) {
 
 function CopyButton({ text, label }) {
 
+  // null, 'ok', or the sentence saying why the copy failed
   const [result, setResult] = useState(null);
 
 
@@ -142,14 +154,14 @@ function CopyButton({ text, label }) {
     try {
       await navigator.clipboard.writeText(text);
       setResult('ok');
-    } catch {
-      setResult('failed');
+    } catch (error) {
+      setResult(`Nepavyko nukopijuoti: ${clipboardFailure(error)}`);
     }
     setTimeout(() => setResult(null), 1500);
   };
 
 
-  const tip = { ok: 'Nukopijuota!', failed: 'Nepavyko nukopijuoti' }[result] ?? label;
+  const tip = result === 'ok' ? 'Nukopijuota!' : (result ?? label);
 
   return (
     <Tooltip title={tip} placement="top">
@@ -240,7 +252,8 @@ function TxLink({ txid, onOpen, children }) {
 // Who controls the address: the avatar and the name (or
 // `fallback` — "Nežinomas valdytojas", or what an address-less
 // output holds) with a pencil — or, while editing, the name
-// field with save / cancel, the backend's refusal under it.
+// field with save / cancel, and why the name was not saved
+// under it.
 // `editor` comes from TransactionModal's editorFor; null for a
 // coin with no address, which nobody can name.
 //
@@ -570,10 +583,13 @@ function FeeEquation({ tx, unit }) {
 // The body while the transaction on show is not at hand:
 // "Kraunama…" with a spinner only while it is on its way.
 // Once the fetch is over without a transaction — refused,
-// failed, or answered with none — the dialog says it cannot
-// be shown, telling a 404's "not found" apart. Waiting is
-// never what is left over, so no answer, however broken, can
-// keep the dialog loading for ever.
+// failed, or answered with none — the dialog says why: the
+// backend's own sentence word for word (it tells a
+// transaction the node does not know, a 404, from an
+// Electrum server that could not be asked or would not give
+// it), else the dialog's sentence with the reason after it.
+// Waiting is never what is left over, so no answer, however
+// broken, can keep the dialog loading for ever.
 //
 // Used by:
 //   - TransactionModal (below) — instead of the transaction
@@ -592,9 +608,7 @@ function FetchState({ fetched }) {
 
   return (
     <p className="py-10 text-center text-sm text-red-700">
-      {fetched.error?.response?.status === 404
-        ? 'Transakcija nerasta — serveris jos negrąžino.'
-        : 'Nepavyko gauti transakcijos — bandykite dar kartą vėliau.'}
+      {requestErrorText(fetched.error, 'Nepavyko gauti transakcijos.')}
     </p>
   );
 }
@@ -617,7 +631,9 @@ function FetchState({ fetched }) {
 // from transactionsById (and follows its polling: a waiting
 // one turns confirmed in place); any other is fetched with the
 // names of its addresses, and the dialog says so while it
-// loads or when it cannot be had (FetchState).
+// loads or when it cannot be had (FetchState). renameAddress
+// is the data hook's: it settles once a name is stored and
+// rejects with the request's error when it was not.
 //
 // Used by:
 //   - UtxoFlowGraph.jsx — on a box's click or Enter / Space
@@ -661,7 +677,8 @@ export default function TransactionModal({ network, txid, sourceRect, onClose, t
   // One card's name editor; `key` tells apart two rows of the
   // same address (change returns to an input's address). A
   // save waits for the backend: the editor closes once the
-  // name is stored, and stays open with the error if not
+  // name is stored, and stays open with the reason if not —
+  // the backend's refusal, or why the request failed
   const editorFor = (key, address) => ({
     isEditing: editing?.key === key,
     draft: editing?.key === key ? editing.draft : '',
@@ -672,10 +689,15 @@ export default function TransactionModal({ network, txid, sourceRect, onClose, t
     onSave: async () => {
       const draft = editing?.draft ?? '';
       setEditing((edit) => ({ ...edit, saving: true, error: null }));
-      const saved = await renameAddress(address, draft);
+      let failure = null;
+      try {
+        await renameAddress(address, draft);
+      } catch (error) {
+        failure = requestErrorText(error, 'Nepavyko išsaugoti vardo.');
+      }
       setEditing((edit) => {
         if (edit?.key !== key) return edit;
-        return saved ? null : { ...edit, saving: false, error: 'Nepavyko išsaugoti — bandykite dar kartą' };
+        return failure ? { ...edit, saving: false, error: failure } : null;
       });
     },
     onCancel: () => setEditing(null),

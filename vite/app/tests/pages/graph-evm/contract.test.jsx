@@ -3,26 +3,34 @@
 //
 //  Every response variant of contract.js against the four
 //  endpoints the /graph/:network page reads, each with this
-//  page's own way of showing a failure:
+//  page's own way of showing a failure — and its exact words:
+//  the backend's sentence when the answer carried one,
+//  otherwise the page's own with the reason after it:
 //
 //    /api/evm/:network/faucet-balance — "Nepavyko gauti
-//        čiaupo adreso"; "Kraunama…" while it hangs
+//        čiaupo adreso." in the graph's place; "Kraunama…"
+//        while it hangs
 //    /api/evm/networks — nothing to show: the heading falls
 //        back to the URL key and the labels to ETH, the graph
 //        works on
-//    /api/evm/:network/transaction-days — today alone in the
-//        date bar, the graph works on
+//    /api/evm/:network/transaction-days — "Nepavyko gauti
+//        dienų sąrašo." under the date bar, today alone in it,
+//        the graph works on
 //    /api/evm/:network/get-stored-transactions — the outage
-//        notice over the canvas; "0 pervedimų" while it hangs
+//        notice over the canvas, closed with "Rodomi
+//        paskutiniai gauti duomenys."; "0 pervedimų" while it
+//        hangs
 //
 //  and then the malformed answers the matrix does not reach
 //  but a backend or proxy can send: a stored-transactions 200
 //  that is no transfer list — at boot, in the boot sweep, in a
-//  later sweep — is an outage the next sweep recovers from,
-//  and the live refresh outlives even a sweep that throws; a
+//  later sweep — is an outage said to be a malformed answer,
+//  which the next sweep recovers from; a sweep that throws is
+//  said in its own words and the live refresh outlives it; a
 //  transfer value that arrives as a string is drawn; a day
 //  list that is no list, or holds entries without a readable
-//  date, leaves the page standing with the days it can read.
+//  date, is said to be malformed and leaves the page standing
+//  with the days it can read.
 // -----------------------------------------------------------
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
@@ -31,12 +39,13 @@ import { HttpResponse } from 'msw';
 import { DataSet } from 'vis-data';
 import { given } from '../../support/backend/server';
 import { describeEndpointContract, settle, expectNoCrash } from '../../support/backend/contract';
+import { MalformedAnswerError } from '@/utils/requestError';
 import * as f from '../../support/backend/fixtures';
 import { liveNetwork } from '../../support/graph-evm/vis-network';
 import { installGraphBackend } from '../../support/graph-evm/backend';
 import {
   startGraphSlate, endGraphSlate, advance, renderGraph, bootedNetwork, transferRows, dayPicker, outageNotice,
-  OUTAGE_TEXT, at, ADDR, NAMES, DAY_TRANSFERS, TODAY,
+  outageText, gapText, OUTAGE_TEXT, at, ADDR, NAMES, DAY_TRANSFERS, TODAY,
 } from '../../support/graph-evm/scene';
 
 
@@ -57,19 +66,27 @@ afterEach(() => endGraphSlate());
 // -----------------------------------------------------------
 //
 // pageStands: the page still shows one of its own states —
-// its date bar, or one of its single status lines (the
-// contract's `chrome`). renderScene: the page over the day's
-// backend model (for the matrices of the endpoints the model
-// does not answer). refuseOnce: vis refusing to add one node,
-// once — it throws on a duplicate id, say — which stands in
-// for any throw inside a sweep, as no answer of the backend
-// can cause one.
+// its date bar, or one of its single status lines, the
+// failure in the graph's place whatever its words: the page's
+// own sentence with its reason, or the backend's sentences
+// the matrix answers with (the contract's `chrome`).
+// renderScene: the page over the day's backend model (for the
+// matrices of the endpoints the model does not answer).
+// refuseOnce: vis refusing to add one node, once — it throws
+// on a duplicate id, say — which stands in for any throw
+// inside a sweep, as no answer of the backend can cause one.
+// The page's own sentences for the two reads it says the
+// failure of: ADDRESS_FAILED and DAYS_FAILED.
 // -----------------------------------------------------------
+
+const ADDRESS_FAILED = 'Nepavyko gauti čiaupo adreso.';
+const DAYS_FAILED = 'Nepavyko gauti dienų sąrašo.';
+const MALFORMED = 'Serveris atsakė netinkamo formato duomenimis.';
 
 const pageStands = () => screen.queryByRole('combobox', { name: 'Data' })
   ?? screen.queryByText('Kraunama…')
-  ?? screen.queryByText('Nepavyko gauti čiaupo adreso')
-  ?? screen.queryByText('Adresas nerastas')
+  ?? screen.queryByText(/^Nepavyko gauti čiaupo adreso\. /)
+  ?? screen.queryByText(/^(Vidinė serverio klaida|Nepalaikomas tinklas: x|Nerasta)$/)
   ?? screen.queryByText('Šiam tinklui transakcijų srautas neprieinamas');
 
 const renderScene = () => {
@@ -117,7 +134,7 @@ describeEndpointContract({
   render: renderScene,
   chrome: pageStands,
   loaded: async () => { await bootedNetwork({ transfers: 3 }); },
-  failed: async () => { await screen.findByText('Nepavyko gauti čiaupo adreso'); },
+  failed: async (says) => { await screen.findByText(says(ADDRESS_FAILED)); },
   loading: () => screen.getByText('Kraunama…'),
 });
 
@@ -150,10 +167,11 @@ describeEndpointContract({
     await waitFor(() => expect(earlierButton()).toBeInTheDocument());
     expect(screen.getAllByRole('slider').find((slider) => slider.getAttribute('aria-orientation') === 'horizontal')).toHaveAttribute('aria-valuemax', '3');
   },
-  // Today alone — no steppers, no slider — and the graph on
-  failed: async () => {
+  // What went wrong under the bar, today alone in it — no
+  // steppers, no slider — and the graph on
+  failed: async (says) => {
     await bootedNetwork({ transfers: 3 });
-    await settle(50);
+    expect(await screen.findByText(says(DAYS_FAILED))).toBeInTheDocument();
     expect(earlierButton()).toBeNull();
     expect(dayPicker()).toHaveValue('2026-09-30 (šiandien)');
   },
@@ -167,7 +185,7 @@ describeEndpointContract({
   render: () => renderGraph(),
   chrome: pageStands,
   loaded: async () => { await waitFor(() => expect(transferRows()).toHaveLength(2)); },
-  failed: async () => { await screen.findByText(OUTAGE_TEXT); },
+  failed: async (says) => { await screen.findByText(outageText(says('Nepavyko atnaujinti grafiko.'))); },
   loading: () => screen.getByRole('img', { name: `Transakcijų srauto grafikas, ${TODAY}: 0 pervedimų` }),
 });
 
@@ -184,9 +202,11 @@ describeEndpointContract({
 // Shapes the matrix does not produce but a backend or a proxy
 // can, and what the page does with each: a stored-transactions
 // answer that is no transfer list is an outage wherever it
-// lands, a sweep that throws never ends the live refresh, a
-// value sent as text is drawn, and a day list the page cannot
-// read leaves today and the days it can read.
+// lands, said to be a malformed answer; a sweep that throws is
+// said in its own words and never ends the live refresh; a
+// value sent as text is drawn; and a day list the page cannot
+// read is said to be malformed, leaving today and the days it
+// can read.
 // -----------------------------------------------------------
 
 describe('Malformed answers beyond the matrix', () => {
@@ -200,11 +220,11 @@ describe('Malformed answers beyond the matrix', () => {
   });
 
 
-  it('a stored-transactions JSON null is an outage: the faucet alone under the notice', async () => {
+  it('a stored-transactions JSON null is an outage: the faucet alone under the notice, which says the answer was malformed', async () => {
     given.json('get', '/api/evm/:network/get-stored-transactions', null);
     renderGraph();
     const network = await bootedNetwork({ transfers: 0 });
-    expect(await screen.findByText(OUTAGE_TEXT)).toBeInTheDocument();
+    expect(await screen.findByText(OUTAGE_TEXT.malformed)).toBeInTheDocument();
     expect(network.nodes().map((node) => node.id)).toEqual([ADDR.FAUCET]);
   });
 
@@ -225,7 +245,7 @@ describe('Malformed answers beyond the matrix', () => {
     await waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(2));
     await settle(100);
     // The outage is told, over the faucet alone …
-    expect(screen.queryByText(OUTAGE_TEXT)).not.toBeNull();
+    expect(screen.queryByText(OUTAGE_TEXT.malformed)).not.toBeNull();
     expect(liveNetwork().nodes().map((node) => node.id)).toEqual([ADDR.FAUCET]);
     // … and the next live sweep brings the day in
     lifted = true;
@@ -249,7 +269,7 @@ describe('Malformed answers beyond the matrix', () => {
   });
 
 
-  it('a boot sweep that throws is logged, and the live refresh starts regardless', async () => {
+  it('a boot sweep that throws is logged and said in its own words, and the live refresh starts regardless', async () => {
     installGraphBackend({ transfers: [...DAY_TRANSFERS, { from: ADDR.JONAS, to: ADDR.PETRAS, value: 0.05, at: at(11, 0) }], addresses: NAMES });
     // Petras is first drawn by the boot sweep, so its mirror throws
     refuseOnce(ADDR.PETRAS);
@@ -258,10 +278,13 @@ describe('Malformed answers beyond the matrix', () => {
     const network = await bootedNetwork({ transfers: 3 });
     await waitFor(() => expect(logged).toHaveBeenCalledWith('Sweep failed:', expect.any(Error)));
     expect(network.node(ADDR.PETRAS)).toBeNull();
+    expect(await screen.findByText(gapText(`Nepavyko nupiešti grafiko: vis refused ${ADDR.PETRAS}`))).toBeInTheDocument();
 
+    // The next sweep draws him, and its answers take the notice away
     await advance(1_000);
     await waitFor(() => expect(network.node(ADDR.PETRAS)).not.toBeNull());
     await waitFor(() => expect(transferRows()).toHaveLength(4));
+    expect(screen.queryByText(/^Nepavyko nupiešti grafiko/)).toBeNull();
     expect(liveNetwork()).toBe(network);
   });
 
@@ -276,6 +299,7 @@ describe('Malformed answers beyond the matrix', () => {
     backend.answerOnce(ADDR.EGLE, { error: null });
     await advance(1_000);
     await waitFor(() => expect(logged).toHaveBeenCalledWith('Error fetching transactions:', expect.any(Error)));
+    expect(logged).toHaveBeenCalledWith('Error fetching transactions:', expect.any(MalformedAnswerError));
     const asked = backend.requests.length;
     await advance(1_000);
     await waitFor(() => expect(backend.requests.length).toBeGreaterThan(asked));
@@ -298,6 +322,7 @@ describe('Malformed answers beyond the matrix', () => {
     await advance(1_000);
     await waitFor(() => expect(logged).toHaveBeenCalledWith('Sweep failed:', expect.any(Error)));
     expect(network.node(ADDR.PETRAS)).toBeNull();
+    expect(await screen.findByText(gapText(`Nepavyko nupiešti grafiko: vis refused ${ADDR.PETRAS}`))).toBeInTheDocument();
 
     await advance(1_000);
     await waitFor(() => expect(network.node(ADDR.PETRAS)).not.toBeNull());
@@ -321,11 +346,11 @@ describe('Malformed answers beyond the matrix', () => {
   });
 
 
-  it('a day list that is not a list of { day } entries leaves the page standing — today alone is offered', async () => {
+  it('a day list that is not a list of { day } entries leaves the page standing — today alone is offered, the answer said to be malformed', async () => {
     const calls = given.capture('get', '/api/evm/:network/transaction-days', { days: { '2026-09-29': 2 } });
     renderScene();
     await waitFor(() => expect(calls).toHaveLength(1));
-    await settle(100);
+    expect(await screen.findByText(`${DAYS_FAILED} ${MALFORMED}`)).toBeInTheDocument();
     expectNoCrash();
     expect(dayPicker()).toHaveValue('2026-09-30 (šiandien)');
     expect(earlierButton()).toBeNull();
@@ -339,6 +364,8 @@ describe('Malformed answers beyond the matrix', () => {
     const { user } = renderScene();
     await bootedNetwork({ transfers: 3 });
     await waitFor(() => expect(earlierButton()).toBeInTheDocument());
+    // The entries it could not read are not passed over in silence
+    expect(screen.getByText(`${DAYS_FAILED} ${MALFORMED}`)).toBeInTheDocument();
     await user.click(dayPicker());
     expect((await screen.findAllByRole('option')).map((option) => option.textContent)).toEqual(['2026-09-30 (šiandien)', '2026-09-28']);
     expectNoCrash();

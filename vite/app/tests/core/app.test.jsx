@@ -74,7 +74,15 @@ afterEach(() => {
 
 
 const SITE = "VU KNF Faucet'as";
-const UNAVAILABLE = "Faucet'ų sąrašas nepasiekiamas. Serveris gali būti perkraunamas.";
+// What "/" says when the catalog failed: the backend's own
+// sentence when the answer carried one, otherwise the page's
+// with the reason after it
+const SERVER_SAYS = 'Vidinė serverio klaida';
+const NO_CONNECTION = "Faucet'ų sąrašas nepasiekiamas. Patikrinkite interneto ryšį.";
+
+// Any failure notice offers a retry — the page's and the
+// navbar's alike
+const retry = () => screen.queryByRole('button', { name: 'Bandyti dar kartą' });
 
 const main = () => screen.getByRole('main');
 const navbar = () => screen.getByRole('navigation');
@@ -283,7 +291,7 @@ describe('App "/" — the default faucet', () => {
     await settle(100);
     expect(window.location.pathname).toBe('/');
     expect(main()).toBeEmptyDOMElement();
-    expect(screen.queryByText(UNAVAILABLE)).toBeNull();
+    expect(retry()).toBeNull();
     expect(within(navbar()).getByRole('button', { name: "Atidaryti faucet'ą" })).toBeDisabled();
     expect(within(navbar()).getByRole('link', { name: 'Prezentacijos' })).toBeInTheDocument();
   });
@@ -332,7 +340,7 @@ describe('App "/" — the default faucet', () => {
     given.error('get', '/api/faucet/catalog', 'Vidinė serverio klaida', 500);
     renderApp({ route: '/' });
     await landsOn('/faucet/evm/sepolia');
-    expect(screen.queryByText(UNAVAILABLE)).toBeNull();
+    expect(retry()).toBeNull();
   });
 });
 
@@ -348,10 +356,10 @@ describe('App "/" — the default faucet', () => {
 
 describe('App "/" — the catalog unavailable', () => {
 
-  it('says the faucet list is unreachable and offers the pages that need no backend', async () => {
-    given.error('get', '/api/faucet/catalog', 'Vidinė serverio klaida', 500);
+  it('says what went wrong — the backend\'s sentence — and offers the pages that need no backend', async () => {
+    given.error('get', '/api/faucet/catalog', SERVER_SAYS, 500);
     renderApp({ route: '/' });
-    expect(await within(main()).findByText(UNAVAILABLE)).toBeInTheDocument();
+    expect(await within(main()).findByText(SERVER_SAYS)).toBeInTheDocument();
     expect(within(main()).getByRole('button', { name: 'Bandyti dar kartą' })).toBeInTheDocument();
     expect(within(main()).getAllByRole('link').map((link) => [link.textContent, link.getAttribute('href')])).toEqual([
       ['Blokų grandinės simuliatorius', '/sha256'],
@@ -362,10 +370,10 @@ describe('App "/" — the catalog unavailable', () => {
   });
 
 
-  it('a dropped connection is the same outage', async () => {
+  it('a dropped connection is the same outage, said as such', async () => {
     given.networkError('get', '/api/faucet/catalog');
     renderApp({ route: '/' });
-    expect(await within(main()).findByText(UNAVAILABLE)).toBeInTheDocument();
+    expect(await within(main()).findByText(NO_CONNECTION)).toBeInTheDocument();
   });
 
 
@@ -383,7 +391,7 @@ describe('App "/" — the catalog unavailable', () => {
     await user.click(await within(main()).findByRole('button', { name: 'Bandyti dar kartą' }));
     await waitFor(() => expect(seen).toHaveLength(2));
     await settle(50);
-    expect(within(main()).getByText(UNAVAILABLE)).toBeInTheDocument();
+    expect(within(main()).getByText(SERVER_SAYS)).toBeInTheDocument();
     expect(window.location.pathname).toBe('/');
   });
 
@@ -391,7 +399,7 @@ describe('App "/" — the catalog unavailable', () => {
   it('the navbar\'s retry recovers "/" too — they share the one query', async () => {
     given.sequence('get', '/api/faucet/catalog', [{ status: 500, body: { error: 'Vidinė serverio klaida' } }, { body: f.catalog }]);
     const { user } = renderApp({ route: '/' });
-    await within(main()).findByText(UNAVAILABLE);
+    await within(main()).findByText(SERVER_SAYS);
     await user.click(within(navbar()).getByRole('button', { name: 'Bandyti dar kartą' }));
     await landsOn('/faucet/evm/sepolia');
   });
@@ -403,7 +411,7 @@ describe('App "/" — the catalog unavailable', () => {
   ])('"%s" opens %s, which works without the backend', async (name, path, heading) => {
     given.error('get', '/api/faucet/catalog', 'Vidinė serverio klaida', 500);
     const { user } = renderApp({ route: '/' });
-    await within(main()).findByText(UNAVAILABLE);
+    await within(main()).findByText(SERVER_SAYS);
     await user.click(within(main()).getByRole('link', { name }));
     await landsOn(path);
     expect(await within(main()).findByRole('heading', { level: 1, name: heading })).toBeInTheDocument();
@@ -455,7 +463,7 @@ describe('App — family index redirects', () => {
   it('/graph/utxo — the UTXO graph without a network — redirects through "/" like every family index', async () => {
     renderApp({ route: '/graph/utxo' });
     await landsOn('/faucet/evm/sepolia');
-    expect(within(main()).queryByText('Nepavyko gauti čiaupo adreso')).toBeNull();
+    expect(within(main()).queryByText(/^Nepavyko gauti čiaupo adreso/)).toBeNull();
   });
 
 
@@ -656,8 +664,8 @@ describeEndpointContract({
   loaded: async () => {
     await landsOn('/faucet/evm/sepolia');
   },
-  failed: async () => {
-    expect(await within(main()).findByText(UNAVAILABLE)).toBeInTheDocument();
+  failed: async (says) => {
+    expect(await within(main()).findByText(says("Faucet'ų sąrašas nepasiekiamas."))).toBeInTheDocument();
   },
   loading: () => window.location.pathname === '/' && main().childElementCount === 0,
 });

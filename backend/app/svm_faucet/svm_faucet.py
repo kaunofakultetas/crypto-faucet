@@ -52,11 +52,12 @@ from solders.message import Message
 from solders.transaction import Transaction
 from solders.system_program import transfer, TransferParams
 
-from .chains import chain_params
-from .rpc_client import SolanaRpcClient
+from .chains import CHAINS, chain_params
+from .rpc_client import SOLANA_TIMEOUT_S, SolanaRpcClient
 from ..cooldown import CooldownTable
 from ..icons import icon_url
 from ..env_secrets import resolve_placeholders, install_log_redaction
+from ..failure_reasons import failure_sentence
 
 
 # How long a polled faucet balance is served from cache. The page
@@ -181,6 +182,11 @@ class SVMFaucet:
         # per claim.
         self._verified_networks = set()
         self._probe_failures = {}
+
+        # network -> the genesis hash its RPC answered when that was
+        # NOT the configured cluster's, for the refusal to name — see
+        # wrong_cluster_sentence
+        self._wrong_genesis = {}
 
         self._warm_up_networks()
 
@@ -323,7 +329,9 @@ class SVMFaucet:
     # the EVM faucet's chain-id check is the same gate. Raises
     # when the RPC cannot be reached (remembered for
     # BALANCE_CACHE_TTL, so an outage is one probe, not one
-    # per claim).
+    # per claim). A mismatch notes the genesis hash the RPC
+    # answered, for the refusal to name
+    # (wrong_cluster_sentence).
     #
     # Used by:
     #   - _warm_up_networks (above) — the boot report
@@ -350,10 +358,38 @@ class SVMFaucet:
                 f"[SVM] {network} CLUSTER MISMATCH — config says {self.NETWORK_CONFIGS[network]['faucet']['network']} "
                 f"(genesis {expected}), the RPC answers genesis {actual}; check faucet.rpc_url"
             )
+            self._wrong_genesis[network] = actual
             return False
 
         self._verified_networks.add(network)
         return True
+
+
+
+
+
+
+    ############################################################
+    # wrong_cluster_sentence
+    ############################################################
+    #
+    # The refusal when a network's RPC answers another cluster
+    # than the config names: which cluster it answered — told
+    # by its genesis hash, or the hash itself when it is no
+    # known cluster's — and which one it should be.
+    #
+    # Used by:
+    #   - request_sol (below)
+    ############################################################
+
+    def wrong_cluster_sentence(self, network):
+        faucet = self.NETWORK_CONFIGS[network]['faucet']
+        actual = self._wrong_genesis.get(network)
+        clusters = CHAINS[faucet['chain']].GENESIS_HASHES
+        answered = next((name for name, genesis in clusters.items() if genesis == actual), None)
+        answered = f'{answered} klasteriui' if answered else f'nežinomam klasteriui (genesis {actual})'
+        return (f"Tinklo konfigūracijos klaida: RPC serveris priklauso {answered}, "
+                f"o turi priklausyti {faucet['network']} klasteriui. Praneškite dėstytojui.")
 
 
 
@@ -489,8 +525,8 @@ class SVMFaucet:
     #
     # The faucet address and its balance on one network.
     # Returns (payload, http_status) — the route just
-    # jsonify()s it. Failures log the real exception and
-    # answer with a generic Lithuanian error.
+    # jsonify()s it. A failure logs the real exception and
+    # answers with its cause in Lithuanian (failure_sentence).
     #
     # Used by:
     #   - svm_routes.py — GET /api/svm/<network>/faucet-balance
@@ -511,9 +547,9 @@ class SVMFaucet:
                 "symbol": params['symbol'],
                 "chunk_size": float(self.NETWORK_CONFIGS[network]['faucet']['chunk_size']),
             }, 200
-        except Exception:
+        except Exception as error:
             logging.exception(f"Failed to get SVM faucet balance for {network}")
-            return {"error": "Nepavyko gauti čiaupo informacijos"}, 500
+            return {"error": failure_sentence('Nepavyko gauti čiaupo balanso', error, 'rpc', SOLANA_TIMEOUT_S)}, 500
 
 
 
@@ -527,7 +563,9 @@ class SVMFaucet:
     # The actual payout: validate everything, then broadcast
     # one chunk-sized System Program transfer under the
     # network's send lock. Returns a (payload, http_status)
-    # tuple; user-facing errors are Lithuanian.
+    # tuple; user-facing errors are Lithuanian, and a failure on
+    # the chain's side names its cause — the RPC server's or the
+    # node's (failure_sentence).
     #
     # Used by:
     #   - svm_routes.py — GET /api/svm/<network>/request
@@ -566,9 +604,10 @@ class SVMFaucet:
         # never told the student about.
         try:
             if not self._verify_cluster(network):
-                return {"error": "Tinklo konfigūracijos klaida. Praneškite dėstytojui."}, 500
-        except Exception:
-            return {"error": "Tinklas nepasiekiamas. Bandykite vėliau."}, 503
+                return {"error": self.wrong_cluster_sentence(network)}, 500
+        except Exception as error:
+            return {"error": failure_sentence('Tinklas nepasiekiamas', error, 'rpc', SOLANA_TIMEOUT_S,
+                                              then='Bandykite vėliau.')}, 503
 
 
         # STEP 2: signature check. This is the exact message the
@@ -590,9 +629,10 @@ class SVMFaucet:
         # ========================================================
         try:
             user_lamports = client.get_balance(to_address)
-        except Exception:
+        except Exception as error:
             logging.exception(f"Failed to read {to_address} balance on {network}")
-            return {"error": "Nepavyko gauti naudotojo balanso"}, 500
+            return {"error": failure_sentence('Nepavyko gauti jūsų piniginės balanso', error, 'rpc',
+                                              SOLANA_TIMEOUT_S)}, 500
 
         if user_lamports >= amount_lamports:
             return {"error": f"Jūsų piniginėje jau yra pakankamai {params['symbol']}."}, 400
@@ -607,10 +647,10 @@ class SVMFaucet:
 
         try:
             faucet_lamports = client.get_balance(self.FAUCET_ADDRESS)
-        except Exception:
+        except Exception as error:
             self.cooldowns.release(cooldown_key)
             logging.exception(f"Failed to read the faucet balance on {network}")
-            return {"error": "Nepavyko gauti čiaupo balanso"}, 500
+            return {"error": failure_sentence('Nepavyko gauti čiaupo balanso', error, 'rpc', SOLANA_TIMEOUT_S)}, 500
 
         # The faucet must keep its own rent-exempt minimum after
         # paying, or the node rejects the transfer — a balance inside
@@ -643,10 +683,10 @@ class SVMFaucet:
 
                 tx_signature = client.send_transaction(
                     base64.b64encode(bytes(transaction)).decode('utf-8'))
-        except Exception:
+        except Exception as error:
             logging.exception(f"Failed to broadcast {network} payout")
             self.cooldowns.release(cooldown_key)
-            return {"error": "Nepavyko išsiųsti transakcijos. Bandykite dar kartą."}, 500
+            return {"error": failure_sentence('Nepavyko išsiųsti transakcijos', error, 'rpc', SOLANA_TIMEOUT_S)}, 500
 
         # Success — the cooldown slot claimed above stays, and the
         # cached balance is dropped so the page shows the payout on

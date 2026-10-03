@@ -4,7 +4,9 @@
 //  The page around the drawing: its title with the network's
 //  full name from the /api/utxo/networks catalog (the key
 //  until it answers or when it fails), every amount in the
-//  network's own unit (plain "BTC" without the catalog), an
+//  network's own unit (no unit at all without the catalog —
+//  never one that may be another network's), a catalog that
+//  failed said under the title row with why, word for word, an
 //  unknown network (titled by its key, the backend's refusal
 //  on the canvas, today alone in the picker), the legend of
 //  the drawing's marks, opening on today, the page inside the
@@ -44,6 +46,10 @@ beforeEach(() => {
 const title = () => screen.getByRole('heading', { level: 1 });
 const dateField = () => screen.getByRole('combobox', { name: 'Data' });
 
+// What the page says after a failed network list: that the
+// amounts go without a currency code
+const NO_UNIT = 'Sumos rodomos be valiutos kodo.';
+
 async function dayOptions(user) {
   await user.click(screen.getByRole('button', { name: 'Open' }));
   const options = within(await screen.findByRole('listbox')).getAllByRole('option').map((option) => option.textContent);
@@ -62,7 +68,8 @@ async function dayOptions(user) {
 // -----------------------------------------------------------
 //
 // Display names only — from the same catalog the UTXO faucet
-// page reads.
+// page reads; when it fails, the line under the title row
+// says why.
 // -----------------------------------------------------------
 
 describe('Title and unit', () => {
@@ -73,12 +80,14 @@ describe('Title and unit', () => {
   });
 
 
-  it("shows the network's key until the catalog answers", async () => {
+  it("shows the network's key, and amounts without a unit, until the catalog answers", async () => {
     given.hang('get', NETWORKS);
     renderGraph();
     expect(title()).toHaveTextContent('Transakcijų Srautas - btc4');
-    await findBox(T.T1);
+    const box = await findBox(T.T1);
     expect(title()).toHaveTextContent('Transakcijų Srautas - btc4');
+    expect(rowsOf(box).inputs[0].primary).toBe('0.01');
+    expect(screen.queryByText(NO_UNIT, { exact: false })).toBeNull();
   });
 
 
@@ -90,12 +99,29 @@ describe('Title and unit', () => {
   });
 
 
-  it('falls back to the key and plain "BTC" when the catalog fails', async () => {
+  it("says the network list could not be read, in the backend's words, and shows the key and no unit", async () => {
     given.error('get', NETWORKS, 'Vidinė serverio klaida', 500);
     renderGraph();
     const box = await findBox(T.T1);
-    await waitFor(() => expect(rowsOf(box).inputs[0].primary).toBe('0.01 BTC'));
-    expect(title()).toHaveTextContent('Transakcijų Srautas - btc4');
+    expect(await screen.findByText(`Vidinė serverio klaida. ${NO_UNIT}`)).toBeInTheDocument();
+    expect(rowsOf(box).inputs[0].primary).toBe('0.01');
+    expect(title().textContent).toBe('Transakcijų Srautas - btc4');
+  });
+
+
+  it("says the page's own sentence and the reason when the failure carries no sentence, or the list is no list", async () => {
+    const failures = [
+      [() => given.networkError('get', NETWORKS), 'Patikrinkite interneto ryšį.'],
+      [() => given.json('get', NETWORKS, { default_network: 'btc4' }), 'Serveris atsakė netinkamo formato duomenimis.'],
+    ];
+    for (const [answer, reason] of failures) {
+      answer();
+      const { unmount } = renderGraph();
+      const box = await findBox(T.T1);
+      expect(await screen.findByText(`Nepavyko gauti tinklų sąrašo. ${reason} ${NO_UNIT}`)).toBeInTheDocument();
+      expect(rowsOf(box).inputs[0].primary).toBe('0.01');
+      unmount();
+    }
   });
 
 
@@ -106,6 +132,8 @@ describe('Title and unit', () => {
     expect(title()).toHaveTextContent('Transakcijų Srautas - doge');
     expect(dateField()).toHaveValue('2026-09-30 (šiandien)');
     expect(screen.queryByRole('button', { name: 'Ankstesnė diena' })).toBeNull();
+    // The day list was refused too — and says so under the title
+    expect(await screen.findByText('Nepalaikomas tinklas: doge. Pasirinkti galima tik šiandieną.')).toBeInTheDocument();
   });
 });
 

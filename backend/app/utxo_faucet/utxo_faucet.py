@@ -65,9 +65,10 @@ from embit.transaction import Transaction, TransactionInput, TransactionOutput
 
 from .coins import coin_params
 from .dialects import dialect_for
-from .electrum_client import ElectrumClient
+from .electrum_client import ELECTRUM_TIMEOUT_S, ElectrumClient
 from ..cooldown import CooldownTable
 from ..icons import icon_url
+from ..failure_reasons import failure_sentence
 
 
 # How long a polled faucet balance is served from cache. The page
@@ -128,9 +129,11 @@ def _electrum_scripthash(script) -> str:
 # InsufficientFunds
 ############################################################
 #
-# The builder's "the wallet cannot cover chunk + fee" — a
-# ValueError the payout path turns into the friendly "faucet
-# is empty" 503 rather than a generic 500.
+# The builder's "the coins it may spend cannot cover chunk +
+# fee" — a ValueError carrying both amounts in satoshi, which
+# the payout path turns into a 503 that names them rather
+# than a generic 500. Nothing spendable at all is the
+# available amount zero.
 #
 # Used by:
 #   - UTXOFaucet._create_and_broadcast_transaction — raised
@@ -138,7 +141,24 @@ def _electrum_scripthash(script) -> str:
 ############################################################
 
 class InsufficientFunds(ValueError):
-    pass
+
+
+
+
+
+
+    ############################################################
+    # __init__
+    ############################################################
+    #
+    # Used by:
+    #   - UTXOFaucet._create_and_broadcast_transaction (below)
+    ############################################################
+
+    def __init__(self, available_sat, needed_sat):
+        super().__init__(f'{available_sat} sat spendable, {needed_sat} sat needed')
+        self.available_sat = available_sat
+        self.needed_sat = needed_sat
 
 
 
@@ -660,7 +680,7 @@ class UTXOFaucet:
         # ==========================================================
         utxos = self._spendable_utxos(ctx)
         if not utxos:
-            raise InsufficientFunds("No UTXOs available")
+            raise InsufficientFunds(0, amount_sat + self._estimate_fee(ctx, 1, 2))
 
 
         # STEP 2: coin selection. Largest first until the chunk plus
@@ -682,7 +702,7 @@ class UTXOFaucet:
             if total_input >= amount_sat + self._estimate_fee(ctx, len(selected_utxos), 2):
                 break
         else:
-            raise InsufficientFunds("Insufficient funds")
+            raise InsufficientFunds(total_input, amount_sat + self._estimate_fee(ctx, len(selected_utxos), 2))
 
         for utxo in reversed(by_size[len(selected_utxos):]):
             if len(selected_utxos) >= MAX_INPUTS_PER_PAYOUT:
@@ -900,8 +920,9 @@ class UTXOFaucet:
     #
     # The faucet address and its confirmed / unconfirmed /
     # total balance. Returns (payload, http_status) — the
-    # route just jsonify()s it. Failures log the real
-    # exception and answer with a generic Lithuanian error.
+    # route just jsonify()s it. A failure logs the real
+    # exception and answers with its cause in Lithuanian
+    # (failure_sentence).
     #
     # Used by:
     #   - utxo_routes.py — GET /api/utxo/<network>/faucet-balance
@@ -923,9 +944,10 @@ class UTXOFaucet:
                 "chunk_size": float(ctx.chunk_size_btc or self.default_amount_btc)
             }, 200
 
-        except Exception:
+        except Exception as error:
             logging.exception(f"Failed to get UTXO faucet balance for {network_key}")
-            return {"error": "Nepavyko gauti čiaupo informacijos"}, 500
+            return {"error": failure_sentence('Nepavyko gauti čiaupo balanso', error, 'electrum',
+                                              ELECTRUM_TIMEOUT_S)}, 500
 
 
 
@@ -939,8 +961,10 @@ class UTXOFaucet:
     # The actual payout: validate the address, enforce the
     # cooldown, check the faucet balance and broadcast one
     # chunk to the student. Returns (payload, http_status);
-    # user-facing errors in Lithuanian, with the raw exception
-    # in 'details' for debugging.
+    # every refusal is one Lithuanian sentence, and a failure
+    # on the chain's side names its cause — the Electrum
+    # server's or the node's (failure_sentence) — while the
+    # full traceback goes to the server log.
     #
     # Used by:
     #   - utxo_routes.py — GET /api/utxo/<network>/request-btc
@@ -981,7 +1005,8 @@ class UTXOFaucet:
             # failure path below releases the slot.
             # ======================================================
             if not ctx.chunk_size_btc or ctx.chunk_size_btc <= 0:
-                return {"error": "chunk_size must be > 0 for this network"}, 500
+                return {"error": "Tinklo konfigūracijos klaida: išmokos dydis (chunk_size) turi būti didesnis "
+                                 "už nulį. Praneškite dėstytojui."}, 500
 
             cooldown_key = (network_key, to_address.lower())
             remaining = self.cooldowns.claim(cooldown_key)
@@ -1007,6 +1032,13 @@ class UTXOFaucet:
             # =======================================================
             try:
                 balance_info = self._faucet_balance(ctx)
+            except Exception as error:
+                self.cooldowns.release(cooldown_key)
+                logging.exception(f"Failed to read the faucet balance on {network_key}")
+                return {"error": failure_sentence('Nepavyko gauti čiaupo balanso', error, 'electrum',
+                                                  ELECTRUM_TIMEOUT_S)}, 500
+
+            try:
                 current_balance = balance_info["confirmed"]  # the conservative floor, see above
                 # The payout needs the chunk PLUS its fee — a balance
                 # inside that band would pass a bare check and fail in
@@ -1028,12 +1060,14 @@ class UTXOFaucet:
                 amount_sat = int(round(float(ctx.chunk_size_btc) * 1e8))
                 with self._send_locks.setdefault(network_key, threading.Lock()):
                     tx_id = self._create_and_broadcast_transaction(ctx, to_address, amount_sat)
-            except InsufficientFunds:
-                # A funded balance with nothing spendable listed (or not
-                # enough to cover chunk + fee once the real outputs are
-                # in hand) is "empty" for the student's purposes
+            except InsufficientFunds as short:
+                # The confirmed balance passed the gate, but the coins
+                # the faucet may spend right now do not cover chunk +
+                # fee — spent by payouts still unconfirmed, or too
+                # small to pay for themselves. Said as such, with the
+                # amounts: it is not the same as an empty faucet.
                 self.cooldowns.release(cooldown_key)
-                return {"error": "Čiaupas nebeturi kriptovaliutos. Praneškite dėstytojui."}, 503
+                return {"error": self._short_of_coins_sentence(network_key, short)}, 503
             except MempoolChainTooLong:
                 # The node will not stack another unconfirmed payout on
                 # the chain — the next block confirms it and frees room.
@@ -1056,6 +1090,39 @@ class UTXOFaucet:
                 "network": ctx.network_key
             }, 200
 
-        except Exception as e:
+        except Exception as error:
             logging.exception(f"{network_key} payout to {to_address} failed")
-            return {"error": "Nepavyko išsiųsti transakcijos. Bandykite dar kartą.", "details": str(e)}, 500
+            return {"error": failure_sentence('Nepavyko išsiųsti transakcijos', error, 'electrum',
+                                              ELECTRUM_TIMEOUT_S)}, 500
+
+
+
+
+
+
+    ############################################################
+    # _short_of_coins_sentence
+    ############################################################
+    #
+    # The refusal when the confirmed balance would do but the
+    # coins the faucet may spend right now do not cover the
+    # payout: none at all while recent payouts confirm, or the
+    # two amounts — what it holds in spendable coins, and what
+    # the chunk plus its fee needs.
+    #
+    # Used by:
+    #   - request_crypto (above)
+    ############################################################
+
+    def _short_of_coins_sentence(self, network_key, short):
+        symbol = self.network_configs[network_key].get('short_name', '')
+        if not short.available_sat:
+            return ("Čiaupas šiuo metu neturi laisvų monetų — visos jos panaudotos dar nepatvirtintose "
+                    "išmokose. Palaukite naujo bloko; jei nepadės, praneškite dėstytojui.")
+
+        def coins(sat):
+            return f'{sat / 1e8:.8f}'.rstrip('0').rstrip('.')
+
+        return (f"Čiaupo laisvų monetų nepakanka išmokai: turima {coins(short.available_sat)} {symbol}, "
+                f"o išmokai su tinklo mokesčiu reikia {coins(short.needed_sat)} {symbol}. "
+                f"Palaukite naujo bloko; jei nepadės, praneškite dėstytojui.")

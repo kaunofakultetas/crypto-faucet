@@ -275,9 +275,10 @@ EVM_NETWORK_CONFIGS = {
         },
         # no 'explorer' — no Etherscan-style API is configured, so
         # get_networks reports has_explorer=false: the faucet page
-        # hides the graph button and /graph shows a notice. (The
-        # backend still accepts a direct graph request for such a
-        # network and logs a traceback — pinned in the tests.)
+        # hides the graph button and /graph shows a notice. (A
+        # direct graph request for such a network is answered with
+        # a plain 400, "Nepalaikomas tinklas" — pinned in the
+        # tests.)
     },
     "polygonAmoy": {
         'id': 8,

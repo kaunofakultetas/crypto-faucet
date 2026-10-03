@@ -57,7 +57,8 @@ const STATE_WORDS = /^(atlikta|dabartinis žingsnis|dar neatlikta)$/;
 // a failed claim and a token it could not read
 const TX_HASH = f.erc20Payout().transaction_hash;
 const CLAIM_FAILED = 'Nepavyko išsiųsti žetonų.';
-const TOKEN_FAILED = 'Nepavyko gauti žetono informacijos';
+const TOKEN_FAILED = 'Nepavyko gauti žetono informacijos.';
+const MALFORMED = 'Serveris atsakė netinkamo formato duomenimis.';
 
 // The ERC-20 backend's own refusals (erc20_faucet.py)
 const TOKEN_COOLDOWN = 'Žetonai jums jau išsiųsti. Daugiau galėsite pasiimti už 3500 sek.';
@@ -187,9 +188,10 @@ async function readyToClaim(fullName = 'Ethereum Sepolia') {
 }
 
 // The page's three faces — loaded, loading, its error card
+// (the backend's sentence, or the page's with the reason)
 const pageStands = () => screen.queryByRole('heading', { level: 1 })
   ?? screen.queryByRole('status')
-  ?? screen.queryByText(/^(Nepavyko gauti žetono informacijos|Nepalaikomas žetonas|Vidinė serverio klaida|Nerasta|Nepalaikomas tinklas)/);
+  ?? screen.queryByText(/^(Nepavyko gauti žetono informacijos\. |Nepalaikomas žetonas|Vidinė serverio klaida|Nerasta|Nepalaikomas tinklas)/);
 
 
 
@@ -244,17 +246,17 @@ describe("Loading and the backend's failures", () => {
   });
 
 
-  it('says "Nepavyko gauti žetono informacijos" when the backend cannot be reached', async () => {
+  it('says the token could not be read for want of a connection when the backend cannot be reached', async () => {
     given.networkError('get', '/api/erc20/token/:symbol');
     renderTokenFaucet();
-    expect(await screen.findByText('Nepavyko gauti žetono informacijos')).toBeInTheDocument();
+    expect(await screen.findByText(`${TOKEN_FAILED} Patikrinkite interneto ryšį.`)).toBeInTheDocument();
   });
 
 
-  it("says the same for a proxy's error page", async () => {
+  it("says the status a proxy's error page answered with", async () => {
     given.html('get', '/api/erc20/token/:symbol');
     renderTokenFaucet();
-    expect(await screen.findByText('Nepavyko gauti žetono informacijos')).toBeInTheDocument();
+    expect(await screen.findByText(`${TOKEN_FAILED} Serveris grąžino klaidą (502).`)).toBeInTheDocument();
   });
 
 
@@ -268,10 +270,10 @@ describe("Loading and the backend's failures", () => {
     ['deployments that are no list', { ...f.erc20Token('LINK'), deployments: { sepolia: f.erc20Token('LINK').deployments[0] } }],
     ['a deployment that is null', { ...f.erc20Token('LINK'), deployments: [null] }],
     ['a token that is a bare string', { ...f.erc20Token('LINK'), token: 'LINK' }],
-  ])('says the same for a token answer that is %s — never a crash, never an endless skeleton', async (_, body) => {
+  ])('says a token answer that is %s came in the wrong shape — never a crash, never an endless skeleton', async (_, body) => {
     given.json('get', '/api/erc20/token/:symbol', body);
     renderTokenFaucet();
-    expect(await screen.findByText(TOKEN_FAILED)).toBeInTheDocument();
+    expect(await screen.findByText(`${TOKEN_FAILED} ${MALFORMED}`)).toBeInTheDocument();
     expect(screen.queryByRole('status')).toBeNull();
   });
 
@@ -283,7 +285,7 @@ describe("Loading and the backend's failures", () => {
       { body: f.erc20Token('LINK') },
     ]);
     renderTokenFaucet();
-    expect(await screen.findByText(TOKEN_FAILED)).toBeInTheDocument();
+    expect(await screen.findByText(`${TOKEN_FAILED} ${MALFORMED}`)).toBeInTheDocument();
     await act(() => vi.advanceTimersByTimeAsync(10000));
     expect(await pageLoaded()).toBeInTheDocument();
   });
@@ -315,7 +317,7 @@ describe("Loading and the backend's failures", () => {
     await settle(100);
     expect(asked).toBe(2);
     expect(screen.getByRole('heading', { level: 1, name: "Chainlink faucet'as" })).toBeInTheDocument();
-    expect(screen.queryByText('Nepavyko gauti žetono informacijos')).toBeNull();
+    expect(screen.queryByText(/^Nepavyko gauti žetono informacijos/)).toBeNull();
   });
 });
 
@@ -364,6 +366,27 @@ describe('The page — title, chain cards, return address', () => {
     renderTokenFaucet();
     await pageLoaded();
     expect(valueIn(cardOf('Ethereum Sepolia'), 'Čiaupo balansas:')).toHaveTextContent('—');
+  });
+
+
+  it("says why under the dash, in the backend's words, when the backend sent the reason", async () => {
+    const reason = 'Nepavyko gauti čiaupo LINK balanso: tinklo RPC serveris neatsakė per 10 s.';
+    serveToken({ chains: ['sepolia', 'hoodi'], patch: { sepolia: { balance: null, balance_error: reason } } });
+    renderTokenFaucet();
+    await pageLoaded();
+    expect(within(cardOf('Ethereum Sepolia')).getByText(reason)).toBeInTheDocument();
+    expect(within(cardOf('Ethereum Hoodi')).queryByText(/^Nepavyko/)).toBeNull();
+  });
+
+
+  it("says, in the backend's words, that the gas check could not run on a chain", async () => {
+    // The claim then goes ahead unchecked, so the student is told
+    const reason = 'Nepavyko patikrinti jūsų piniginės balanso tinklo mokesčiams: nepavyko prisijungti prie tinklo RPC serverio.';
+    serveToken({ patch: { sepolia: { wallet_native_wei: null, wallet_native_error: reason } } });
+    installMetamask({ connected: true });
+    renderTokenFaucet();
+    await pageLoaded();
+    expect(await within(cardOf('Ethereum Sepolia')).findByText(reason)).toBeInTheDocument();
   });
 
 
@@ -1272,8 +1295,8 @@ describeEndpointContract({
   render: () => renderTokenFaucet(),
   chrome: pageStands,
   loaded: async () => { await pageLoaded(); },
-  failed: async () => {
-    await screen.findByText(/^(Vidinė serverio klaida|Nepalaikomas tinklas: x|Nerasta|Nepavyko gauti žetono informacijos)$/);
+  failed: async (says) => {
+    await screen.findByText(says(TOKEN_FAILED));
   },
   loading: () => screen.getByRole('status'),
 });

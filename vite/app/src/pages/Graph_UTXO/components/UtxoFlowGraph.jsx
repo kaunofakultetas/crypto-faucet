@@ -25,9 +25,16 @@
 //
 //  The backend answers from its cache while it crawls the
 //  chain, so the canvas says what state the day is in: loading,
-//  still being collected, empty, not given by the server, or
-//  an outage — centred while nothing is drawn, as a pill under
-//  the block row over a drawing (which then stays as it was).
+//  still being collected, empty, not fetched yet, refused by
+//  the server, a crawl that failed, or an outage — centred
+//  while nothing is drawn, as a pill under the block row over
+//  a drawing (which then stays as it was). Every failure comes
+//  with its reason: why the request failed, or the backend's
+//  own sentence on why its crawl failed or its server would
+//  not give the missing transactions — a dead Electrum server
+//  is plain to see on the graph, not a day that only looks
+//  quiet — and transactions merely not fetched yet are said
+//  to be just that, never blamed on the server.
 //
 //  Like the EVM graph, the picture has a TEXT ALTERNATIVE: a
 //  visually hidden table lists every transaction with its
@@ -41,6 +48,7 @@
 //    BlockHeaderRow   — the pinned block-height row
 //    BlockColumn      — one block's lane in the drawing
 //    SpendEdge        — one output → input curve
+//    missingStatusOf  — the word on transactions not shown
 //    statusOf         — what the canvas says about the day
 //    CanvasStatus     — that, centred or as a pill
 //    TransactionTable — the visually hidden text version
@@ -52,8 +60,10 @@ import { useLayoutEffect, useRef, useState } from 'react';
 
 import { CircularProgress } from '@mui/material';
 
+import { withNextStep } from '@/utils/requestError';
+
 import { COLORS, LAYOUT_CONFIG, MEMPOOL_COLUMN, NODE_CONFIG, ZOOM_CONFIG } from '../constants';
-import useTransactionGraph, { formatAmount, nameOf, senderOf, shortTxid } from '../hooks/useTransactionGraph';
+import useTransactionGraph, { amountText, nameOf, senderOf, shortTxid } from '../hooks/useTransactionGraph';
 import useNodePositions, { columnKeyOf, rowCenterY } from '../hooks/useNodePositions';
 import useBackgroundPan from '../hooks/useBackgroundPan';
 import useZoom from '../hooks/useZoom';
@@ -293,6 +303,44 @@ function SpendEdge({ from, to, faucetCoin }) {
 
 
 // -----------------------------------------------------------
+// missingStatusOf
+// -----------------------------------------------------------
+//
+// What the canvas says about the transactions the backend met
+// in a history but cannot show yet. When its server refused
+// one of them, `missingError` holds the server's own words on
+// why, and the message is a warning that they cannot be
+// shown. Otherwise they are only not fetched from the
+// Electrum server yet — no failure, nobody to blame — and the
+// message says just that. `centred` tells the message over an
+// empty canvas (the whole day) from the pill over a drawing
+// (part of it).
+//
+// Used by:
+//   - statusOf (below)
+// -----------------------------------------------------------
+
+function missingStatusOf(missing, missingError, centred) {
+
+  if (missingError) {
+    const lead = centred ? `Šios dienos transakcijų (${missing}) parodyti negalima` : `Dalies transakcijų (${missing}) grafike nėra`;
+    return { centred, tone: 'warn', busy: false, text: withNextStep(lead, missingError) };
+  }
+
+
+  const text = centred
+    ? `Šios dienos transakcijų (${missing}) dar negauta iš Electrum serverio`
+    : `Dalies transakcijų (${missing}) dar negauta iš Electrum serverio — grafike jų dar nėra`;
+  return { centred, tone: 'info', busy: false, text };
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // statusOf
 // -----------------------------------------------------------
 //
@@ -300,19 +348,26 @@ function SpendEdge({ from, to, faucetCoin }) {
 // the data hook's state and the number of boxes drawn — or
 // nothing once the day is drawn and complete. With no box
 // drawn the message is centred: loading, an outage, the
-// first crawl still collecting, transactions the server did
-// not give, or a plainly empty day. Over a drawing it is a
-// pill that leaves the boxes as they were: the first crawl
-// adding to them, a failed refresh, or some transactions
-// missing. Each message carries its tone, and a spinner while
-// something is on its way. Counts go in parentheses — no noun
-// has to agree with a number.
+// first crawl still collecting, the backend's last crawl
+// failed, transactions not fetched yet or refused by the
+// server (missingStatusOf), or a plainly empty day. Over a
+// drawing it is a pill that leaves the boxes as they were: a
+// failed refresh, the first crawl adding to them, a failed
+// crawl, or some transactions missing — the two failures
+// saying the boxes are what was had before. Every failure
+// carries its reason: the request's (`error`, a sentence
+// already), the backend's sentence on its crawl
+// (`crawlError`), and on the missing transactions when its
+// server refused them (`missingError`). Each message carries
+// its tone, and a spinner while something is on its way.
+// Counts go in parentheses — no noun has to agree with a
+// number.
 //
 // Used by:
 //   - CanvasStatus (below)
 // -----------------------------------------------------------
 
-function statusOf({ loading, error, updating, missing, count, live }) {
+function statusOf({ loading, error, updating, crawlError, missing, missingError, count, live }) {
 
   if (loading) {
     return { centred: true, tone: 'info', busy: true, text: 'Kraunama…' };
@@ -322,16 +377,16 @@ function statusOf({ loading, error, updating, missing, count, live }) {
   if (count === 0) {
     if (error) return { centred: true, tone: 'error', busy: false, text: error };
     if (updating) return { centred: true, tone: 'info', busy: true, text: 'Renkamos transakcijos iš tinklo…' };
-    if (missing) {
-      return { centred: true, tone: 'warn', busy: false, text: `Serveris negrąžino šios dienos transakcijų (${missing}) — parodyti jų negalima` };
-    }
+    if (crawlError) return { centred: true, tone: 'error', busy: false, text: crawlError };
+    if (missing) return missingStatusOf(missing, missingError, true);
     return { centred: true, tone: 'info', busy: false, text: live ? 'Šiandien čiaupo transakcijų dar nėra' : 'Šią dieną čiaupo transakcijų nėra' };
   }
 
 
-  if (error) return { centred: false, tone: 'error', busy: false, text: 'Nepavyko atnaujinti grafiko — rodomi paskutiniai gauti duomenys' };
+  if (error) return { centred: false, tone: 'error', busy: false, text: withNextStep(error, 'Rodomi paskutiniai gauti duomenys.') };
   if (updating) return { centred: false, tone: 'info', busy: true, text: 'Atnaujinama…' };
-  if (missing) return { centred: false, tone: 'warn', busy: false, text: `Serveris negrąžino dalies transakcijų (${missing}) — grafike jų nėra` };
+  if (crawlError) return { centred: false, tone: 'error', busy: false, text: withNextStep(crawlError, 'Rodomi anksčiau surinkti duomenys.') };
+  if (missing) return missingStatusOf(missing, missingError, false);
   return null;
 }
 
@@ -411,13 +466,13 @@ function TransactionTable({ id, transactions, names, unit }) {
   const inputsOf = (tx, sender) => (tx.coinbase ? 'naujos monetos (bloko atlygis)' : tx.inputs
     .map((input) => [
       sender.several && nameOf(input.address, names),
-      `${formatAmount(input.value, { grouped: false })} ${unit}`,
+      amountText(input.value, unit, { grouped: false }),
       `(${shortTxid(input.txid)}:${input.vout})`,
     ].filter(Boolean).join(' '))
     .join('; '));
 
   const outputsOf = (tx) => tx.outputs
-    .map((output) => `${nameOf(output.address, names, output.script_type)} ${formatAmount(output.value, { grouped: false })} ${unit}`)
+    .map((output) => `${nameOf(output.address, names, output.script_type)} ${amountText(output.value, unit, { grouped: false })}`)
     .join('; ');
 
 
@@ -466,7 +521,9 @@ function TransactionTable({ id, transactions, names, unit }) {
 //
 // network is the route's; day / today pick what is drawn
 // (Page.jsx owns the slider); unit is the network's short
-// currency name from the catalog, shown after every amount.
+// currency name from the catalog, shown after every amount —
+// null while the catalog has not told it, and the amounts
+// then go without one.
 // Stays mounted across day switches, so dragged boxes and the
 // zoom survive them. Owns which transaction's dialog is open
 // (and the box it flies out of) and which box holds keyboard
@@ -482,7 +539,8 @@ export default function UtxoFlowGraph({ network, day, today, unit }) {
   const [opened, setOpened] = useState(null);           // { txid, rect } while a dialog is open
   const [focusedTxid, setFocusedTxid] = useState(null);
   const {
-    blocks, transactions, byTxid, edges, live, names, faucetAddress, renameAddress, loading, error, updating, missing,
+    blocks, transactions, byTxid, edges, live, names, faucetAddress, renameAddress,
+    loading, error, updating, crawlError, missing, missingError,
   } = useTransactionGraph(network, day, today);
   const { scale, margin, setZoom, zoomIn, zoomOut, goHome } = useZoom(scrollerRef);
   const { canvas, positions, draggingTxid, bindBox } = useNodePositions({
@@ -625,7 +683,9 @@ export default function UtxoFlowGraph({ network, day, today, unit }) {
         </svg>
       </div>
 
-      <CanvasStatus status={statusOf({ loading, error, updating, missing, count: transactions.length, live })} />
+      <CanvasStatus
+        status={statusOf({ loading, error, updating, crawlError, missing, missingError, count: transactions.length, live })}
+      />
 
       <ZoomControls
         scale={scale}

@@ -30,16 +30,30 @@
 //  a real txid and a place to be drawn in, each one once; a
 //  field of the wrong type reads as not known; every block a
 //  transaction sits in has its column; a day the list cannot
-//  name is left out; and an answer for one transaction that
-//  holds none is a failed request, not an empty one. A broken
-//  answer therefore shows as less on screen, never as a
-//  crashed page.
+//  name is left out; and an answer that is no graph at all, a
+//  day list that is no list, or an answer for one transaction
+//  that holds none, is a failed request (MalformedAnswerError),
+//  not an empty day, a faucet with no past, or an endless
+//  wait. A broken answer therefore shows as less on screen, or
+//  as a sentence saying the server answered in a shape the
+//  page cannot use — never as a crashed page.
+//
+//  Every failure reaches the screen as words: a failed request
+//  through requestErrorText (the backend's own sentence, else
+//  the page's with the reason after it) — the day list's too,
+//  which the page says under its title row — and what the
+//  backend could not do in the background — its last crawl of
+//  the network, the transactions its server would not give —
+//  in the backend's sentences carried by the day's answer. An
+//  amount whose network's unit is not known goes without one
+//  (amountText).
 //
 //  Split into (root last) — plain functions with no React in
 //  them, then the hooks:
 //
 //    groupThousands      — digits in groups of three
 //    formatAmount        — satoshis as coins, every digit kept
+//    amountText          — an amount with its unit, when known
 //    shortTxid           — a txid cut short to tell boxes apart
 //    nameOf              — a name from the book, a short
 //                          address, or what a script pays to
@@ -69,6 +83,8 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
+
+import { MalformedAnswerError, requestErrorText } from '@/utils/requestError';
 
 import { NAME_MAX_LENGTH, POLL_CONFIG } from '../constants';
 
@@ -144,10 +160,8 @@ export const groupThousands = (value) => String(value).replace(/\B(?=(\d{3})+(?!
 // readers — they may read the groups as separate numbers.
 //
 // Used by:
-//   - TransactionBox.jsx — every row's amount and tooltip
+//   - amountText (below)
 //   - TransactionModal.jsx — the cards and the fee sum
-//   - UtxoFlowGraph.jsx — the text-alternative table
-//     (ungrouped)
 // -----------------------------------------------------------
 
 export function formatAmount(sat, { grouped = true } = {}) {
@@ -162,6 +176,33 @@ export function formatAmount(sat, { grouped = true } = {}) {
   }
   const groupedWhole = groupThousands(whole);
   return fraction ? `${groupedWhole}.${fraction.match(/.{1,3}/g).join(DIGIT_GAP)}` : groupedWhole;
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// amountText
+// -----------------------------------------------------------
+//
+// An amount as one line of text: formatAmount's digits (the
+// options pass through) with the network's unit after them —
+// or the digits alone while the unit is not known, when the
+// network list has not answered or could not be read. An
+// amount never borrows a unit that may be another network's.
+//
+// Used by:
+//   - TransactionBox.jsx — every row's amount and tooltip
+//   - UtxoFlowGraph.jsx — the text-alternative table
+//     (ungrouped)
+// -----------------------------------------------------------
+
+export function amountText(sat, unit, options) {
+  const digits = formatAmount(sat, options);
+  return unit ? `${digits} ${unit}` : digits;
 }
 
 
@@ -447,8 +488,8 @@ function rangeOfDay(dayString) {
 // Used by:
 //   - inputOf / outputOf / transactionOf / namesOf / graphOf
 //     (below)
-//   - useTransactionDays / useTransaction (below) — their
-//     answers
+//   - useTransactionDays / useTransaction /
+//     useTransactionGraph (below) — their answers
 // -----------------------------------------------------------
 
 const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -686,26 +727,28 @@ function namesOf(raw) {
 // graphOf
 // -----------------------------------------------------------
 //
-// A day's whole answer, cleaned into the shape the backend
-// promises before anything reads it. Each transaction is kept
-// once — the first of a txid — and a waiting one only on a
-// live window, since a past day has no mempool column to put
-// it in. Each block is kept once, ascending, and every block
-// a kept transaction sits in gets its column even when the
-// list left it out: the backend builds that list from the
-// transactions too. The window is live when the answer says
-// so, else when the caller's guess (the day is today) does;
-// `updating` holds only when it is plainly true, and the
-// number of missing transactions is taken only when it is a
-// count. Anything but an object reads as an empty day.
+// A day's whole answer — a JSON object: the query refuses
+// anything else before it gets here — cleaned into the shape
+// the backend promises before anything reads it. Each
+// transaction is kept once — the first of a txid — and a
+// waiting one only on a live window, since a past day has no
+// mempool column to put it in. Each block is kept once,
+// ascending, and every block a kept transaction sits in gets
+// its column even when the list left it out: the backend
+// builds that list from the transactions too. The window is
+// live when the answer says so, else when the caller's guess
+// (the day is today) does; `updating` holds only when it is
+// plainly true, the number of missing transactions is taken
+// only when it is a count, and the backend's sentences — why
+// its last crawl of the network failed, why the missing
+// transactions are missing — only when they are text.
 //
 // Used by:
 //   - useTransactionGraph (below) — every graph answer
 // -----------------------------------------------------------
 
-function graphOf(body, liveGuess) {
+function graphOf(answer, liveGuess) {
 
-  const answer = isRecord(body) ? body : {};
   const live = typeof answer.live === 'boolean' ? answer.live : liveGuess;
 
 
@@ -737,6 +780,8 @@ function graphOf(body, liveGuess) {
     live,
     updating: answer.updating === true,
     missing: countOf(answer.missing) ?? 0,
+    missing_error: textOf(answer.missing_error),
+    crawl_error: textOf(answer.crawl_error),
   };
 }
 
@@ -759,21 +804,31 @@ function graphOf(body, liveGuess) {
 // rangeOfDay in every season; the zone is part of the query
 // key, so a list built under one zone is never served under
 // another. An entry that names no day is dropped on arrival,
-// for the slider would hand it on to rangeOfDay.
-// useTransactionGraph refreshes the list when a crawl lands.
+// for the slider would hand it on to rangeOfDay; an answer
+// with no list of days at all is a failed request
+// (MalformedAnswerError). useTransactionGraph refreshes the
+// list when a crawl lands.
+//
+// Hands back `days`, and `error`: the sentence saying why
+// the list never arrived (requestErrorText) — the slider then
+// offers today alone, and the page must say so rather than
+// let the faucet look new. A refresh that fails keeps the
+// last list, which is still right, and says nothing.
 //
 // Used by:
-//   - Page.jsx — the day slider's options
+//   - Page.jsx — the day slider's options, and the line
+//     under the title row when the list never arrived
 // -----------------------------------------------------------
 
 export function useTransactionDays(network, today) {
 
   const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  const { data } = useQuery({
+  const { data, isError, error: queryError } = useQuery({
     queryKey: ['utxo-tx-days', network, timeZone],
     queryFn: async () => {
       const body = (await axios.get(`/api/utxo/${network}/transaction-days`, { params: { tz: timeZone } })).data;
-      return (isRecord(body) && Array.isArray(body.days) ? body.days : [])
+      if (!isRecord(body) || !Array.isArray(body.days)) throw new MalformedAnswerError('The backend answered without a day list');
+      return body.days
         .map((entry) => (isRecord(entry) ? entry.day : null))
         .filter((day) => typeof day === 'string' && DAY_PATTERN.test(day));
     },
@@ -781,11 +836,18 @@ export function useTransactionDays(network, today) {
   });
 
 
-  return useMemo(() => {
+  const days = useMemo(() => {
     const used = new Set(data ?? []);
     used.add(today);
     return [...used].sort();
   }, [data, today]);
+
+
+  const error = isError && !data
+    ? requestErrorText(queryError, 'Nepavyko gauti dienų, kuriomis buvo čiaupo transakcijų.')
+    : null;
+
+  return { days, error };
 }
 
 
@@ -804,9 +866,11 @@ export function useTransactionDays(network, today) {
 // backend fetches it from the chain when it lacks it). The
 // query stays off while the day already holds the
 // transaction. The answer is cleaned like the graph's, and
-// one that holds no transaction counts as a failed fetch, so
-// the dialog says so instead of waiting for ever. A 404 is an
-// answer, not a hiccup — nothing is retried.
+// one that holds no transaction counts as a failed fetch — a
+// MalformedAnswerError — so the dialog says so instead of
+// waiting for ever. A 404 is an answer, not a hiccup — the
+// node said no such transaction exists — so nothing is
+// retried.
 //
 // Used by:
 //   - TransactionModal.jsx — the transaction on show
@@ -818,7 +882,7 @@ export function useTransaction(network, txid, enabled) {
     queryFn: async ({ signal }) => {
       const body = (await axios.get(`/api/utxo/${network}/transaction/${txid}`, { signal })).data;
       const transaction = transactionOf(isRecord(body) ? body.transaction : null);
-      if (!transaction) throw new Error('The backend answered without the transaction');
+      if (!transaction) throw new MalformedAnswerError('The backend answered without the transaction');
       return { transaction, names: namesOf(body.names) };
     },
     enabled,
@@ -852,13 +916,18 @@ export function useTransaction(network, txid, enabled) {
 // failure as a sentence, while the earlier data stays on
 // screen; `updating` while the window's first crawl is still
 // filling the backend's cache (later crawls are not
-// announced); and `missing`, how many of the window's
-// transactions the backend has met but cannot show — not
-// fetched yet, or refused by its server. renameAddress stores
-// a name with the backend and settles on whether it was
-// saved; an empty name clears it. When a window's first crawl
-// lands, the day list is asked again — it is read from what
-// the crawls stored.
+// announced); `crawlError`, the backend's sentence on why its
+// last crawl of the network failed (a dead Electrum server),
+// null once one succeeded; and `missing`, how many of the
+// window's transactions the backend has met but cannot show —
+// not fetched yet, or refused by its server, which
+// `missingError` then explains in the backend's words.
+// renameAddress stores a name with the backend and settles
+// once the name is stored and the graph asked again; it
+// rejects with the request's error when the backend did not
+// store it, so the dialog can say why. An empty name clears
+// it. When a window's first crawl lands, the day list is asked
+// again — it is read from what the crawls stored.
 //
 // Used by:
 //   - UtxoFlowGraph.jsx
@@ -872,10 +941,16 @@ export default function useTransactionGraph(network, day, today) {
 
 
   // Fast while the first crawl fills the cache, steady on a
-  // live window, not at all on a past day once it has landed
+  // live window, not at all on a past day once it has landed.
+  // An answer that is not even an object is no day — an
+  // empty one would claim the faucet was quiet
   const query = useQuery({
     queryKey: ['utxo-graph', network, from, to],
-    queryFn: async ({ signal }) => graphOf((await axios.get(`/api/utxo/${network}/graph`, { params: { from, to }, signal })).data, liveGuess),
+    queryFn: async ({ signal }) => {
+      const body = (await axios.get(`/api/utxo/${network}/graph`, { params: { from, to }, signal })).data;
+      if (!isRecord(body)) throw new MalformedAnswerError('The backend answered without a graph');
+      return graphOf(body, liveGuess);
+    },
     refetchInterval: (current) => {
       if (current.state.data?.updating) return POLL_CONFIG.UPDATING_MS;
       return (current.state.data?.live ?? liveGuess) ? POLL_CONFIG.LIVE_MS : false;
@@ -910,29 +985,26 @@ export default function useTransactionGraph(network, day, today) {
 
   // Stored by the backend first; once it agreed, every graph
   // and transaction query of the network asks again — awaited,
-  // so the dialog closes its editor on the new label, and
-  // learns when the name was NOT saved
+  // so the dialog closes its editor on the new label. A name
+  // the backend did not store rejects with the request's
+  // error, which the dialog turns into its reason
   const renameAddress = useCallback(async (address, name) => {
     const trimmed = name.trim().slice(0, NAME_MAX_LENGTH);
-    try {
-      await axios.get(`/api/utxo/${network}/set-address-name`, { params: { address, name: trimmed } });
-    } catch (err) {
-      console.error('Rename failed:', err);
-      return false;
-    }
+    await axios.get(`/api/utxo/${network}/set-address-name`, { params: { address, name: trimmed } });
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['utxo-graph', network] }),
       queryClient.invalidateQueries({ queryKey: ['utxo-tx', network] }),
     ]);
-    return true;
   }, [network, queryClient]);
 
 
-  // The backend's own sentence when the failure carries one;
-  // a proxy's page or a dropped connection has nothing a
-  // student could read, so the page's sentence stands in
-  const message = query.error?.response?.data?.error;
-  const failure = typeof message === 'string' && message.trim() ? message : 'Nepavyko gauti transakcijų';
+  // The backend's own sentence when the failure carries one,
+  // else the page's with the reason after it. A refresh that
+  // failed over an earlier answer could not UPDATE the graph;
+  // without one, the transactions could not be had at all
+  const error = query.isError
+    ? requestErrorText(query.error, data ? 'Nepavyko atnaujinti grafiko.' : 'Nepavyko gauti transakcijų.')
+    : null;
 
 
   return {
@@ -945,8 +1017,10 @@ export default function useTransactionGraph(network, day, today) {
     faucetAddress: data?.faucet_address ?? null,
     renameAddress,
     loading: query.isPending,
-    error: query.isError ? failure : null,
+    error,
     updating,
+    crawlError: data?.crawl_error ?? null,
     missing: data?.missing ?? 0,
+    missingError: data?.missing_error ?? null,
   };
 }

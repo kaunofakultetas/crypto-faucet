@@ -19,11 +19,13 @@
 
 
 import os
+import logging
 
-from flask import Flask, Response
+from flask import Flask, Response, jsonify
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from app.database.db import get_db_connection
+from app.failure_reasons import failure_sentence
 
 
 # The Flask app — the blueprints are registered onto it in the
@@ -69,9 +71,11 @@ from app.config_loader import (  # noqa: E402 — after the app object, on purpo
 # stored blocks packed into one JSON array straight out of
 # SQLite, in height order (physical order is insert order only
 # until a block is deleted and re-seeded) and carrying each
-# block's height so the page can sort defensively. Lives here
-# rather than in a blueprint because it is the app's single
-# standalone route.
+# block's height so the page can sort defensively. A database
+# that cannot be read answers a 500 whose sentence names the
+# database's own complaint (failure_sentence), never Flask's
+# bare error page. Lives here rather than in a blueprint
+# because it is the app's single standalone route.
 #
 # Used by:
 #   - pages/BlockchainSimulator/Page.jsx — loads the demo
@@ -80,24 +84,29 @@ from app.config_loader import (  # noqa: E402 — after the app object, on purpo
 
 @app.route('/api/get-example-blockchain', methods=['GET'])
 def get_example_blockchain():
-    with get_db_connection() as conn:
-        sqlFetchData = conn.execute('''
-            SELECT
-                json_group_array(
-                    json_object(
-                        'height', Height,
-                        'data', Transactions,
-                        'previousHash', PrevBlock,
-                        'nonce', Nonce,
-                        'hash', BlockHash
-                    )
-                ) AS json_block
-            FROM (
-                SELECT * FROM BlockchainSimulator_Blocks
-                ORDER BY CAST(Height AS INTEGER)
-            )
-        ''')
-        returnJson = sqlFetchData.fetchone()[0]
+    try:
+        with get_db_connection() as conn:
+            sqlFetchData = conn.execute('''
+                SELECT
+                    json_group_array(
+                        json_object(
+                            'height', Height,
+                            'data', Transactions,
+                            'previousHash', PrevBlock,
+                            'nonce', Nonce,
+                            'hash', BlockHash
+                        )
+                    ) AS json_block
+                FROM (
+                    SELECT * FROM BlockchainSimulator_Blocks
+                    ORDER BY CAST(Height AS INTEGER)
+                )
+            ''')
+            returnJson = sqlFetchData.fetchone()[0]
+    except Exception as error:
+        logging.exception('Reading the demo chain failed')
+        return jsonify({'error': failure_sentence('Nepavyko perskaityti pavyzdinės blokų grandinės', error,
+                                                  'database')}), 500
     return Response(returnJson, mimetype='application/json')
 
 

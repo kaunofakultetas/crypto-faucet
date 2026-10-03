@@ -33,17 +33,28 @@
 //  boot discovery pass and then stands still, and a boot pass
 //  that throws never keeps today's live refresh from starting.
 //
-//  A fetch that fails is reported (`failed`), so an outage
-//  never looks like a quiet day — and an answer that is no
-//  transfer list (a captive portal's page, an emptied object,
-//  a row without its addresses) is a failed fetch as much as a
-//  500 is. Requests still in flight when the graph is torn
-//  down are aborted, never merged into the next one.
+//  A fetch that fails is reported (`failure`) in a sentence
+//  that says what went wrong — the backend's own, or the
+//  reason the request failed — so an outage never looks like a
+//  quiet day; an answer that is no transfer list (a captive
+//  portal's page, an emptied object, a row without its
+//  addresses) is a failed fetch as much as a 500 is. A sweep,
+//  an expansion or the boot that throws while drawing is told
+//  the same way, in its own words. The backend's sentence on
+//  a failed Etherscan refresh rides along with its answers and
+//  is passed on (`refreshError`), so a refused API key or a
+//  rate limit shows on the graph. Requests still in flight
+//  when the graph is torn down are aborted, never merged into
+//  the next one.
 //
 //  Split into (root last) — the store, the sweep and the
 //  event wiring are plain functions with no React in them;
 //  the hook owns only lifecycle and the public API:
 //
+//    FETCH_FAILED        — the outage notice's own sentence
+//    LAST_DATA_SHOWN     — a failed fetch's notice, its close
+//    MAY_BE_INCOMPLETE   — a notice's close when transfers
+//                          may be missing
 //    NODE_PRESENTATION   — model kind → icon + size
 //    clamp               — the zoom range clamp
 //    formatAddress       — an address shortened for a label
@@ -67,8 +78,24 @@ import axios from 'axios';
 import { Network } from 'vis-network';
 import { DataSet } from 'vis-data';
 
+import { MalformedAnswerError, requestErrorText, withNextStep } from '@/utils/requestError';
+
 import { ZOOM_CONFIG, LAYOUT_CONFIG, TIMING_CONFIG, NODE_CONFIG, EDGE_CONFIG, IMAGES, NAME_MAX_LENGTH } from '../constants';
 import useNodePositions from './useNodePositions';
+
+
+// What the outage notice says when the backend gave no
+// sentence of its own — requestErrorText adds the reason
+const FETCH_FAILED = 'Nepavyko atnaujinti grafiko.';
+
+// What the outage notice adds after a failed fetch's reason:
+// the last answers stay drawn
+const LAST_DATA_SHOWN = 'Rodomi paskutiniai gauti duomenys.';
+
+// What a notice adds after a drawing that threw, or after the
+// backend's word on a cache it could not refresh from
+// Etherscan: transfers may be missing from the canvas
+const MAY_BE_INCOMPLETE = 'Grafike gali trūkti transakcijų.';
 
 
 
@@ -661,8 +688,9 @@ async function sweepGraph({ store, fetchTransactions, merge, mirror, isCancelled
 // at UPDATE_INTERVAL. The next sweep is scheduled only after
 // `runSweep` settled — resolved OR rejected, the chain always
 // re-arms — so a slow backend can never stack sweeps and one
-// throw can never silently end the live refresh. A hidden
-// tab keeps its place in the cadence but does no work.
+// throw can never silently end the live refresh; the throw
+// goes to `onError`, so the screen can say it. A hidden tab
+// keeps its place in the cadence but does no work.
 // `isCancelled` stops the chain and stop() kills the pending
 // timer.
 //
@@ -671,7 +699,7 @@ async function sweepGraph({ store, fetchTransactions, merge, mirror, isCancelled
 //     live, stopped in the cleanup
 // -----------------------------------------------------------
 
-function createSweepScheduler(runSweep, isCancelled) {
+function createSweepScheduler(runSweep, isCancelled, onError) {
 
   let timerId = null;
   let warmupRemaining = TIMING_CONFIG.BOOT_SWEEPS;
@@ -687,7 +715,7 @@ function createSweepScheduler(runSweep, isCancelled) {
       try {
         if (!document.hidden) await runSweep();
       } catch (err) {
-        console.error('Sweep failed:', err);
+        onError(err);
       } finally {
         scheduleNext();
       }
@@ -768,8 +796,9 @@ function wireNetworkEvents(network, { onScale, onExpand, onRightClick, onMoves }
 // merge places a transfer by those two addresses and nothing
 // else, so anything short of that — a captive portal's page
 // answered with a 200, an emptied object, a row without its
-// addresses — is treated as a failed fetch: the outage notice
-// instead of a graph that silently stops.
+// addresses — is treated as a failed fetch, a malformed
+// answer: the outage notice saying so instead of a graph that
+// silently stops.
 //
 // Used by:
 //   - useTransactionGraph (below) — fetchTransactions
@@ -797,10 +826,13 @@ function isTransferList(rows) {
 // date, whether that day is today, the currency symbol of the
 // labels and what a right-click on a node does. It gets back
 // the ref for the canvas container, the zoom scale with its
-// setters, the rename — which resolves to whether the name
-// was saved — `failed`, the last fetch's verdict for the
-// shell's notice, and `rows`, the drawn transfers as text.
-// The store (model + DataSets) exists only between boot and
+// setters, the rename — which resolves once the name is
+// saved and throws the failure otherwise — `failure`, the
+// outage notice's sentence while the last fetch or drawing
+// failed, `refreshError`, the notice's sentence while the
+// backend's latest Etherscan refresh of an address still
+// swept failed, and `rows`, the drawn transfers as text. The
+// store (model + DataSets) exists only between boot and
 // cleanup; everything outside the effect reaches it through
 // storeRef and tolerates null.
 //
@@ -841,8 +873,15 @@ export default function useTransactionGraph({ faucetAddress, network, dateRange,
   const [scale, setScale] = useState(1);
 
   // The last fetch's verdict — an outage must not look like a
-  // quiet day, so the shell shows a notice while this is true
-  const [failed, setFailed] = useState(false);
+  // quiet day, so the shell shows this notice, saying what went
+  // wrong, until an answer comes back; a drawing that threw
+  // lands here too
+  const [failure, setFailure] = useState(null);
+
+  // The backend's word on a failed Etherscan refresh, as the
+  // notice puts it — null while none of the swept addresses
+  // has one
+  const [refreshError, setRefreshError] = useState(null);
 
   // Callbacks, the positions API and the currency symbol live
   // in refs so a parent re-render (useNodePositions
@@ -884,24 +923,28 @@ export default function useTransactionGraph({ faucetAddress, network, dateRange,
     // The backend's stored-transactions endpoint, always scoped
     // to the picked day's [from, to) window; an address with no
     // history that day yields [], and so does a failed request
-    // — but that one is remembered in `failed`, so the page can
-    // say so. An answer that is no transfer list fails here
-    // too, never further down in the merge, where it would
-    // throw: a throw at boot left no graph, no notice and no
-    // sweep ever after.
+    // — but that one is told in `failure`, the backend's own
+    // sentence or the request's reason, so the page can say
+    // what went wrong. An answer that is no transfer list fails
+    // here too, as a malformed answer, never further down in
+    // the merge, where it would throw: a throw at boot left no
+    // graph, no notice and no sweep ever after. A good answer
+    // also hands over the backend's word on its Etherscan
+    // refresh of the address (noteRefresh).
     const fetchTransactions = async (address) => {
       try {
         const { data } = await axios.get(`/api/evm/${network}/get-stored-transactions`, {
           params: { address, from: dateRange.from, to: dateRange.to },
           signal: controller.signal,
         });
-        if (!isTransferList(data?.transactions)) throw new Error('Malformed stored-transactions answer');
-        setFailed(false);
+        if (!isTransferList(data?.transactions)) throw new MalformedAnswerError();
+        setFailure(null);
+        noteRefresh(address, data.refresh_error);
         return data.transactions;
       } catch (err) {
         if (!axios.isCancel(err)) {
           console.error('Error fetching transactions:', err);
-          setFailed(true);
+          setFailure(withNextStep(requestErrorText(err, FETCH_FAILED), LAST_DATA_SHOWN));
         }
         return [];
       }
@@ -916,6 +959,35 @@ export default function useTransactionGraph({ faucetAddress, network, dateRange,
       noteX: (level, x) => positionsApiRef.current.noteX(level, x),
     });
     storeRef.current = store;
+
+    // The backend's word on its latest Etherscan refresh of each
+    // address asked about: the failure sentence while that
+    // refresh failed, nothing once one succeeded. The first
+    // failure among the addresses still swept is shown — a
+    // contract or a public hub is never asked about again, so
+    // its last word would otherwise stay up for good
+    const refreshErrors = new Map();
+    const noteRefresh = (address, sentence) => {
+      if (cancelled) return;
+      if (typeof sentence === 'string' && sentence.trim()) refreshErrors.set(address, sentence.trim());
+      else refreshErrors.delete(address);
+
+      const swept = [...refreshErrors].find(([known]) => {
+        const node = store.get(known);
+        return !node || (node.kind !== 'contract' && !node.hub);
+      });
+      setRefreshError(swept ? withNextStep(swept[1], MAY_BE_INCOMPLETE) : null);
+    };
+
+    // A sweep, an expansion or the boot that throws — vis
+    // refusing a node, say — had its answers but drew short of
+    // them: logged, and told in the notice in the drawing's own
+    // words, so a gap on the canvas has a reason next to it
+    const drawingFailed = (label, err) => {
+      console.error(label, err);
+      if (cancelled) return;
+      setFailure(withNextStep(`Nepavyko nupiešti grafiko: ${err?.message || err}`, MAY_BE_INCOMPLETE));
+    };
 
     // Fold a fetch result into the model (`merge`) and mirror
     // the model into the DataSets (`mirror`) — sweep rounds
@@ -952,7 +1024,7 @@ export default function useTransactionGraph({ faucetAddress, network, dateRange,
       isCancelled: () => cancelled,
     });
 
-    const scheduler = createSweepScheduler(sweep, () => cancelled);
+    const scheduler = createSweepScheduler(sweep, () => cancelled, (err) => drawingFailed('Sweep failed:', err));
 
     const boot = async () => {
       const transactions = await fetchTransactions(faucetAddress);
@@ -986,7 +1058,7 @@ export default function useTransactionGraph({ faucetAddress, network, dateRange,
         onExpand: (nodeId) => {
           const node = store.get(nodeId);
           if (node?.kind === 'contract' || node?.hub) return;
-          expandAddress(nodeId).catch((err) => console.error('Expand failed:', err));
+          expandAddress(nodeId).catch((err) => drawingFailed('Expand failed:', err));
         },
 
         onRightClick: (nodeId) => {
@@ -1000,18 +1072,20 @@ export default function useTransactionGraph({ faucetAddress, network, dateRange,
       });
 
       // The boot sweep is a head start for the live refresh,
-      // never its gate: a throw in it is logged like any later
+      // never its gate: a throw in it is told like any later
       // sweep's, and today's graph is still swept on schedule
       try {
         await sweep();
       } catch (err) {
-        console.error('Sweep failed:', err);
+        drawingFailed('Sweep failed:', err);
       }
       if (live) scheduler.start();
     };
 
-    boot().catch((err) => console.error('Graph boot failed:', err));
+    boot().catch((err) => drawingFailed('Graph boot failed:', err));
 
+    // The refresh notice belongs to this graph's addresses; the
+    // outage notice stays until the next graph's first answer
     return () => {
       cancelled = true;
       controller.abort();
@@ -1021,6 +1095,7 @@ export default function useTransactionGraph({ faucetAddress, network, dateRange,
       store.clear();
       storeRef.current = null;
       publishRows();
+      setRefreshError(null);
     };
   }, [faucetAddress, network, dateRange.from, dateRange.to, live, nodePositions, publishRows]);
 
@@ -1041,24 +1116,23 @@ export default function useTransactionGraph({ faucetAddress, network, dateRange,
 
 
   // Rename: tell the backend and, once it agreed, update the
-  // model and re-derive the label — awaited, so the dialog
-  // learns whether the name was saved instead of closing over
-  // a lost write. An EMPTY name clears the label (the backend
-  // stores ''), the one way to remove a label from the UI. No
-  // layout runs, so nothing moves.
+  // model and re-derive the label — awaited, and a save that
+  // failed throws (the request's own error, or a malformed
+  // answer when the backend's OK is missing), so the dialog
+  // can say why instead of closing over a lost write. An EMPTY
+  // name clears the label (the backend stores ''), the one way
+  // to remove a label from the UI. No layout runs, so nothing
+  // moves.
   const renameNode = async (address, name) => {
-    if (!address) return false;
+    if (!address) throw new Error('Nepavyko išsaugoti pavadinimo: nenurodytas adresas.');
     const trimmed = (name || '').trim().slice(0, NAME_MAX_LENGTH);
 
-    try {
-      const response = await fetch(
-        `/api/evm/set-address-name?address=${encodeURIComponent(address)}&name=${encodeURIComponent(trimmed)}`,
-      );
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    } catch (err) {
-      console.error('Rename failed:', err);
-      return false;
-    }
+    // The URL is built by hand, not from axios params: a space
+    // travels as %20, exactly what the rename always sent
+    const { data } = await axios.get(
+      `/api/evm/set-address-name?address=${encodeURIComponent(address)}&name=${encodeURIComponent(trimmed)}`,
+    );
+    if (data?.status !== 'OK') throw new MalformedAnswerError();
 
     // The store may have been rebuilt under the dialog (a new
     // day or network) — the name is saved either way, and the
@@ -1067,9 +1141,8 @@ export default function useTransactionGraph({ faucetAddress, network, dateRange,
       storeRef.current.sync(currencySymbolRef.current);
       publishRows();
     }
-    return true;
   };
 
 
-  return { containerRef, scale, setZoom, zoomIn, zoomOut, renameNode, failed, rows };
+  return { containerRef, scale, setZoom, zoomIn, zoomOut, renameNode, failure, refreshError, rows };
 }

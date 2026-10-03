@@ -406,6 +406,38 @@ class UtxoConsolidationTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(len(self.last_tx(captured).vin), 1)
 
+    def test_an_extra_that_pays_for_itself_exactly_is_folded_in(self):
+        # The big output leaves just enough over the chunk and its
+        # fee that folding in the 500 sat one brings the change to
+        # exactly zero — not negative, so the extra goes along, and
+        # the payout carries no change output at all
+        big = {'tx_hash': 'aa' * 32, 'tx_pos': 0, 'value': CHUNK_SAT + FEE_1_IN_2_OUT + MARGINAL_INPUT_FEE - 500}
+        captured = helpers.fake_electrum(self.faucet, 'btc4', [big] + self.dust(1))
+
+        data, status = self.claim()
+
+        self.assertEqual(status, 200)
+        tx = self.last_tx(captured)
+        self.assertEqual(len(tx.vin), 2)
+        self.assertEqual(len(tx.vout), 1)
+
+    def test_outputs_just_short_of_the_chunk_plus_its_fee_are_refused(self):
+        # Together they cover the chunk but not its 2-in/2-out fee:
+        # the payout is refused rather than broadcast with less fee
+        # than the configured rate
+        captured = helpers.fake_electrum(self.faucet, 'btc4', [
+            {'tx_hash': 'aa' * 32, 'tx_pos': 0, 'value': 998_000},
+            {'tx_hash': 'bb' * 32, 'tx_pos': 0, 'value': 3_000},
+        ])
+
+        data, status = self.claim()
+
+        self.assertEqual(status, 503)
+        self.assertEqual(data['error'], 'Čiaupo laisvų monetų nepakanka išmokai: turima 0.01001 tBTC4, o išmokai su '
+                                        'tinklo mokesčiu reikia 0.0100254 tBTC4. Palaukite naujo bloko; jei nepadės, '
+                                        'praneškite dėstytojui.')
+        self.assertNotIn('raw', captured)
+
     def test_the_wallet_converges_to_one_output_over_successive_payouts(self):
         # Ten 0.05 outputs, ten students: a few extras per payout
         # fold the wallet down to a single change output
@@ -427,6 +459,22 @@ class UtxoConsolidationTests(unittest.TestCase):
         for student in self.students(40):
             data, status = self.claim(address=student)
             self.assertEqual(status, 200, data)
+
+    def test_change_the_server_already_lists_is_spent_only_once(self):
+        # Right after a payout the server lists its change while the
+        # faucet still remembers it as pending — the next payout must
+        # not put that one coin in twice, which every node rejects
+        server = helpers.FollowingElectrum(self.faucet, 'btc4', [{'tx_hash': 'aa' * 32, 'tx_pos': 0, 'value': 5_000_000}])
+        broadcasts = []
+        self.faucet._electrum_clients['btc4'].request = (
+            lambda method, params: (broadcasts.append(params[0]), server.broadcast(method, params))[1])
+
+        for student in self.students(2):
+            data, status = self.claim(address=student)
+            self.assertEqual(status, 200, data)
+
+        outpoints = [(vin.txid, vin.vout) for vin in Transaction.from_string(broadcasts[1]).vin]
+        self.assertEqual(len(outpoints), len(set(outpoints)))
 
     def test_dust_is_cleaned_up_over_successive_payouts(self):
         # 30 dust outputs, 30 students: every payout sweeps a few

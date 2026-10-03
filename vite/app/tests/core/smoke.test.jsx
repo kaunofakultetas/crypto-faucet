@@ -52,7 +52,7 @@ describe('harness smoke', () => {
     given.error('get', '/api/utxo/networks', 'Vidinė serverio klaida', 500);
     renderUtxoFaucet();
 
-    expect(await screen.findByText('Nepavyko gauti tinklų sąrašo. Perkraukite puslapį.')).toBeInTheDocument();
+    expect(await screen.findByText('Vidinė serverio klaida. Perkraukite puslapį.')).toBeInTheDocument();
   });
 
 

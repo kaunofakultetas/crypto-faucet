@@ -7,14 +7,19 @@
 //  body, a hang and a slow answer:
 //
 //    GET /api/utxo/:network/graph             — the drawing;
-//        a failure is the canvas' centred message
+//        a failure is the canvas' centred message: the
+//        backend's sentence, else the page's with the reason
 //    GET /api/utxo/:network/transaction-days  — the day list;
-//        a failure leaves today alone in the picker
+//        a failure leaves today alone in the picker, and the
+//        line under the title row says why
 //    GET /api/utxo/networks                   — display names;
-//        a failure leaves the key in the title and "BTC"
+//        a failure leaves the key in the title and amounts
+//        without a unit, and the line under the title row
+//        says why
 //    GET /api/utxo/:network/transaction/:txid — through the
 //        dialog, opened on a transaction from before the day;
-//        a failure is the dialog's own sentence
+//        a failure is the backend's sentence, else the
+//        dialog's with the reason
 //
 //  The page meets every variant: the data hook cleans each
 //  answer before anything reads it, so even a body whose
@@ -27,7 +32,7 @@ import { beforeEach, expect } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import { renderPage } from '../../support/render';
 import { mediaQueryMatches } from '../../support/setup';
-import { describeEndpointContract, settle } from '../../support/backend/contract';
+import { describeEndpointContract } from '../../support/backend/contract';
 import * as f from '../../support/backend/fixtures';
 import {
   GRAPH, DAYS, NETWORKS, TRANSACTION, GRAPH_NAME, pinToday, renderGraph, findBox, rowsOf,
@@ -45,6 +50,16 @@ beforeEach(() => {
 const title = () => screen.getByRole('heading', { level: 1, name: /^Transakcijų Srautas - / });
 const dateField = () => screen.getByRole('combobox', { name: 'Data' });
 
+// The page's sentences for the two lists it reads itself, and
+// the line under the title row when one never arrived: the
+// failure, closed with a full stop, then what the page shows
+// instead
+const DAYS_FAILED = 'Nepavyko gauti dienų, kuriomis buvo čiaupo transakcijų.';
+const NETWORKS_FAILED = 'Nepavyko gauti tinklų sąrašo.';
+const closed = (sentence) => (sentence.endsWith('.') ? sentence : `${sentence}.`);
+const daysLine = (failure) => `${closed(failure)} Pasirinkti galima tik šiandieną.`;
+const catalogLine = (failure) => `${closed(failure)} Sumos rodomos be valiutos kodo.`;
+
 
 
 
@@ -55,8 +70,9 @@ const dateField = () => screen.getByRole('combobox', { name: 'Data' });
 // GET /api/utxo/:network/graph
 // -----------------------------------------------------------
 //
-// The canvas says what went wrong: the backend's own message,
-// or "Nepavyko gauti transakcijų" when the failure has none.
+// The canvas says what went wrong: the backend's own sentence,
+// or "Nepavyko gauti transakcijų." with the reason after it
+// when the failure has none.
 // -----------------------------------------------------------
 
 describeEndpointContract({
@@ -68,9 +84,8 @@ describeEndpointContract({
     await findBox(T.T1);
     await findBox(T.T5);
   },
-  failed: async () => {
-    await waitFor(() => expect(screen.getByRole('status'))
-      .toHaveTextContent(/^(Vidinė serverio klaida|Nepalaikomas tinklas: x|Nerasta|Nepavyko gauti transakcijų)$/));
+  failed: async (says) => {
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe(says('Nepavyko gauti transakcijų.')));
   },
   loading: () => screen.getByText('Kraunama…'),
 });
@@ -85,8 +100,11 @@ describeEndpointContract({
 // GET /api/utxo/:network/transaction-days
 // -----------------------------------------------------------
 //
-// No message of its own: without the list the picker offers
-// today alone — and the drawing is not held up.
+// Without the list the picker offers today alone, and the
+// line under the title row says why — the backend's sentence,
+// or "Nepavyko gauti dienų, kuriomis buvo čiaupo transakcijų."
+// with the reason — and that only today can be picked. The
+// drawing is not held up.
 // -----------------------------------------------------------
 
 describeEndpointContract({
@@ -97,9 +115,9 @@ describeEndpointContract({
   loaded: async () => {
     await waitFor(() => expect(screen.getByRole('slider', { name: 'Diena' })).toHaveAttribute('max', '3'));
   },
-  failed: async () => {
+  failed: async (says) => {
     await findBox(T.T1);
-    await settle();
+    expect(await screen.findByText(daysLine(says(DAYS_FAILED)))).toBeInTheDocument();
     expect(dateField()).toHaveValue('2026-09-30 (šiandien)');
     expect(screen.queryByRole('button', { name: 'Ankstesnė diena' })).toBeNull();
   },
@@ -117,7 +135,10 @@ describeEndpointContract({
 // -----------------------------------------------------------
 //
 // Display names only: without them the title keeps the
-// network's key and amounts read plain "BTC".
+// network's key and amounts go without a unit — no guess that
+// may be another network's — and the line under the title
+// row says why: the backend's sentence, or "Nepavyko gauti
+// tinklų sąrašo." with the reason.
 // -----------------------------------------------------------
 
 describeEndpointContract({
@@ -129,11 +150,11 @@ describeEndpointContract({
     await waitFor(() => expect(title()).toHaveTextContent('Transakcijų Srautas - Bitcoin Testnet4'));
     await waitFor(async () => expect(rowsOf(await findBox(T.T1)).inputs[0].primary).toBe('0.01 tBTC4'));
   },
-  failed: async () => {
+  failed: async (says) => {
     const box = await findBox(T.T1);
-    await settle();
-    expect(title()).toHaveTextContent('Transakcijų Srautas - btc4');
-    expect(rowsOf(box).inputs[0].primary).toBe('0.01 BTC');
+    expect(await screen.findByText(catalogLine(says(NETWORKS_FAILED)))).toBeInTheDocument();
+    expect(title().textContent).toBe('Transakcijų Srautas - btc4');
+    expect(rowsOf(box).inputs[0].primary).toBe('0.01');
   },
   loading: () => screen.getByRole('heading', { level: 1, name: 'Transakcijų Srautas - btc4' }),
 });
@@ -150,7 +171,9 @@ describeEndpointContract({
 //
 // Through the dialog, opened on T0 — the payout from before
 // the day that a link reaches: the day does not hold it, so
-// the dialog asks at once.
+// the dialog asks at once. It says what went wrong: the
+// backend's own sentence, or "Nepavyko gauti transakcijos."
+// with the reason after it.
 // -----------------------------------------------------------
 
 describeEndpointContract({
@@ -174,8 +197,8 @@ describeEndpointContract({
     await screen.findByText('Patvirtinta · blokas #154300');
     await screen.findByText(T.T0);
   },
-  failed: async () => {
-    await screen.findByText(/^(Transakcija nerasta — serveris jos negrąžino\.|Nepavyko gauti transakcijos — bandykite dar kartą vėliau\.)$/);
+  failed: async (says) => {
+    await screen.findByText(says('Nepavyko gauti transakcijos.'));
   },
   loading: () => screen.getByText('Kraunama…'),
 });

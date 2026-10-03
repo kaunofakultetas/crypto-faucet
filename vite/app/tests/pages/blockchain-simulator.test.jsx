@@ -16,15 +16,18 @@
 //  abandoned with the page — the animation frames and the
 //  clock stepped by hand), re-mining repairing the chain,
 //  adding blocks, the copy button (clipboard, the
-//  "Nukopijuota!" toast at the cursor, no toast when the copy
-//  failed), the SHA256 tool link (a plain new-tab link,
-//  window.open never used), the example chain from
-//  /api/get-example-blockchain (loading, failures and garbage
-//  answers leave the student's chain alone, a retry, and the
-//  chain re-linked and re-hashed on arrival, so a block edited
-//  in the database shows as broken with every block after it)
-//  with its backend contract matrix, the minimap's scroll sync,
-//  and the real App's route and title.
+//  "Nukopijuota!" toast at the cursor; no toast when the copy
+//  failed, the reason under the card's buttons instead), the
+//  SHA256 tool link (a plain new-tab link, window.open never
+//  used), the example chain from /api/get-example-blockchain
+//  (loading; failures and garbage answers leave the student's
+//  chain alone and are said in words — the backend's own
+//  sentence, or the page's with the reason, an empty chain
+//  named as one — then the retry; and the chain re-linked and
+//  re-hashed on arrival, so a block edited in the database
+//  shows as broken with every block after it) with its
+//  backend contract matrix, the minimap's scroll sync, and the
+//  real App's route and title.
 //
 //  Math.random picks the cast of a generated block, so the
 //  tests fix it: the opening block #1 is always "Jonas (50BTC)
@@ -39,7 +42,7 @@ import { screen, within, waitFor, fireEvent, act } from '@testing-library/react'
 import sha256 from 'crypto-js/sha256';
 import { renderPage, renderApp } from '../support/render';
 import { given } from '../support/backend/server';
-import { describeEndpointContract, settle, expectNoCrash } from '../support/backend/contract';
+import { describeEndpointContract, expectNoCrash } from '../support/backend/contract';
 import * as f from '../support/backend/fixtures';
 import BlockchainSimulator from '@/pages/BlockchainSimulator/Page';
 
@@ -60,7 +63,25 @@ const MINED = {
 };
 
 const LOAD_EXAMPLE = 'Užkrauti pavyzdinę blokų grandinę';
-const LOAD_FAILED = 'Nepavyko užkrauti pavyzdinės blokų grandinės. Bandykite dar kartą.';
+
+// What a failed load says under the tool buttons: what went
+// wrong — the backend's own sentence, or the page's with the
+// reason after it — closed with a full stop when it lacks one,
+// then the next step
+const EXAMPLE_FAILED = 'Nepavyko užkrauti pavyzdinės blokų grandinės.';
+const loadFailed = (failure) => `${/[.!?…]$/.test(failure) ? failure : `${failure}.`} Bandykite dar kartą.`;
+const LOAD_FAILED = {
+  error: loadFailed('Vidinė serverio klaida'),
+  html: loadFailed(`${EXAMPLE_FAILED} Serveris grąžino klaidą (502).`),
+  drop: loadFailed(`${EXAMPLE_FAILED} Patikrinkite interneto ryšį.`),
+  malformed: loadFailed(`${EXAMPLE_FAILED} Serveris atsakė netinkamo formato duomenimis.`),
+  empty: loadFailed('Nepavyko užkrauti pavyzdinės blokų grandinės: serverio duomenų bazėje nėra nė vieno bloko.'),
+};
+
+// What a copy the browser would not make says under the card's
+// buttons
+const NO_CLIPBOARD = 'Nepavyko nukopijuoti bloko teksto: naršyklė šiame puslapyje iškarpinės nepasiekia — ji veikia tik saugiu (HTTPS) ryšiu.';
+const CLIPBOARD_REFUSED = 'Nepavyko nukopijuoti bloko teksto: naršyklė neleido įrašyti į iškarpinę (NotAllowedError: Write permission denied.).';
 const VALID = '✓ Galiojantis';
 const BROKEN = '✗ Sugadintas';
 
@@ -175,7 +196,7 @@ describe('The opening chain', () => {
     expect(screen.getByRole('button', { name: /^Pridėti naują bloką/ })).toBeEnabled();
     expect(blockCount()).toBe(2);
     expect([state(0), state(1)]).toEqual([BROKEN, BROKEN]);
-    expect(screen.queryByText(LOAD_FAILED)).toBeNull();
+    expect(screen.queryByText(/Bandykite dar kartą\.$/)).toBeNull();
   });
 
 
@@ -639,7 +660,7 @@ describe('Adding blocks', () => {
 //
 // "Kopijuoti bloko tekstą" copies the exact hash preimage and
 // flashes "Nukopijuota!" at the cursor — only when the copy
-// happened.
+// happened; when it did not, the card says why.
 // -----------------------------------------------------------
 
 describe('Copying a block\'s text', () => {
@@ -675,24 +696,39 @@ describe('Copying a block\'s text', () => {
   });
 
 
-  it('without a clipboard API (a plain-http host) nothing claims success — no toast, a console warning', async () => {
+  it('without a clipboard API (a plain-http host) nothing claims success — no toast, the card says why, a console warning', async () => {
     renderSimulator();
     vi.spyOn(navigator, 'clipboard', 'get').mockReturnValue(undefined);
     const warned = vi.spyOn(console, 'warn').mockImplementation(() => {});
     fireEvent.click(copyButton(0), { clientX: 10, clientY: 10 });
-    await settle(50);
+    expect(await within(card(0)).findByText(NO_CLIPBOARD)).toBeInTheDocument();
     expect(screen.queryByText('Nukopijuota!')).toBeNull();
     expect(warned).toHaveBeenCalledWith('Copy failed:', expect.any(TypeError));
+    // Only the card whose copy failed says so
+    expect(within(card(1)).queryByText(NO_CLIPBOARD)).toBeNull();
   });
 
 
-  it('a refused clipboard permission shows no toast either', async () => {
+  it('a refused clipboard permission shows no toast either — the browser\'s words for the refusal kept', async () => {
     renderSimulator();
     vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new DOMException('Write permission denied.', 'NotAllowedError'));
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     fireEvent.click(copyButton(0), { clientX: 10, clientY: 10 });
-    await settle(50);
+    expect(await within(card(0)).findByText(CLIPBOARD_REFUSED)).toBeInTheDocument();
     expect(screen.queryByText('Nukopijuota!')).toBeNull();
+  });
+
+
+  it('a copy that works after a refused one takes the reason away', async () => {
+    renderSimulator();
+    vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValueOnce(new DOMException('Write permission denied.', 'NotAllowedError'));
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    fireEvent.click(copyButton(0), { clientX: 10, clientY: 10 });
+    await within(card(0)).findByText(CLIPBOARD_REFUSED);
+
+    fireEvent.click(copyButton(0), { clientX: 10, clientY: 10 });
+    expect(await screen.findByText('Nukopijuota!')).toBeInTheDocument();
+    expect(within(card(0)).queryByText(CLIPBOARD_REFUSED)).toBeNull();
   });
 });
 
@@ -750,17 +786,17 @@ describe('The example chain', () => {
 
 
   it.each([
-    ['a 500 { error } answer', () => given.error('get', '/api/get-example-blockchain', 'Vidinė serverio klaida', 500)],
-    ['the proxy\'s HTML 502 page', () => given.html('get', '/api/get-example-blockchain')],
-    ['a dropped connection', () => given.networkError('get', '/api/get-example-blockchain')],
-  ])('%s keeps the student\'s chain and says the load failed', async (_, answer) => {
+    ['a 500 { error } answer', () => given.error('get', '/api/get-example-blockchain', 'Vidinė serverio klaida', 500), LOAD_FAILED.error],
+    ['the proxy\'s HTML 502 page', () => given.html('get', '/api/get-example-blockchain'), LOAD_FAILED.html],
+    ['a dropped connection', () => given.networkError('get', '/api/get-example-blockchain'), LOAD_FAILED.drop],
+  ])('%s keeps the student\'s chain and says what went wrong', async (_, answer, failure) => {
     answer();
     const { user } = renderSimulator();
     await user.type(dataField(0), '!');
     const edited = thisHash(0);
     await user.click(screen.getByRole('button', { name: LOAD_EXAMPLE }));
 
-    expect(await screen.findByText(LOAD_FAILED)).toBeInTheDocument();
+    expect(await screen.findByText(failure)).toBeInTheDocument();
     expect(blockCount()).toBe(2);
     expect(dataField(0)).toHaveValue(`${GENESIS_DATA}!`);
     expect(thisHash(0)).toBe(edited);
@@ -769,18 +805,18 @@ describe('The example chain', () => {
 
 
   it.each([
-    ['an empty list (the table emptied in dbgate)', []],
-    ['blocks without hashes', [{ height: '0', data: 'x', previousHash: '0', nonce: '1' }]],
-    ['a block whose previous hash is a number', [{ ...f.exampleBlockchain[0], previousHash: 0 }]],
-    ['one bad block among good ones', [...f.exampleBlockchain.slice(0, 3), { ...f.exampleBlockchain[3], data: null }]],
-    ['an object instead of a list', { blocks: f.exampleBlockchain }],
-    ['a string', 'unexpected'],
-    ['JSON null', null],
-  ])('refuses %s the same way — nothing replaced, the failure said', async (_, body) => {
+    ['an empty list (the table emptied in dbgate)', [], LOAD_FAILED.empty],
+    ['blocks without hashes', [{ height: '0', data: 'x', previousHash: '0', nonce: '1' }], LOAD_FAILED.malformed],
+    ['a block whose previous hash is a number', [{ ...f.exampleBlockchain[0], previousHash: 0 }], LOAD_FAILED.malformed],
+    ['one bad block among good ones', [...f.exampleBlockchain.slice(0, 3), { ...f.exampleBlockchain[3], data: null }], LOAD_FAILED.malformed],
+    ['an object instead of a list', { blocks: f.exampleBlockchain }, LOAD_FAILED.malformed],
+    ['a string', 'unexpected', LOAD_FAILED.malformed],
+    ['JSON null', null, LOAD_FAILED.malformed],
+  ])('refuses %s — nothing replaced, the failure said as what it is', async (_, body, failure) => {
     given.json('get', '/api/get-example-blockchain', body);
     const { user } = renderSimulator();
     await user.click(screen.getByRole('button', { name: LOAD_EXAMPLE }));
-    expect(await screen.findByText(LOAD_FAILED)).toBeInTheDocument();
+    expect(await screen.findByText(failure)).toBeInTheDocument();
     expect(blockCount()).toBe(2);
     expect(thisHash(0)).toBe(GENESIS_HASH);
   });
@@ -793,9 +829,9 @@ describe('The example chain', () => {
     ]);
     const { user } = renderSimulator();
     await user.click(screen.getByRole('button', { name: LOAD_EXAMPLE }));
-    await screen.findByText(LOAD_FAILED);
+    await screen.findByText(LOAD_FAILED.error);
     await loadExample(user);
-    expect(screen.queryByText(LOAD_FAILED)).toBeNull();
+    expect(screen.queryByText(LOAD_FAILED.error)).toBeNull();
     expect(blockCount()).toBe(10);
   });
 
@@ -904,8 +940,9 @@ describe('The minimap\'s scroll', () => {
 //
 // Every response variant against the one endpoint the page
 // reads — fetched when the student asks for the example. A
-// failure is the message under the tool buttons with the
-// student's chain untouched; garbage is refused the same way.
+// failure is the message under the tool buttons, in the
+// variant's own words, with the student's chain untouched;
+// garbage is refused the same way.
 // -----------------------------------------------------------
 
 describeEndpointContract({
@@ -920,8 +957,8 @@ describeEndpointContract({
     await screen.findByRole('heading', { level: 6, name: /^Blokas #9\b/ });
     expect(thisHash(9)).toBe(f.exampleBlockchain[9].hash);
   },
-  failed: async () => {
-    await screen.findByText(LOAD_FAILED);
+  failed: async (says) => {
+    await screen.findByText(loadFailed(says(EXAMPLE_FAILED)));
     expect(blockCount()).toBe(2);
     expectNoCrash();
   },

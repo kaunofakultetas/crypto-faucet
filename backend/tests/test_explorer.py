@@ -17,6 +17,13 @@
 #                  cache when the API is down
 #    serving     — the flow aggregation inside the day window
 #                  and the day list behind the slider
+#    failures    — what the graph is told when a refresh or
+#                  the database fails: the exact sentence of
+#                  the address' latest failed refresh
+#                  (refresh_error, Etherscan's own refusals
+#                  included, the API key never in it) until a
+#                  refresh succeeds, and the database's own
+#                  words instead of a bare 500
 #
 #  Each test runs against its own throwaway SQLite file — no
 #  network, no real database.
@@ -26,6 +33,7 @@
 import os
 import time
 import logging
+import sqlite3
 import tempfile
 import unittest
 import threading
@@ -129,7 +137,7 @@ def scripted(replies, calls=None):
 # address.
 #
 # Used by:
-#   - the three test classes below
+#   - every test class below
 ############################################################
 
 class ExplorerTestCase(unittest.TestCase):
@@ -223,7 +231,7 @@ class ExplorerPollutionTests(ExplorerTestCase):
         history = [make_tx('0x' + f'{i:040x}', hub, 100 + i)
                    for i in range(HUB_COUNTERPARTY_THRESHOLD + 1)]
         with patch.object(self.explorer, 'fetch_all_transactions_from_etherscan',
-                          return_value=history):
+                          return_value=(history, None)):
             self.explorer._refresh_address('testchain', hub)
         self.assertEqual(self.stored_tx_count(), 0)
         self.assertEqual(self.address_flags(hub)[1], 1)
@@ -234,7 +242,7 @@ class ExplorerPollutionTests(ExplorerTestCase):
         history = [make_tx(FAUCET, '0x' + f'{i:040x}', 100 + i)
                    for i in range(HUB_COUNTERPARTY_THRESHOLD + 1)]
         with patch.object(self.explorer, 'fetch_all_transactions_from_etherscan',
-                          return_value=history):
+                          return_value=(history, None)):
             self.explorer._refresh_address('testchain', FAUCET)
         self.assertEqual(self.stored_tx_count(), len(history))
         self.assertIsNone(self.address_flags(FAUCET)[1])
@@ -291,7 +299,7 @@ class ExplorerFetchGateTests(ExplorerTestCase):
 
         def fake_fetch(address, network, start_block=0):
             calls.append({'address': address, 'network': network, 'start_block': start_block})
-            return history or []
+            return history or [], None
 
         return calls, fake_fetch
 
@@ -713,13 +721,15 @@ class ExplorerRefreshTests(ExplorerTestCase):
         self.assertEqual(refresh.call_count, 1)
 
     def test_pages_fetched_before_a_failure_are_kept(self):
-        replies = [FakeResponse({'status': '1', 'result': self.full_page()}),
-                   requests.ConnectionError('rate limited')]
+        cut = requests.ConnectionError('rate limited')
+        replies = [FakeResponse({'status': '1', 'result': self.full_page()}), cut]
 
         with patch('app.evm_faucet.explorer.requests.get', scripted(replies)):
-            self.explorer._refresh_address('testchain', FAUCET)
+            failure = self.explorer._refresh_address('testchain', FAUCET)
 
         self.assertEqual(self.stored_tx_count(), 1000)
+        # …and the failure that cut the paging short is handed back
+        self.assertIs(failure, cut)
 
     def test_a_failure_on_the_first_page_still_raises(self):
         with patch('app.evm_faucet.explorer.requests.get', scripted([requests.ConnectionError('down')])):
@@ -737,6 +747,21 @@ class ExplorerRefreshTests(ExplorerTestCase):
 
         self.assertLessEqual(len(calls), 20)
 
+    def test_a_refresh_stops_inside_etherscans_window(self):
+        # Etherscan serves 10000 rows of one query at most and
+        # refuses an eleventh page of 1000 — a long history stops
+        # at ten pages, whole, instead of ending on that refusal
+        calls = []
+        page = FakeResponse({'status': '1', 'result': self.full_page()})
+        refusal = FakeResponse({'status': '0', 'message': 'NOTOK', 'result': 'Result window is too large, '
+                                'PageNo x Offset size must be less than or equal to 10000'})
+
+        with patch('app.evm_faucet.explorer.requests.get', scripted([page] * 10 + [refusal], calls)):
+            failure = self.explorer._refresh_address('testchain', FAUCET)
+
+        self.assertEqual(len(calls), 10)
+        self.assertIsNone(failure)
+
     def test_an_address_that_grows_into_a_hub_is_flagged(self):
         # The degree is counted against the cache, not the batch
         hub = '0x' + 'ab' * 20
@@ -744,10 +769,10 @@ class ExplorerRefreshTests(ExplorerTestCase):
         first = [make_tx(s, hub, 100 + i) for i, s in enumerate(strangers[:150])]
         later = [make_tx(s, hub, 100 + i) for i, s in enumerate(strangers[150:], start=150)]
 
-        with patch.object(self.explorer, 'fetch_all_transactions_from_etherscan', return_value=first):
+        with patch.object(self.explorer, 'fetch_all_transactions_from_etherscan', return_value=(first, None)):
             self.explorer._refresh_address('testchain', hub)
         self.assertNotEqual(self.address_flags(hub)[1], 1)        # not a hub yet (NULL or 0)
-        with patch.object(self.explorer, 'fetch_all_transactions_from_etherscan', return_value=later):
+        with patch.object(self.explorer, 'fetch_all_transactions_from_etherscan', return_value=(later, None)):
             self.explorer._refresh_address('testchain', hub)
 
         self.assertEqual(self.address_flags(hub)[1], 1)
@@ -877,6 +902,218 @@ class ExplorerWindowTests(ExplorerTestCase):
         self.assertEqual(len(flows), 1)
         self.assertEqual(flows[0]['from_timestamp'], self.DAY)
         self.assertEqual(flows[0]['to_timestamp'], self.DAY)
+
+
+
+
+
+
+
+
+############################################################
+# ExplorerRefreshErrorTests
+############################################################
+#
+# What the graph is told about a refresh that failed: the
+# sentence of the address' latest failed refresh rides along
+# with every answer about it as refresh_error — a refused
+# key, a rate limit, a server error, a timeout, a page cut
+# short, an answer in another shape — until a refresh
+# succeeds; the server is named for what it is, and the API
+# key never reaches the sentence.
+############################################################
+
+class ExplorerRefreshErrorTests(ExplorerTestCase):
+
+    WHAT = 'Nepavyko atnaujinti transakcijų sąrašo: '
+
+    def answer(self, address=STUDENT, explorer=None, live=True):
+        # One graph request — a live window, or the day before
+        # yesterday's — its 200 answer
+        now = int(time.time())
+        window = (now - 86400, now + 60) if live else (now - 172800, now - 86400)
+        data, status = (explorer or self.explorer).get_stored_transactions('testchain', address, *window)
+        self.assertEqual(status, 200)
+        return data
+
+    def refresh_error_after(self, replies, address=STUDENT, explorer=None):
+        with patch('app.evm_faucet.explorer.requests.get', scripted(replies)):
+            return self.answer(address, explorer)['refresh_error']
+
+    def refusal(self, reason):
+        return FakeResponse({'status': '0', 'message': 'NOTOK', 'result': reason})
+
+    def test_a_refused_api_key_is_named_with_etherscans_words(self):
+        self.assertEqual(self.refresh_error_after([self.refusal('Invalid API Key')]),
+                         self.WHAT + 'Etherscan serveris atmetė čiaupo operatoriaus API raktą (Invalid API Key).')
+
+    def test_a_rate_limit_is_named_with_etherscans_words(self):
+        self.assertEqual(self.refresh_error_after([self.refusal('Max rate limit reached')]),
+                         self.WHAT + 'Etherscan serveris riboja užklausų skaičių (Max rate limit reached).')
+
+    def test_an_http_5xx_is_the_servers_own_fault(self):
+        response = requests.Response()
+        response.status_code = 502
+        error = requests.HTTPError('502 Server Error: Bad Gateway for url: http://etherscan.invalid/api', response=response)
+
+        self.assertEqual(self.refresh_error_after([FakeResponse(None, error=error)]),
+                         self.WHAT + 'Etherscan serveris patyrė vidinę klaidą (HTTP 502).')
+
+    def test_a_timeout_says_how_long_the_explorer_waited(self):
+        self.assertEqual(self.refresh_error_after([requests.ReadTimeout('read timed out')]),
+                         self.WHAT + 'Etherscan serveris neatsakė per 20 s.')
+
+    def test_an_unknown_refusal_is_passed_on_in_etherscans_words(self):
+        self.assertEqual(self.refresh_error_after([self.refusal('Error! Invalid address format')]),
+                         self.WHAT + 'Etherscan serveris atsakė klaida: Error! Invalid address format.')
+
+    def test_an_answer_in_another_shape_is_said_to_be_one(self):
+        class NotJson(FakeResponse):
+            def json(self):
+                raise ValueError('Expecting value: line 1 column 1 (char 0)')
+
+        for reply in (NotJson(None), FakeResponse(['ne', 'objektas']), FakeResponse({'status': '1', 'result': 'OK'})):
+            with self.subTest(reply=reply.payload):
+                explorer = EtherscanExplorer(TESTCHAIN_CONFIGS, trusted_addresses=[FAUCET])
+                self.assertEqual(self.refresh_error_after([reply], explorer=explorer),
+                                 self.WHAT + 'Etherscan serveris atsakė netikėto formato duomenimis.')
+
+    def test_another_explorers_api_is_not_called_etherscan(self):
+        # zkSync's and Linea's APIs answer in Etherscan's shape,
+        # but a sentence naming Etherscan there would mislead
+        explorer = EtherscanExplorer({'testchain': {'chain_id': 12345, 'explorer': {
+            'etherscan_api_url': 'http://block-explorer-api.zksync.invalid/api'}}}, trusted_addresses=[FAUCET])
+
+        self.assertEqual(self.refresh_error_after([requests.ConnectionError('refused')], explorer=explorer),
+                         self.WHAT + 'nepavyko prisijungti prie blokų naršyklės API serverio.')
+
+    def test_a_page_cut_short_is_reported_and_its_rows_kept(self):
+        page = [make_tx(FAUCET, '0x' + f'{i:040x}', 100 + i) for i in range(1, 1001)]
+        replies = [FakeResponse({'status': '1', 'result': page}),
+                   self.refusal('Max calls per sec rate limit reached (5/sec)')]
+
+        self.assertEqual(self.refresh_error_after(replies, address=FAUCET),
+                         self.WHAT + 'Etherscan serveris riboja užklausų skaičių '
+                                     '(Max calls per sec rate limit reached (5/sec)).')
+        self.assertEqual(self.stored_tx_count(), 1000)
+
+    def test_the_failure_rides_along_until_a_refresh_succeeds(self):
+        later = time.time() + 61
+        self.assertIsNotNone(self.refresh_error_after([self.refusal('Max rate limit reached')]))
+
+        # Inside the throttle no refresh runs — the latest outcome
+        # still stands…
+        self.assertIsNotNone(self.answer()['refresh_error'])
+
+        # …until the next interval's refresh succeeds
+        with patch('app.evm_faucet.explorer.time.time', return_value=later):
+            self.assertIsNone(self.refresh_error_after([FakeResponse({'status': '0', 'message': 'No transactions found',
+                                                                      'result': []})]))
+
+    def test_a_historical_window_still_reports_the_latest_failure(self):
+        # An old day of a known address refreshes nothing, and its
+        # cache is as stale as the failed refresh left it
+        self.explorer.store_transactions([make_tx(FAUCET, STUDENT, 100, timestamp=str(int(time.time()) - 150000))],
+                                         'testchain')
+        self.refresh_error_after([self.refusal('Max rate limit reached')])
+
+        with patch.object(self.explorer, '_refresh_address', side_effect=AssertionError('must not refresh')):
+            self.assertEqual(self.answer(live=False)['refresh_error'],
+                             self.WHAT + 'Etherscan serveris riboja užklausų skaičių (Max rate limit reached).')
+
+    def test_a_successful_refresh_reports_none(self):
+        self.assertIsNone(self.refresh_error_after([FakeResponse({'status': '0', 'message': 'No transactions found',
+                                                                  'result': []})]))
+
+    def test_a_contract_or_hub_has_no_refresh_to_report(self):
+        # Never scraped, so no refresh of theirs can have failed —
+        # an outcome left from before they were flagged is moot
+        self.explorer.refresh_errors[('testchain', TOKEN.lower())] = 'pasenęs sakinys'
+        with get_db_connection(self.db_path) as conn:
+            conn.execute("INSERT INTO Graph_Addresses VALUES (?, '', 1, 0)", [TOKEN.lower()])
+
+        self.assertIsNone(self.answer(TOKEN)['refresh_error'])
+
+    def test_the_api_key_never_reaches_a_sentence(self):
+        key = 'sekretas-etherscan-2'
+        with patch.dict(os.environ, {'ETHERSCAN_API_KEY': key}):
+            explorer = EtherscanExplorer(TESTCHAIN_CONFIGS, trusted_addresses=[FAUCET])
+        leaks = (
+            FakeResponse(None, error=requests.HTTPError(
+                f'429 Client Error: Too Many Requests for url: http://etherscan.invalid/api?apikey={key}')),
+            self.refusal(f'Invalid API Key {key}'),
+        )
+
+        for case, leak in enumerate(leaks):
+            with self.subTest(case=case):
+                explorer.last_etherscan_fetch.clear()
+                sentence = self.refresh_error_after([leak], explorer=explorer)
+                self.assertNotIn(key, sentence)
+                self.assertIn('<redacted>', sentence)
+
+
+
+
+
+
+
+
+############################################################
+# ExplorerDatabaseFailureTests
+############################################################
+#
+# A database that cannot be read or written is answered with
+# the sentence saying what the explorer could not do and
+# SQLite's own words for why — the graph, the day list and
+# the name save alike — never with a bare 500.
+############################################################
+
+class ExplorerDatabaseFailureTests(ExplorerTestCase):
+
+    def failing_database(self, message):
+        return patch('app.evm_faucet.explorer.get_db_connection', side_effect=sqlite3.OperationalError(message))
+
+    def test_a_missing_table_is_named_when_the_graph_is_read(self):
+        with get_db_connection(self.db_path) as conn:
+            conn.execute('DROP TABLE Graph_Transactions')
+
+        with patch.object(self.explorer, '_refresh_address'):
+            data, status = self.explorer.get_stored_transactions('testchain', STUDENT, 1750000000, 1750086400)
+
+        self.assertEqual(status, 500)
+        self.assertEqual(data['error'], 'Nepavyko perskaityti išsaugotų transakcijų: duomenų bazėje trūksta lentelės '
+                                        '(no such table: Graph_Transactions).')
+
+    def test_a_locked_database_is_named_when_the_days_are_read(self):
+        with self.failing_database('database is locked'):
+            data, status = self.explorer.get_transaction_days('testchain', 'Europe/Vilnius', FAUCET)
+
+        self.assertEqual(status, 500)
+        self.assertEqual(data['error'], 'Nepavyko gauti dienų sąrašo: duomenų bazė užrakinta kitos rašančios užklausos '
+                                        '(database is locked).')
+
+    def test_a_read_only_database_is_named_when_a_name_is_saved(self):
+        with self.failing_database('attempt to write a readonly database'):
+            data, status = self.explorer.set_address_name(FAUCET, 'KNF Faucet')
+
+        self.assertEqual(status, 500)
+        self.assertEqual(data['error'], 'Nepavyko išsaugoti pavadinimo: duomenų bazė atverta tik skaitymui '
+                                        '(attempt to write a readonly database).')
+
+    def test_a_database_failing_during_a_refresh_is_its_refresh_error(self):
+        # The refresh writes the fetched rows into the cache — a
+        # store that fails is the refresh's failure, the cached
+        # graph is still served
+        with patch.object(self.explorer, 'store_transactions',
+                          side_effect=sqlite3.OperationalError('database or disk is full')):
+            with patch('app.evm_faucet.explorer.requests.get',
+                       scripted([FakeResponse({'status': '1', 'result': [make_tx(FAUCET, STUDENT, 100)]})])):
+                now = int(time.time())
+                data, status = self.explorer.get_stored_transactions('testchain', FAUCET, now - 86400, now + 60)
+
+        self.assertEqual(status, 200)
+        self.assertEqual(data['refresh_error'], 'Nepavyko atnaujinti transakcijų sąrašo: serverio diske nebeliko vietos '
+                                                '(database or disk is full).')
 
 
 if __name__ == '__main__':

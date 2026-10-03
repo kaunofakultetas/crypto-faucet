@@ -13,18 +13,28 @@
 //  its own arrangement.
 //
 //  This file is only the thin shell: the canvas div, the zoom
-//  panel, the right-click naming dialog, the notice shown
-//  while the backend cannot be reached (an outage must not
-//  look like a quiet day) and the TEXT ALTERNATIVE — the
-//  canvas is named as an image with the day and how many
-//  transfers it draws, the noun agreeing with that count the
-//  Lithuanian way, and a visually hidden table lists every
-//  drawn transfer (from, to, amount, count), so a
-//  screen-reader user gets the same facts the picture
-//  shows. All graph state and logic live in
+//  panel, the right-click naming dialog, the notices that say
+//  what went wrong — the backend could not be reached or the
+//  drawing failed (an outage must not look like a quiet day),
+//  the backend could not refresh its transactions from
+//  Etherscan — and the TEXT ALTERNATIVE: the canvas is named
+//  as an image with the day and how many transfers it draws,
+//  the noun agreeing with that count the Lithuanian way, and
+//  a visually hidden table lists every drawn transfer (from,
+//  to, amount, count), so a screen-reader user gets the same
+//  facts the picture shows. All graph state and logic live in
 //  useTransactionGraph.js (which pulls in useNodePositions.js
-//  for the dragged-X persistence); ZoomControls.jsx and
-//  AddressDialog.jsx render the chrome.
+//  for the dragged-X persistence) — the notices' sentences
+//  too; ZoomControls.jsx and AddressDialog.jsx render the
+//  chrome.
+//
+//  Split into (root component last):
+//
+//    TRANSFERS       — the canvas's count noun
+//    SAVE_FAILED     — a failed name save's own sentence
+//    NOTICE_CLASSES  — the red notice box
+//    GraphNotices    — the notices over the canvas
+//    CryptoFlowGraph — the shell (default export)
 // -----------------------------------------------------------
 
 import { useState } from 'react';
@@ -32,6 +42,7 @@ import { useState } from 'react';
 import Box from '@mui/material/Box';
 
 import { pluralForm } from '@/utils/plural';
+import { requestErrorText } from '@/utils/requestError';
 
 import { ZOOM_CONFIG } from '../constants';
 import useTransactionGraph from '../hooks/useTransactionGraph';
@@ -42,6 +53,48 @@ import AddressDialog from './AddressDialog';
 // The canvas's count noun in its Lithuanian forms, for the
 // plural categories utils/plural.js sorts a count into
 const TRANSFERS = { one: 'pervedimas', few: 'pervedimai', other: 'pervedimų' };
+
+// What a failed name save says when the backend gave no
+// sentence of its own — requestErrorText adds the reason
+const SAVE_FAILED = 'Nepavyko išsaugoti pavadinimo.';
+
+// One red box per notice, the look the outage notice always
+// had
+const NOTICE_CLASSES = 'rounded-md border border-red-200 bg-red-50 px-3 py-1 text-center text-sm text-red-700';
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// GraphNotices
+// -----------------------------------------------------------
+//
+// The notices floating over the top of the canvas, one under
+// the other: the outage one while the last fetch or drawing
+// failed, and the backend's word on a failed Etherscan
+// refresh while one stands. Both sentences come whole from
+// the hook; nothing renders while both are quiet. The column
+// stays clear of the zoom panel in the top-right corner, and
+// clicks pass through it to the graph.
+//
+// Used by:
+//   - CryptoFlowGraph (below)
+// -----------------------------------------------------------
+
+function GraphNotices({ failure, refreshError }) {
+
+  if (!failure && !refreshError) return null;
+
+  return (
+    <div className="pointer-events-none absolute left-1/2 top-3 flex w-max max-w-[calc(100%-8rem)] -translate-x-1/2 flex-col items-center gap-1">
+      {failure && <p className={NOTICE_CLASSES}>{failure}</p>}
+      {refreshError && <p className={NOTICE_CLASSES}>{refreshError}</p>}
+    </div>
+  );
+}
 
 
 
@@ -55,8 +108,7 @@ const TRANSFERS = { one: 'pervedimas', few: 'pervedimai', other: 'pervedimų' };
 //
 // The shell around the canvas: it holds the right-click
 // dialog's state and wires the hook's graph to the zoom
-// panel, the dialog, the outage notice and the text
-// alternative.
+// panel, the dialog, the notices and the text alternative.
 //
 // Used by:
 //   - Page.jsx — under the date slider bar
@@ -71,7 +123,7 @@ export default function CryptoFlowGraph({ faucetAddress, network, dateRange, liv
   const [tempName, setTempName] = useState('');
   const [saveError, setSaveError] = useState(null);
 
-  const { containerRef, scale, setZoom, zoomIn, zoomOut, renameNode, failed, rows } = useTransactionGraph({
+  const { containerRef, scale, setZoom, zoomIn, zoomOut, renameNode, failure, refreshError, rows } = useTransactionGraph({
     faucetAddress,
     network,
     dateRange,
@@ -93,13 +145,15 @@ export default function CryptoFlowGraph({ faucetAddress, network, dateRange, liv
   };
 
   // The dialog closes only on a saved name — a lost write is
-  // shown under the field, not swallowed
+  // shown under the field, not swallowed: the backend's own
+  // sentence, or the reason the request failed
   const saveAddressName = async () => {
-    const saved = await renameNode(selectedAddress, tempName);
-    if (saved) {
+    try {
+      await renameNode(selectedAddress, tempName);
       closeDialog();
-    } else {
-      setSaveError('Nepavyko išsaugoti pavadinimo. Bandykite dar kartą.');
+    } catch (error) {
+      console.error('Rename failed:', error);
+      setSaveError(requestErrorText(error, SAVE_FAILED));
     }
   };
 
@@ -141,13 +195,9 @@ export default function CryptoFlowGraph({ faucetAddress, network, dateRange, liv
           </table>
         </div>
 
-        {/* Outage notice — the last fetch failed; the canvas keeps
-            showing what was fetched before it */}
-        {failed && (
-          <div className="pointer-events-none absolute left-1/2 top-3 -translate-x-1/2 rounded-md border border-red-200 bg-red-50 px-3 py-1 text-sm text-red-700">
-            Nepavyko atnaujinti grafiko — rodomi paskutiniai gauti duomenys
-          </div>
-        )}
+        {/* What went wrong — the canvas keeps showing what was
+            drawn before it */}
+        <GraphNotices failure={failure} refreshError={refreshError} />
 
         <ZoomControls
           scale={scale}

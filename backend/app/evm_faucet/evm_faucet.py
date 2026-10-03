@@ -50,6 +50,7 @@ from eth_account.messages import encode_defunct
 from ..cooldown import CooldownTable
 from ..icons import icon_url
 from ..env_secrets import resolve_placeholders, install_log_redaction
+from ..failure_reasons import failure_sentence
 
 # web3 v7 renamed this middleware — accept either name so an
 # image upgrade doesn't break payouts
@@ -64,6 +65,11 @@ except ImportError:
 # polls every few seconds per open browser tab; payouts drop the
 # cached entry, so a claim shows up immediately regardless.
 BALANCE_CACHE_TTL = 10
+
+# How long one call to a network's RPC may take — a dead
+# endpoint fails the request instead of hanging the Flask
+# worker, and a failure sentence can say how long it waited
+RPC_TIMEOUT_S = 10
 
 # The gas limit every payout carries — generous, unused gas is
 # refunded — and what the node reserves up front with the value
@@ -172,10 +178,8 @@ class EVMFaucet:
             rpc_url_template = self.NETWORK_CONFIGS[network]['faucet']['rpc_url']
             rpc_url = resolve_placeholders(rpc_url_template, f"EVM network '{network}' rpc_url")
 
-            # 10s timeout so a dead RPC endpoint fails the request
-            # instead of hanging the Flask worker.
             request_kwargs = {
-                'timeout': 10
+                'timeout': RPC_TIMEOUT_S
             }
             w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs=request_kwargs))
             if self.FAUCET_ACCOUNT:
@@ -208,6 +212,11 @@ class EVMFaucet:
         # network -> (unix time, exception) of the last chain-id probe
         # that could not reach the RPC — see _verify_chain_id
         self._chain_probe_failures = {}
+
+        # network -> the chain id its RPC answered when that was NOT
+        # the config's, for the refusal to name — see
+        # wrong_chain_sentence
+        self._wrong_chain_ids = {}
 
         self._warm_up_networks()
 
@@ -275,7 +284,9 @@ class EVMFaucet:
     # RPC) would operate on DIFFERENT chains. Checked once per
     # network and cached, so the RPC round-trip happens only on
     # the first call that gets an answer; a mismatch is NOT
-    # cached — a fixed RPC URL heals on the next check. The
+    # cached — a fixed RPC URL heals on the next check — but the
+    # chain id the RPC answered is noted for the refusal to
+    # name (wrong_chain_sentence). The
     # payout paths rerun it so a network whose RPC was down
     # during the warmup can't skip the check for the life of
     # the process. A transport failure propagates as-is: the
@@ -310,10 +321,35 @@ class EVMFaucet:
                 f"[EVM] {network} CHAIN ID MISMATCH — config says {expected_chain_id}, "
                 f"the RPC answers {actual_chain_id}; check faucet.rpc_url"
             )
+            self._wrong_chain_ids[network] = actual_chain_id
             return False
 
         self._verified_networks.add(network)
         return True
+
+
+
+
+
+
+    ############################################################
+    # wrong_chain_sentence
+    ############################################################
+    #
+    # The refusal when a network's RPC answers another chain
+    # than the config names: both chain ids, so the operator
+    # sees at once which side is wrong.
+    #
+    # Used by:
+    #   - request_eth (below)
+    #   - erc_faucet/erc20_faucet.py — request_tokens
+    ############################################################
+
+    def wrong_chain_sentence(self, network):
+        expected = self.NETWORK_CONFIGS[network].get('chain_id')
+        actual = self._wrong_chain_ids.get(network)
+        return (f"Tinklo konfigūracijos klaida: RPC serveris priklauso kitam tinklui "
+                f"(jo grandinės ID {actual}, o turi būti {expected}). Praneškite dėstytojui.")
 
 
 
@@ -442,7 +478,8 @@ class EVMFaucet:
     # the nonce counts pending transactions, so a whole class
     # claiming at once can't collide on the same nonce. Returns
     # a (payload, http_status) tuple; user-facing errors are
-    # Lithuanian.
+    # Lithuanian, and a failure on the chain's side names its
+    # cause — the RPC server's or the node's (failure_sentence).
     #
     # Used by:
     #   - evm_routes.py — GET /api/evm/<network>/request
@@ -481,9 +518,10 @@ class EVMFaucet:
         # round-trip) rather than pay out over a misconfigured RPC.
         try:
             if not self._verify_chain_id(network):
-                return {"error": "Tinklo konfigūracijos klaida. Praneškite dėstytojui."}, 500
-        except Exception:
-            return {"error": "Tinklas nepasiekiamas. Bandykite vėliau."}, 503
+                return {"error": self.wrong_chain_sentence(network)}, 500
+        except Exception as error:
+            return {"error": failure_sentence('Tinklas nepasiekiamas', error, 'rpc', RPC_TIMEOUT_S,
+                                              then='Bandykite vėliau.')}, 503
 
 
         # STEP 2: signature check. This is the exact message the
@@ -504,8 +542,8 @@ class EVMFaucet:
         # ===========================================================
         try:
             user_balance = w3.eth.get_balance(to_address)
-        except Exception:
-            return {"error": "Nepavyko gauti naudotojo balanso"}, 500
+        except Exception as error:
+            return {"error": failure_sentence('Nepavyko gauti jūsų piniginės balanso', error, 'rpc', RPC_TIMEOUT_S)}, 500
 
         if user_balance >= amount_to_send_wei:
             return {"error": f"Jūsų piniginėje jau yra pakankamai {self.NETWORK_CONFIGS[network]['faucet']['short_name']}."}, 400
@@ -523,9 +561,9 @@ class EVMFaucet:
         try:
             faucet_balance = w3.eth.get_balance(self.FAUCET_ADDRESS)
             gas_price = w3.eth.gas_price
-        except Exception:
+        except Exception as error:
             self.cooldowns.release(cooldown_key)
-            return {"error": "Nepavyko gauti čiaupo balanso"}, 500
+            return {"error": failure_sentence('Nepavyko gauti čiaupo balanso', error, 'rpc', RPC_TIMEOUT_S)}, 500
 
         # The node reserves value + gas_limit × gasPrice up front: a
         # wallet inside that band would pass a bare balance check
@@ -560,19 +598,22 @@ class EVMFaucet:
                     'gas': GAS_LIMIT,
                     'gasPrice': gas_price,
                 })
-        except Exception:
+        except Exception as error:
             logging.exception(f"Failed to broadcast {network} payout")
             self.cooldowns.release(cooldown_key)
-            return {"error": "Nepavyko išsiųsti transakcijos. Bandykite dar kartą."}, 500
+            return {"error": failure_sentence('Nepavyko išsiųsti transakcijos', error, 'rpc', RPC_TIMEOUT_S)}, 500
 
         # Success — the cooldown slot claimed above stays, and the
         # cached balance is dropped so the page shows the payout on
         # its next poll.
         self._balance_cache.pop(network, None)
 
+        # The hash in its 0x form — the one MetaMask shows and the
+        # page links to the block explorer. web3 7's .hex() drops
+        # the prefix.
         return {
             "message": "ETH sent successfully",
-            "transaction_hash": tx_hash.hex(),
+            "transaction_hash": Web3.to_hex(tx_hash),
             "amount": float(w3.from_wei(amount_to_send_wei, 'ether'))
         }, 200
 
@@ -606,9 +647,9 @@ class EVMFaucet:
 
         try:
             balance_eth = self._faucet_balance(network)
-        except Exception:
+        except Exception as error:
             logging.exception(f"Failed to get faucet balance for network {network}")
-            return {"error": "Nepavyko gauti čiaupo balanso"}, 500
+            return {"error": failure_sentence('Nepavyko gauti čiaupo balanso', error, 'rpc', RPC_TIMEOUT_S)}, 500
 
         return {
             "balance": balance_eth,

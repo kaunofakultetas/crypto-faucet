@@ -4,15 +4,22 @@
 //  The right-click dialog of a node: rename the address (the
 //  parent saves on Išsaugoti — an empty name clears the label,
 //  the field is capped at NAME_MAX_LENGTH, and a failed save
-//  shows under the field instead of closing the dialog) and
-//  copy the raw address, with a 1 s "Nukopijuota" tooltip as
-//  feedback. The backdrop blurs the graph instead of dimming
-//  it.
+//  shows under the field, saying why, instead of closing the
+//  dialog) and copy the raw address, with a 1 s "Nukopijuota"
+//  tooltip as feedback — or, when the browser would not copy,
+//  the reason under the address field. The backdrop blurs the
+//  graph instead of dimming it.
+//
+//  Split into (root component last):
+//
+//    copyToClipboard — the copy, and why it failed
+//    AddressDialog   — the dialog (default export)
 // -----------------------------------------------------------
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { NAME_MAX_LENGTH } from '../constants';
+import { clipboardFailure } from '@/utils/clipboardError';
 
 import Box from '@mui/material/Box';
 import IconButton from '@mui/material/IconButton';
@@ -36,8 +43,10 @@ import CloseIcon from '@mui/icons-material/Close';
 // copyToClipboard
 // -----------------------------------------------------------
 //
-// Clipboard write that reports success instead of throwing —
-// the "Nukopijuota" hint shows only when it worked.
+// Clipboard write that reports instead of throwing: nothing
+// when it worked, otherwise the reason in words, worded once
+// for every copy button (clipboardFailure). The "Nukopijuota"
+// hint shows only when it worked.
 //
 // Used by:
 //   - AddressDialog (below) — the copy button
@@ -46,10 +55,10 @@ import CloseIcon from '@mui/icons-material/Close';
 const copyToClipboard = async (text) => {
   try {
     await navigator.clipboard.writeText(text || '');
-    return true;
+    return null;
   } catch (error) {
     console.error('Failed to copy to clipboard:', error);
-    return false;
+    return clipboardFailure(error);
   }
 };
 
@@ -63,6 +72,10 @@ const copyToClipboard = async (text) => {
 // AddressDialog (default export)
 // -----------------------------------------------------------
 //
+// The dialog itself; the parent owns the name draft and the
+// save, this one the copy and its feedback — a failed copy
+// is said under the address field until the dialog closes.
+//
 // Used by:
 //   - CryptoFlowGraph.jsx — opened by the right-click handler
 // -----------------------------------------------------------
@@ -70,6 +83,15 @@ const copyToClipboard = async (text) => {
 export default function AddressDialog({ open, onClose, name, setName, address, error = null, onSave }) {
 
   const [copyHintOpen, setCopyHintOpen] = useState(false);
+  const [copyFailure, setCopyFailure] = useState(null);
+
+
+  // The dialog stays mounted between openings — a copy that
+  // failed for one address must not greet the next
+  useEffect(() => {
+    if (!open) setCopyFailure(null);
+  }, [open]);
+
 
   return (
     <Dialog
@@ -106,13 +128,21 @@ export default function AddressDialog({ open, onClose, name, setName, address, e
         </Box>
 
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <TextField fullWidth label="Adresas" value={address || ''} InputProps={{ readOnly: true }} />
+          <TextField
+            fullWidth
+            label="Adresas"
+            value={address || ''}
+            InputProps={{ readOnly: true }}
+            error={Boolean(copyFailure)}
+            helperText={copyFailure}
+          />
           <Tooltip open={copyHintOpen} title="Nukopijuota" disableHoverListener>
             <IconButton
               aria-label="copy"
               onClick={async () => {
-                const success = await copyToClipboard(address);
-                if (success) {
+                const failure = await copyToClipboard(address);
+                setCopyFailure(failure && `Nepavyko nukopijuoti adreso: ${failure}.`);
+                if (!failure) {
                   setCopyHintOpen(true);
                   setTimeout(() => setCopyHintOpen(false), 1000);
                 }

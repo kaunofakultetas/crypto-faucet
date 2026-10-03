@@ -5,11 +5,13 @@
 //  faucet address from /api/evm/<network>/faucet-balance as
 //  the graph's root (the address every later request is
 //  about), the states the page shows instead of a graph —
-//  "Kraunama…" while the address loads, "Nepavyko gauti
-//  čiaupo adreso" when it fails (an unknown network too),
-//  "Adresas nerastas" for an answer without one, and the
-//  one-line notice for a network without an explorer section
-//  (has_explorer false, whatever the other answers do) — the
+//  "Kraunama…" while the address loads; when it fails, what
+//  went wrong: the backend's own sentence (an unknown network
+//  too), or "Nepavyko gauti čiaupo adreso." with the reason
+//  after it — a dropped connection, an answer without an
+//  address, which is a malformed one; and the one-line notice
+//  for a network without an explorer section (has_explorer
+//  false, whatever the other answers do) — the
 //  visually hidden page heading with the network's full name,
 //  the native currency of the edge labels from
 //  /api/evm/networks (the ETH placeholder when the list is
@@ -43,9 +45,12 @@ afterEach(() => endGraphSlate());
 
 
 const LOADING = 'Kraunama…';
-const NO_ADDRESS = 'Nepavyko gauti čiaupo adreso';
-const ADDRESS_MISSING = 'Adresas nerastas';
 const NO_EXPLORER = 'Šiam tinklui transakcijų srautas neprieinamas';
+
+// The page's own sentence for a failed address read, with the
+// reason after it, when the backend sent no sentence of its own
+const NO_CONNECTION = 'Nepavyko gauti čiaupo adreso. Patikrinkite interneto ryšį.';
+const NO_ADDRESS_IN_ANSWER = 'Nepavyko gauti čiaupo adreso. Serveris atsakė netinkamo formato duomenimis.';
 
 
 
@@ -128,8 +133,9 @@ describe('The faucet address — the graph\'s root', () => {
 // The states instead of a graph
 // -----------------------------------------------------------
 //
-// Loading, a failed or unknown network, an answer without an
-// address, a network without an explorer — each a single
+// Loading, a failed read or an unknown network — said in the
+// backend's words or with the reason — an answer without an
+// address, a network without an explorer: each a single
 // centred line, no graph, no graph requests.
 // -----------------------------------------------------------
 
@@ -147,12 +153,12 @@ describe('The states instead of a graph', () => {
   });
 
 
-  it('shows "Nepavyko gauti čiaupo adreso" when the faucet-balance request fails, with no graph and no graph requests', async () => {
-    given.error('get', '/api/evm/:network/faucet-balance', 'Vidinė serverio klaida', 500);
+  it('shows the backend\'s own sentence when the faucet-balance request fails, with no graph and no graph requests', async () => {
+    given.error('get', '/api/evm/:network/faucet-balance', 'Nepavyko gauti čiaupo balanso: tinklo RPC serveris neatsakė per 10 s.', 500);
     const days = given.capture('get', '/api/evm/:network/transaction-days', f.evmTransactionDays());
     const backend = installGraphBackend();
     renderGraph();
-    expect(await screen.findByText(NO_ADDRESS)).toBeInTheDocument();
+    expect(await screen.findByText('Nepavyko gauti čiaupo balanso: tinklo RPC serveris neatsakė per 10 s.')).toBeInTheDocument();
     await settle(100);
     expect(screen.queryByText(LOADING)).toBeNull();
     expect(screen.queryByRole('img')).toBeNull();
@@ -162,25 +168,25 @@ describe('The states instead of a graph', () => {
   });
 
 
-  it('an unknown network in the URL is the same failure — the backend refuses its faucet balance', async () => {
+  it('an unknown network in the URL is the same failure — the backend refuses its faucet balance, in its words', async () => {
     renderGraph({ network: 'noSuchNet' });
-    expect(await screen.findByText(NO_ADDRESS)).toBeInTheDocument();
+    expect(await screen.findByText('Nepalaikomas tinklas: noSuchNet')).toBeInTheDocument();
     expect(networks).toHaveLength(0);
   });
 
 
-  it('a dropped connection on the faucet balance is the same failure', async () => {
+  it('a dropped connection on the faucet balance is the same failure, the reason after the page\'s sentence', async () => {
     given.networkError('get', '/api/evm/:network/faucet-balance');
     renderGraph();
-    expect(await screen.findByText(NO_ADDRESS)).toBeInTheDocument();
+    expect(await screen.findByText(NO_CONNECTION)).toBeInTheDocument();
   });
 
 
-  it('says "Adresas nerastas" when the faucet-balance answer names no address', async () => {
+  it('says the answer was malformed when the faucet-balance answer names no address', async () => {
     given.json('get', '/api/evm/:network/faucet-balance', { balance: 41.6, chunk_size: 0.2 });
     const backend = installGraphBackend();
     renderGraph();
-    expect(await screen.findByText(ADDRESS_MISSING)).toBeInTheDocument();
+    expect(await screen.findByText(NO_ADDRESS_IN_ANSWER)).toBeInTheDocument();
     await settle(100);
     expect(networks).toHaveLength(0);
     expect(backend.requests).toHaveLength(0);
@@ -190,7 +196,22 @@ describe('The states instead of a graph', () => {
   it('an empty address string counts as no address', async () => {
     given.json('get', '/api/evm/:network/faucet-balance', { ...f.evmBalance(), address: '' });
     renderGraph();
-    expect(await screen.findByText(ADDRESS_MISSING)).toBeInTheDocument();
+    expect(await screen.findByText(NO_ADDRESS_IN_ANSWER)).toBeInTheDocument();
+  });
+
+
+  it('an answer without an address already in the shared cache is the same malformed answer — and asks nothing', async () => {
+    // Both pages refuse such an answer now, but whatever lands
+    // in the entry the faucet page shares is never taken for an
+    // address
+    const balance = given.capture('get', '/api/evm/:network/faucet-balance', f.evmBalance());
+    const client = makeQueryClient({ gcTime: Infinity });
+    client.setQueryData(['evm-faucet-balance', 'sepolia'], { address: null });
+    renderGraph({ client });
+    expect(await screen.findByText(NO_ADDRESS_IN_ANSWER)).toBeInTheDocument();
+    await settle(100);
+    expect(balance).toHaveLength(0);
+    expect(networks).toHaveLength(0);
   });
 
 
@@ -215,7 +236,7 @@ describe('The states instead of a graph', () => {
     renderGraph({ network: 'arbitrumSepolia' });
     expect(await screen.findByText(NO_EXPLORER)).toBeInTheDocument();
     await settle(400);
-    expect(screen.queryByText(NO_ADDRESS)).toBeNull();
+    expect(screen.queryByText('Vidinė serverio klaida')).toBeNull();
   });
 
 

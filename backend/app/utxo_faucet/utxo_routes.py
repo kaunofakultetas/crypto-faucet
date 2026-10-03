@@ -138,7 +138,8 @@ def request_btc(network):
 # are the unix bounds [from, to) of the day the page's slider
 # picked, computed in the student's browser. Answers from the
 # cache at once; a due crawl runs in the background and the
-# answer's `updating` says so.
+# answer's `updating` says so, its `crawl_error` why the
+# network's last crawl failed.
 #
 # Used by:
 #   - Graph_UTXO/hooks/useTransactionGraph.js — the day's data,
@@ -194,6 +195,10 @@ def get_transaction_days(network):
 #
 # One transaction in the graph's shape, plus the names of its
 # addresses — fetched from the server when the cache lacks it.
+# One that cannot be had is answered with the reason: a 404
+# when the node said it does not exist, a 502 when the
+# Electrum server refused it or sent one that cannot be read,
+# a 503 when the server could not be asked at all.
 #
 # Used by:
 #   - Graph_UTXO/components/TransactionModal.jsx — a link to a

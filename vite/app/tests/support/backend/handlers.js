@@ -120,7 +120,7 @@ export const defaultHandlers = [
   )),
   http.get(abs('/api/utxo/:network/transaction/:txid'), ({ params }) => {
     const found = f.utxoTransaction(params.txid);
-    return found ? HttpResponse.json(found) : refuse('Transakcija nerasta', 404);
+    return found ? HttpResponse.json(found) : refuse('Transakcija nerasta: tinklo mazgas jos neturi nei blokuose, nei tinklo eilėje (No such mempool or blockchain transaction).', 404);
   }),
   http.get(abs('/api/utxo/:network/set-address-name'), ({ request }) => (
     addressOf(request) ? HttpResponse.json({ status: 'OK' }) : refuse('Trūksta adreso')

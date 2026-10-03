@@ -23,12 +23,17 @@
 //  shape the page cannot use, or a :network the catalog does
 //  not know, gets an error card; faucet info that failed or
 //  came back malformed is said in the card where its numbers
-//  would stand, while the poll keeps trying.
+//  would stand, while the poll keeps trying. Each failure says
+//  what went wrong — the backend's own sentence when it gave
+//  one, otherwise the page's with the reason after it.
 //
 //  Split into (root component last):
 //
 //    FAUCET_REFRESH_MS — faucet balance repoll cadence
 //    CLAIM_FAILED      — the claim's own failure sentence
+//    NETWORKS_FAILED   — the network list's failure sentence
+//    FAUCET_FAILED     — the faucet info's failure sentence
+//    WALLET_FAILED     — the student's balance's failure sentence
 //    isPlainObject     — the shape checks' building block
 //    isCatalog         — a usable /api/evm/networks answer
 //    isFaucetInfo      — a usable faucet-balance answer
@@ -53,7 +58,8 @@ import { WalletStepper, WalletGateButton, FadingAlert, useAlerts } from '@/compo
 import AssetIcon from '@/components/AssetIcon';
 import ErrorCard from '@/components/ErrorCard';
 import PayoutMessage from '@/components/PayoutMessage';
-import { requestErrorText } from '@/utils/requestError';
+import FailureNote from '@/components/FailureNote';
+import { MalformedAnswerError, requestErrorText, withNextStep } from '@/utils/requestError';
 import { payoutTxid } from '@/utils/payout';
 
 
@@ -63,6 +69,17 @@ const FAUCET_REFRESH_MS = 3000;
 // What a failed claim says when neither the backend nor the
 // wallet gave a reason of their own
 const CLAIM_FAILED = 'Nepavyko išsiųsti kriptovaliutos.';
+
+// What a failed read of the network list says when the
+// backend gave no sentence of its own
+const NETWORKS_FAILED = 'Nepavyko gauti tinklų sąrašo.';
+
+// The same for a failed read of the faucet's info
+const FAUCET_FAILED = 'Nepavyko gauti čiaupo informacijos.';
+
+// What the student's balance row says under its dash when
+// MetaMask could not read the balance
+const WALLET_FAILED = 'Nepavyko gauti jūsų MetaMask balanso.';
 
 
 
@@ -159,8 +176,10 @@ const isFaucetInfo = (body) => isPlainObject(body)
 // the catalog never arrived or is unusable (catalogFailed),
 // the catalog does not know this :network (unknownNetwork),
 // or the faucet info never arrived (faucetFailed — the poll
-// keeps trying, and a later answer clears it). A failed
-// repoll keeps the last good numbers on screen.
+// keeps trying, and a later answer clears it) — each failure
+// with the error behind it, for the page to say what went
+// wrong. A failed repoll keeps the last good numbers on
+// screen.
 //
 // Used by:
 //   - FaucetEVM (below)
@@ -168,11 +187,11 @@ const isFaucetInfo = (body) => isPlainObject(body)
 
 function useFaucetInfo(network) {
 
-  const { data: catalog, isError: catalogError } = useQuery({
+  const { data: catalog, error: catalogQueryError } = useQuery({
     queryKey: ['evm-networks'],
     queryFn: async () => {
       const body = (await axios.get('/api/evm/networks')).data;
-      if (!isCatalog(body)) throw new Error('Unexpected /api/evm/networks answer');
+      if (!isCatalog(body)) throw new MalformedAnswerError();
       return body;
     },
     staleTime: 5 * 60 * 1000,
@@ -182,8 +201,10 @@ function useFaucetInfo(network) {
   // object inherits is not a network the catalog knows
   const networkInfo = networks && Object.hasOwn(networks, network) ? networks[network] : null;
   // An unusable answer the graph page cached counts as a
-  // failure too, not as a load still on its way
-  const catalogFailed = !networks && (catalogError || catalog !== undefined);
+  // failure too, not as a load still on its way — one in an
+  // unusable shape
+  const catalogFailed = !networks && Boolean(catalogQueryError || catalog !== undefined);
+  const catalogError = catalogFailed ? (catalogQueryError ?? new MalformedAnswerError()) : null;
   const unknownNetwork = Boolean(networks) && !networkInfo;
 
 
@@ -191,7 +212,7 @@ function useFaucetInfo(network) {
     queryKey: ['evm-faucet-balance', network],
     queryFn: async () => {
       const body = (await axios.get(`/api/evm/${network}/faucet-balance`)).data;
-      if (!isFaucetInfo(body)) throw new Error('Unexpected faucet-balance answer');
+      if (!isFaucetInfo(body)) throw new MalformedAnswerError();
       return body;
     },
     enabled: Boolean(networkInfo),
@@ -200,7 +221,10 @@ function useFaucetInfo(network) {
   const faucetInfo = isFaucetInfo(faucetQuery.data) ? faucetQuery.data : null;
   const faucetFailed = !faucetInfo && faucetQuery.isError;
 
-  return { networkInfo, faucetInfo, faucetFailed, catalogFailed, unknownNetwork };
+  return {
+    networkInfo, faucetInfo, faucetFailed, faucetError: faucetQuery.error,
+    catalogFailed, catalogError, unknownNetwork,
+  };
 }
 
 
@@ -268,18 +292,18 @@ function LoadingSkeleton() {
 //
 // The faucet's two numbers in the main card — what one claim
 // pays out and what the faucet still holds — or, when the
-// faucet info never arrived, the sentence saying so in their
-// place, in the UTXO page's words. A backend that cannot
-// answer used to leave the skeleton up forever.
+// faucet info never arrived, the sentence saying what went
+// wrong in their place. A backend that cannot answer used to
+// leave the skeleton up forever.
 //
 // Used by:
 //   - FaucetEVM (below)
 // -----------------------------------------------------------
 
-function FaucetRows({ faucetInfo, shortName }) {
+function FaucetRows({ faucetInfo, failure, shortName }) {
 
   if (!faucetInfo) {
-    return <Alert severity="error" sx={{ my: 1 }}>Nepavyko gauti čiaupo informacijos</Alert>;
+    return <Alert severity="error" sx={{ my: 1 }}>{failure}</Alert>;
   }
 
   return (
@@ -372,7 +396,9 @@ export default function FaucetEVM() {
   const { network } = useParams();
   const navigate = useNavigate();
 
-  const { networkInfo, faucetInfo, faucetFailed, catalogFailed, unknownNetwork } = useFaucetInfo(network);
+  const {
+    networkInfo, faucetInfo, faucetFailed, faucetError, catalogFailed, catalogError, unknownNetwork,
+  } = useFaucetInfo(network);
   const wallet = useMetamaskWallet(networkInfo?.chain_id);
   const { alerts, addAlert, clearAlerts } = useAlerts();
   const queryClient = useQueryClient();
@@ -437,7 +463,7 @@ export default function FaucetEVM() {
 
 
   if (catalogFailed) {
-    return <ErrorCard>Nepavyko gauti tinklų sąrašo. Perkraukite puslapį.</ErrorCard>;
+    return <ErrorCard>{withNextStep(requestErrorText(catalogError, NETWORKS_FAILED), 'Perkraukite puslapį.')}</ErrorCard>;
   }
 
   if (unknownNetwork) {
@@ -498,7 +524,14 @@ export default function FaucetEVM() {
           <span className="flex-1">Jūsų MetaMask balansas:</span>
           <span className="text-right">{wallet.step === 3 ? formatBalance(wallet.balance) : 'Piniginė neprijungta'}</span>
         </div>
-        <FaucetRows faucetInfo={faucetInfo} shortName={networkInfo.short_name} />
+        {wallet.step === 3 && wallet.balanceFailed && (
+          <FailureNote>{requestErrorText(wallet.balanceError, WALLET_FAILED)}</FailureNote>
+        )}
+        <FaucetRows
+          faucetInfo={faucetInfo}
+          failure={requestErrorText(faucetError, FAUCET_FAILED)}
+          shortName={networkInfo.short_name}
+        />
 
         <div className="mt-3">
           <WalletGateButton

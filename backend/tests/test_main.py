@@ -18,6 +18,7 @@
 
 import os
 import json
+import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -112,6 +113,18 @@ class ExampleChainTests(unittest.TestCase):
         blocks = self.fetch()
         for previous, block in zip(blocks, blocks[1:]):
             self.assertEqual(block['previousHash'], previous['hash'])
+
+    def test_a_database_that_cannot_be_read_says_why(self):
+        # The simulator shows this sentence, never Flask's bare
+        # error page; the traceback goes to the log
+        locked = sqlite3.OperationalError('database is locked')
+        with patch('main.get_db_connection', side_effect=locked), self.assertLogs(level='ERROR'):
+            response = self.main.app.test_client().get('/api/get-example-blockchain')
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(json.loads(response.data), {'error': 'Nepavyko perskaityti pavyzdinės blokų grandinės: '
+                                                     'duomenų bazė užrakinta kitos rašančios užklausos '
+                                                     '(database is locked).'})
 
 
 if __name__ == '__main__':

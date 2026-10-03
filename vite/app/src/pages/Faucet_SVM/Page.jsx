@@ -28,7 +28,9 @@
 //  list without its map gets the list's failure card, faucet
 //  info that never arrived (or arrived in another shape) a
 //  failure notice on a page whose wallet steps still work, and
-//  a failed claim a Lithuanian sentence.
+//  a failed claim a Lithuanian sentence. Each one says what
+//  went wrong — the backend's own sentence when it gave one,
+//  otherwise the page's with the reason after it.
 //
 //  Split into (root component last):
 //
@@ -36,6 +38,9 @@
 //    PHANTOM_*           — wallet name + download link
 //    PHANTOM_CLUSTERS    — Phantom's own names for a cluster
 //    CLAIM_FAILED        — the claim's own failure sentence
+//    NETWORKS_FAILED     — the network list's failure sentence
+//    FAUCET_FAILED       — the faucet info's failure sentence
+//    WALLET_FAILED       — the student's balance's failure sentence
 //    lamportsToCoins     — the only unit maths on this page
 //    useNetworks         — the SVM network catalog (own fetch)
 //    useFaucetInfo       — faucet address + balance, polled
@@ -60,8 +65,9 @@ import PaidIcon from '@mui/icons-material/Paid';
 import AssetIcon from '@/components/AssetIcon';
 import ErrorCard from '@/components/ErrorCard';
 import PayoutMessage from '@/components/PayoutMessage';
+import FailureNote from '@/components/FailureNote';
 import { WalletStepper, WalletGateButton, FadingAlert, useAlerts } from '@/components/WalletFlow';
-import { requestErrorText } from '@/utils/requestError';
+import { MalformedAnswerError, RefusalError, requestErrorText, withNextStep } from '@/utils/requestError';
 import { payoutTxid } from '@/utils/payout';
 
 import usePhantomWallet from './usePhantomWallet';
@@ -89,6 +95,17 @@ const PHANTOM_CLUSTERS = {
 // reason after it
 const CLAIM_FAILED = 'Nepavyko išsiųsti kriptovaliutos.';
 
+// What a failed read of the network list says when the
+// backend gave no sentence of its own
+const NETWORKS_FAILED = 'Nepavyko gauti tinklų sąrašo.';
+
+// The same for a failed read of the faucet's info
+const FAUCET_FAILED = 'Nepavyko gauti čiaupo informacijos.';
+
+// What the student's balance row says under its dash when the
+// public cluster RPC could not read the balance
+const WALLET_FAILED = `Nepavyko gauti jūsų ${PHANTOM_NAME} balanso.`;
+
 
 // Lamports are integers; the chain's decimals come from the
 // network payload (9 on every SVM chain so far, but it is a
@@ -113,26 +130,27 @@ const lamportsToCoins = (lamports, decimals) => lamports / 10 ** decimals;
 // keeps it. An answer without a networks map (a proxy's page
 // with HTTP 200, an empty object) is a failed fetch too, so
 // the page says the list is missing instead of waiting for
-// it on a skeleton.
+// it on a skeleton. The error behind a failure comes along,
+// for the page to say what went wrong.
 //
 // Used by:
 //   - FaucetSVM (below)
 // -----------------------------------------------------------
 
 function useNetworks() {
-  const { data, isError } = useQuery({
+  const { data, isError, error } = useQuery({
     queryKey: ['svm-networks'],
     queryFn: async () => {
       const list = (await axios.get('/api/svm/networks')).data;
       const map = list?.networks;
-      if (!map || typeof map !== 'object' || Array.isArray(map)) throw new Error('no networks map in the answer');
+      if (!map || typeof map !== 'object' || Array.isArray(map)) throw new MalformedAnswerError();
       return list;
     },
     staleTime: 5 * 60 * 1000,
   });
 
   const networks = data?.networks ?? null;
-  return { networks, failed: isError && !networks };
+  return { networks, failed: isError && !networks, error };
 }
 
 
@@ -156,28 +174,29 @@ function useNetworks() {
 // is a failure; a failed repoll keeps the last numbers on
 // screen. An answer without an address or without its two
 // numbers counts as a failed read too, rather than a blank
-// number or a QR code of nothing. The poll goes on after a
-// failure, so the page recovers by itself.
+// number or a QR code of nothing. The error behind a failure
+// comes along, for the page to say what went wrong. The poll
+// goes on after a failure, so the page recovers by itself.
 //
 // Used by:
 //   - FaucetSVM (below)
 // -----------------------------------------------------------
 
 function useFaucetInfo(network, ready) {
-  const { data, isLoadingError } = useQuery({
+  const { data, isLoadingError, error } = useQuery({
     queryKey: ['svm-faucet-balance', network],
     queryFn: async () => {
       const info = (await axios.get(`/api/svm/${network}/faucet-balance`)).data;
       const complete = typeof info?.address === 'string' && info.address
         && Number.isFinite(info.balance) && Number.isFinite(info.chunk_size);
-      if (!complete) throw new Error('not a faucet balance answer');
+      if (!complete) throw new MalformedAnswerError();
       return info;
     },
     enabled: Boolean(ready),
     refetchInterval: SVM_REFRESH_MS,
   });
 
-  return { faucetInfo: data ?? null, failed: isLoadingError };
+  return { faucetInfo: data ?? null, failed: isLoadingError, error };
 }
 
 
@@ -196,7 +215,9 @@ function useFaucetInfo(network, ready) {
 // Infura URL. @solana/web3.js would pull a megabyte of
 // library to wrap this one POST. Only polls once an address
 // is connected. The hook hands back the lamports (null until
-// the first answer) and whether the last read failed.
+// the first answer), whether the last read failed and the
+// error behind it — the RPC's refusal in its own words, or
+// an answer of the wrong shape.
 //
 // A JSON-RPC error arrives with HTTP 200, and so does a
 // proxy's page that is no JSON-RPC answer at all; both are
@@ -213,7 +234,7 @@ function useFaucetInfo(network, ready) {
 // -----------------------------------------------------------
 
 function useWalletBalance(rpcUrl, address) {
-  const { data = null, isError } = useQuery({
+  const { data = null, isError, error } = useQuery({
     queryKey: ['svm-wallet-balance', rpcUrl, address],
     enabled: Boolean(rpcUrl && address),
     refetchInterval: SVM_REFRESH_MS,
@@ -224,16 +245,16 @@ function useWalletBalance(rpcUrl, address) {
         method: 'getBalance',
         params: [address, { commitment: 'confirmed' }],
       });
-      if (data?.error) throw new Error(data.error.message || 'Solana RPC error');
+      if (data?.error) throw new RefusalError('Solana RPC', data.error.message || '');
 
       // Zero is a balance; a missing number is not
       const lamports = data?.result?.value;
-      if (!Number.isFinite(lamports)) throw new Error('Solana RPC answered without a balance');
+      if (!Number.isFinite(lamports)) throw new MalformedAnswerError();
       return lamports;
     },
   });
 
-  return { lamports: data, failed: isError };
+  return { lamports: data, failed: isError, error };
 }
 
 
@@ -345,17 +366,16 @@ function LoadingSkeleton() {
 //
 // The faucet's two lines in the balance card — what one claim
 // pays and what the faucet holds — or, when its info could not
-// be read, the page's failure notice in their place, as the
-// UTXO page shows it.
+// be read, the sentence saying what went wrong in their place.
 //
 // Used by:
 //   - FaucetSVM (below) — the balance card
 // -----------------------------------------------------------
 
-function FaucetRows({ faucetInfo, failed, shortName }) {
+function FaucetRows({ faucetInfo, failed, failure, shortName }) {
 
   if (failed) {
-    return <Alert severity="error" sx={{ my: 1 }}>Nepavyko gauti čiaupo informacijos</Alert>;
+    return <Alert severity="error" sx={{ my: 1 }}>{failure}</Alert>;
   }
 
 
@@ -429,14 +449,14 @@ function ReturnAddressCard({ shortName, address }) {
 export default function FaucetSVM() {
 
   const { network } = useParams();
-  const { networks, failed: catalogFailed } = useNetworks();
+  const { networks, failed: catalogFailed, error: catalogError } = useNetworks();
   const networkInfo = networks?.[network] ?? null;
   const unknownNetwork = Boolean(networks) && !networkInfo;
 
   const clusterRpc = networkInfo?.rpc_urls?.[0] ?? null;
   const wallet = usePhantomWallet(networkInfo?.cluster);
 
-  const { faucetInfo, failed: faucetFailed } = useFaucetInfo(network, networkInfo);
+  const { faucetInfo, failed: faucetFailed, error: faucetError } = useFaucetInfo(network, networkInfo);
   const walletBalance = useWalletBalance(clusterRpc, wallet.address);
 
   const { alerts, addAlert, clearAlerts } = useAlerts();
@@ -500,7 +520,7 @@ export default function FaucetSVM() {
 
 
   if (catalogFailed) {
-    return <ErrorCard>Nepavyko gauti tinklų sąrašo. Perkraukite puslapį.</ErrorCard>;
+    return <ErrorCard>{withNextStep(requestErrorText(catalogError, NETWORKS_FAILED), 'Perkraukite puslapį.')}</ErrorCard>;
   }
 
   if (unknownNetwork) {
@@ -566,7 +586,15 @@ export default function FaucetSVM() {
           <span className="flex-1">Jūsų Phantom balansas:</span>
           <span className="text-right">{walletBalanceText()}</span>
         </div>
-        <FaucetRows faucetInfo={faucetInfo} failed={faucetFailed} shortName={networkInfo.short_name} />
+        {wallet.step === 3 && walletBalance.failed && (
+          <FailureNote>{requestErrorText(walletBalance.error, WALLET_FAILED, 'Solana RPC')}</FailureNote>
+        )}
+        <FaucetRows
+          faucetInfo={faucetInfo}
+          failed={faucetFailed}
+          failure={requestErrorText(faucetError, FAUCET_FAILED)}
+          shortName={networkInfo.short_name}
+        />
 
         <div className="mt-3">
           <WalletGateButton

@@ -23,6 +23,8 @@
 //    BALANCE_REFRESH_MS — background repoll cadence
 //    DEFAULT_NET_META   — BTC fallback until the names load
 //    PAYOUT_FAILED      — the page's own failure sentence
+//    NETWORKS_FAILED    — the network list's failure sentence
+//    FAUCET_FAILED      — the faucet info's failure sentence
 //    useFaucetInfo      — names + faucet info + polling
 //    BalanceRows        — "we'll send" + balance lines
 //    ReturnAddressCard  — return address + QR + the graph
@@ -43,7 +45,7 @@ import HubIcon from '@mui/icons-material/Hub';
 import AssetIcon from '@/components/AssetIcon';
 import ErrorCard from '@/components/ErrorCard';
 import PayoutMessage from '@/components/PayoutMessage';
-import { requestErrorText } from '@/utils/requestError';
+import { MalformedAnswerError, requestErrorText, withNextStep } from '@/utils/requestError';
 import { payoutTxid } from '@/utils/payout';
 
 
@@ -59,6 +61,13 @@ const DEFAULT_NET_META = { short_name: 'BTC', full_name: 'Bitcoin', icon: null, 
 // What a failed request says when the backend had no sentence
 // of its own — requestErrorText adds the reason after it
 const PAYOUT_FAILED = 'Nepavyko išsiųsti kriptovaliutos.';
+
+// What a failed read of the network list says when the
+// backend gave no sentence of its own
+const NETWORKS_FAILED = 'Nepavyko gauti tinklų sąrašo.';
+
+// The same for a failed read of the faucet's info
+const FAUCET_FAILED = 'Nepavyko gauti čiaupo informacijos.';
 
 
 
@@ -83,14 +92,16 @@ const PAYOUT_FAILED = 'Nepavyko išsiųsti kriptovaliutos.';
 // until the list arrives), the faucet info, two loading flags
 // — initialLoad tells the first fetch (skeletons) from the
 // background repolls (no flicker) — whether the list never
-// arrived (catalogFailed) or arrived without this network
-// (unknownNetwork), and a refresh the page calls after a
-// payout for an immediate refetch of the balance.
+// arrived (catalogFailed, with the error behind it) or arrived
+// without this network (unknownNetwork), and a refresh the
+// page calls after a payout for an immediate refetch of the
+// balance.
 //
 // A network switch changes the query key, so a slow answer
 // from the previous chain can never overwrite the current
 // one. Only a fetch that NEVER succeeded becomes the { error }
-// payload — a failed repoll keeps the last numbers on screen.
+// payload, saying what went wrong — a failed repoll keeps the
+// last numbers on screen.
 // The poll is gated on the list knowing the network, so an
 // unknown :network never repolls a 500 forever.
 //
@@ -105,14 +116,14 @@ function useFaucetInfo(network) {
   // Display names; the BTC defaults stand in only while the
   // list is on its way — a list that never arrives is
   // reported as failed, one WITHOUT this network as unknown
-  const { data: networksData, isError: catalogError } = useQuery({
+  const { data: networksData, isError: catalogQueryFailed, error: catalogError } = useQuery({
     queryKey: ['utxo-networks'],
     queryFn: async () => {
       const list = (await axios.get('/api/utxo/networks')).data;
       // No map, no list — failing here puts up the card instead
       // of a generic Bitcoin page with a form that works
       const map = list?.networks;
-      if (!map || typeof map !== 'object' || Array.isArray(map)) throw new Error('no networks map in the answer');
+      if (!map || typeof map !== 'object' || Array.isArray(map)) throw new MalformedAnswerError();
       return list;
     },
     staleTime: 5 * 60 * 1000,
@@ -127,7 +138,7 @@ function useFaucetInfo(network) {
       block_explorer: info.block_explorer ?? null,   // the operator's explorer, or null
     }
     : DEFAULT_NET_META;
-  const catalogFailed = catalogError && !networks;
+  const catalogFailed = catalogQueryFailed && !networks;
   const unknownNetwork = Boolean(networks) && !info;
 
   const balanceQuery = useQuery({
@@ -141,7 +152,7 @@ function useFaucetInfo(network) {
   // NEVER succeeded becomes an { error } payload the render
   // branches on; a failed repoll keeps the last numbers
   const faucetInfo = balanceQuery.isLoadingError
-    ? { error: 'Nepavyko gauti čiaupo informacijos' }
+    ? { error: requestErrorText(balanceQuery.error, FAUCET_FAILED) }
     : (balanceQuery.data ?? null);
 
   return {
@@ -150,6 +161,7 @@ function useFaucetInfo(network) {
     loadingInfo: balanceQuery.isFetching,
     initialLoad: balanceQuery.isPending,
     catalogFailed,
+    catalogError,
     unknownNetwork,
     refresh: () => queryClient.invalidateQueries({ queryKey: ['utxo-faucet-balance', network] }),
   };
@@ -272,7 +284,9 @@ function ReturnAddressCard({ network, initialLoad, loadingInfo, faucetInfo, curr
 export default function FaucetUTXO() {
 
   const { network } = useParams();
-  const { netMeta, faucetInfo, loadingInfo, initialLoad, catalogFailed, unknownNetwork, refresh } = useFaucetInfo(network);
+  const {
+    netMeta, faucetInfo, loadingInfo, initialLoad, catalogFailed, catalogError, unknownNetwork, refresh,
+  } = useFaucetInfo(network);
 
   const [recipient, setRecipient] = useState('');
   const [success, setSuccess] = useState(null); // { txid, amount, short }
@@ -302,15 +316,14 @@ export default function FaucetUTXO() {
 
   // Ask the faucet to send coins. The backend's refusals
   // arrive as an { error } sentence, with HTTP 200 as well as
-  // with 4xx/5xx, and the student sees that sentence only — a
-  // 500's details field is the raw exception, a debugging
-  // field the backend log carries. Any other failure, a 200
-  // that names no transaction included (payoutTxid), gets the
-  // page's own sentence with the reason after it
-  // (requestErrorText). The outcome is pinned to the network
-  // it was issued for (its ticker travels with it), and an
-  // answer that arrives after a switch is dropped rather than
-  // shown under the new chain's name.
+  // with 4xx/5xx, and the student sees that sentence only,
+  // never another field the answer carries. Any other
+  // failure, a 200 that names no transaction included
+  // (payoutTxid), gets the page's own sentence with the
+  // reason after it (requestErrorText). The outcome is pinned
+  // to the network it was issued for (its ticker travels with
+  // it), and an answer that arrives after a switch is dropped
+  // rather than shown under the new chain's name.
   const handleRequest = async () => {
     const forNetwork = network;
     const short = currencyShort;
@@ -335,7 +348,7 @@ export default function FaucetUTXO() {
 
 
   if (catalogFailed) {
-    return <ErrorCard>Nepavyko gauti tinklų sąrašo. Perkraukite puslapį.</ErrorCard>;
+    return <ErrorCard>{withNextStep(requestErrorText(catalogError, NETWORKS_FAILED), 'Perkraukite puslapį.')}</ErrorCard>;
   }
 
   if (unknownNetwork) {

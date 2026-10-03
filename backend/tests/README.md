@@ -5,7 +5,7 @@ Three layers, from cheapest to heaviest:
 | Layer | Files | Needs network? | When to run |
 |---|---|---|---|
 | Config invariants | `test_configs.py`, `test_config_models.py` | no | always |
-| Offline regression | `test_main.py`, `test_database.py`, `test_utxo_engine.py`, `test_electrum_client.py`, `test_evm_faucet.py`, `test_erc20_faucet.py`, `test_svm_faucet.py`, `test_move_faucet.py`, `test_sui_graphql_client.py`, `test_solana_rpc_client.py`, `test_request_flows.py`, `test_explorer.py`, `test_prune_tool.py`, `test_cooldown.py` | no | always |
+| Offline regression | `test_main.py`, `test_database.py`, `test_utxo_engine.py`, `test_electrum_client.py`, `test_electrum_watcher.py`, `test_evm_faucet.py`, `test_erc20_faucet.py`, `test_svm_faucet.py`, `test_move_faucet.py`, `test_sui_graphql_client.py`, `test_solana_rpc_client.py`, `test_request_flows.py`, `test_api_routes.py`, `test_failure_reasons.py`, `test_disabled_families.py`, `test_explorer.py`, `test_utxo_graph.py`, `test_prune_tool.py`, `test_cooldown.py` | no | always |
 | Live smoke | `integration/test_live_smoke.py` | yes (running backend) | opt-in via `RUN_LIVE=1` |
 
 The offline layers are the safety net: they must pass with no internet,
@@ -41,7 +41,11 @@ Including the live smoke layer (backend must be up):
   build live faucet instances (with warmups) at
   import time. Import the class modules and build instances through
   `helpers.py`, which patches the warmups out and injects a throwaway
-  key. NEVER put the real faucet key in a test.
+  key. NEVER put the real faucet key in a test. The routes themselves
+  are tested in `test_api_routes.py` the safe way: `helpers.import_main`
+  builds the app with the warmups patched out, the route modules are
+  then taken from `sys.modules`, and their faucet instances are swapped
+  for `helpers.py` ones.
 - Test configs and byte anchors live in `helpers.py`; if a deliberate
   behavior change breaks an anchor, re-record it there in one place and
   say so in the commit message.

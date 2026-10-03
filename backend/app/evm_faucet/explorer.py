@@ -12,15 +12,22 @@
 #  'explorer' section names the endpoint, chain_id rides
 #  along as the API's chainid parameter) and never touches
 #  the chain itself. A network without an 'explorer' section
-#  has no graph: get_networks reports has_explorer=false and
-#  the SPA hides it — but is_supported_network here still
-#  accepts a direct request for it and the fetch fails with a
-#  logged traceback (pinned in test_explorer_defects.py).
+#  has no graph: get_networks reports has_explorer=false, the
+#  SPA hides it, and a direct request for it is a 400.
 #
 #  Refreshes are INCREMENTAL — each one resumes from the last
 #  block already stored for that address instead of re-pulling
 #  the whole history — and an Etherscan outage degrades to
 #  serving the SQLite cache instead of blanking the graph.
+#  Degrading is not hiding: the failure sentence of an
+#  address' latest failed refresh (failure_reasons — a
+#  refused API key, a rate limit, a server that did not
+#  answer, in Etherscan's own words where it gave some) rides
+#  along with every answer about that address as
+#  refresh_error until a refresh succeeds, so the graph can
+#  say why it may be missing transactions. A database that
+#  cannot be read or written is answered with a sentence
+#  saying so, not with a bare 500.
 #
 #  CONTRACTS and PUBLIC HUBS are never scraped: the moment one
 #  class wallet touches a token contract or a community faucet,
@@ -44,12 +51,14 @@ import logging
 import threading
 from collections import Counter
 from datetime import datetime, timezone, timedelta
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 import requests
 
 from ..database.db import get_db_connection
 from ..env_secrets import remember_secret, install_log_redaction
+from ..failure_reasons import failure_sentence
 
 
 # One outbound Etherscan call may not hang a worker: a hung
@@ -66,8 +75,12 @@ MAX_NAME_LENGTH = 64
 
 # Pages of 1000 one refresh will fetch before stopping — the
 # next refresh resumes from the last stored block, so a long
-# history arrives in chunks instead of one unbounded pull
-MAX_PAGES_PER_REFRESH = 20
+# history arrives in chunks instead of one unbounded pull.
+# Ten, because Etherscan serves at most 10000 rows of one
+# query (page × offset): it refuses an eleventh page of 1000,
+# and every long first fetch would end on that refusal and
+# report a failed refresh
+MAX_PAGES_PER_REFRESH = 10
 
 
 # How many blocks an incremental refresh re-fetches BELOW the
@@ -139,6 +152,33 @@ def _zone_of(tz):
 
 
 ############################################################
+# _api_server
+############################################################
+#
+# Which server a failed refresh's sentence names for an
+# explorer API URL: Etherscan when the host carries its name,
+# otherwise a block explorer's API — zkSync's and Linea's
+# answer in Etherscan's shape but are not Etherscan, and a
+# sentence naming Etherscan there would send the lecturer to
+# the wrong status page. The keys are failure_reasons'
+# SERVERS.
+#
+# Used by:
+#   - EtherscanExplorer._remember_refresh
+############################################################
+
+def _api_server(url):
+    host = (urlparse(url or '').hostname or '').lower()
+    return 'etherscan' if 'etherscan' in host else 'explorer'
+
+
+
+
+
+
+
+
+############################################################
 # EtherscanExplorer
 ############################################################
 #
@@ -147,10 +187,11 @@ def _zone_of(tz):
 #
 #   setup — __init__, is_supported_network
 #   fetch — fetch_all_transactions_from_etherscan,
-#           _refresh_address
+#           _claim_refresh_slot, _refresh_address,
+#           _remember_refresh
 #   store — store_transactions
-#   serve — get_stored_transactions, get_transaction_days,
-#           set_address_name
+#   serve — get_stored_transactions (_graph_answer),
+#           get_transaction_days, set_address_name
 #
 # Used by:
 #   - evm_routes.py — one shared instance for the graph
@@ -195,8 +236,15 @@ class EtherscanExplorer:
         # otherwise hammer Etherscan into its rate limit.
         self.ETHERSCAN_REFRESH_INTERVAL = 60
         self.last_etherscan_fetch = {}
-        # Guards the stamp above: the slot is claimed BEFORE the
-        # fetch, so concurrent requests for one address fetch once
+        # (network, address) -> the failure sentence of that
+        # address' latest refresh, for as long as it is the
+        # latest — a successful refresh removes the entry.
+        # Answers carry it as refresh_error, so a refused key or
+        # a rate limit shows on the graph, not only in the log.
+        self.refresh_errors = {}
+        # Guards both maps above: the slot is claimed BEFORE the
+        # fetch, so concurrent requests for one address fetch
+        # once, and a refresh's outcome is read whole
         self._refresh_lock = threading.Lock()
 
 
@@ -217,7 +265,7 @@ class EtherscanExplorer:
     #
     # Used by:
     #   - fetch_all_transactions_from_etherscan (below)
-    #   - get_stored_transactions / get_transaction_days (below)
+    #   - _graph_answer / get_transaction_days (below)
     ############################################################
 
     def is_supported_network(self, network):
@@ -235,12 +283,19 @@ class EtherscanExplorer:
     #
     # Pulls an address' transactions from the Etherscan API
     # starting at start_block, 1000 records per page, until a
-    # short page signals the end. An unknown API answer logs
-    # the raw response (rate limits and bad API keys are the
-    # usual suspects) and raises — unless earlier pages already
-    # arrived: those are kept and the failure only ends this
-    # refresh. At most MAX_PAGES_PER_REFRESH pages per call; the
-    # incremental resume fetches the rest next time.
+    # short page signals the end. Returns the rows together with
+    # the failure that cut the paging short, or None when the
+    # history arrived whole. Etherscan refuses with HTTP 200 —
+    # status 0, NOTOK, its reason in the result field (rate
+    # limits and bad API keys are the usual suspects): the raw
+    # answer is logged and the reason raised in Etherscan's own
+    # words under the prefix failure_reasons reads it by. An
+    # answer that is no JSON object or carries no transaction
+    # list is raised as an unexpected answer. Either raises —
+    # unless earlier pages already arrived: those are returned,
+    # and the failure only ends this refresh. At most
+    # MAX_PAGES_PER_REFRESH pages per call; the incremental
+    # resume fetches the rest next time.
     #
     # Used by:
     #   - _refresh_address (below)
@@ -272,16 +327,26 @@ class EtherscanExplorer:
             try:
                 response = requests.get(url, params=params, timeout=ETHERSCAN_TIMEOUT_S)
                 response.raise_for_status()
-                result = response.json()
+                try:
+                    result = response.json()
+                except ValueError:
+                    raise ValueError("Unexpected Etherscan answer: not JSON") from None
+                if not isinstance(result, dict):
+                    raise ValueError("Unexpected Etherscan answer: not a JSON object")
 
                 if result.get('status') == '1':
                     transactions = result['result']
+                    if not isinstance(transactions, list):
+                        raise ValueError("Unexpected Etherscan answer: no transaction list")
                 elif result.get('message') == 'No transactions found':
                     transactions = []
                 else:
                     logging.error(f"Unexpected Etherscan answer for {address} on {network}: {json.dumps(result)[:500]}")
-                    raise Exception(f"Etherscan API error: {result.get('message', 'Unknown error')}")
-            except Exception:
+                    reason = result.get('result')
+                    if not isinstance(reason, str) or not reason.strip():
+                        reason = str(result.get('message') or 'Unknown error')
+                    raise RuntimeError(f"Etherscan API error: {reason}")
+            except Exception as error:
                 # A failure mid-sequence (a rate limit on the class'
                 # shared free key is routine) keeps the pages already
                 # fetched: they are stored, the resume point moves, and
@@ -289,7 +354,7 @@ class EtherscanExplorer:
                 # replaying the same doomed fetch
                 if all_transactions:
                     logging.warning(f"Etherscan page {page} for {address} on {network} failed — keeping the {len(all_transactions)} rows fetched so far")
-                    break
+                    return all_transactions, error
                 raise
 
             all_transactions.extend(transactions)
@@ -300,7 +365,7 @@ class EtherscanExplorer:
 
             page += 1
 
-        return all_transactions
+        return all_transactions, None
 
 
 
@@ -414,7 +479,7 @@ class EtherscanExplorer:
     # every tab. True when the caller should refresh now.
     #
     # Used by:
-    #   - get_stored_transactions (below)
+    #   - _graph_answer (below)
     ############################################################
 
     def _claim_refresh_slot(self, fetch_key):
@@ -449,8 +514,13 @@ class EtherscanExplorer:
     # scraped again — one class wallet donating to a community
     # faucet must not drag 2000 strangers into the graph.
     #
+    # A refresh that fails outright raises; one whose paging was
+    # cut short keeps the pages that did arrive and returns the
+    # failure that ended it, None when the history arrived
+    # whole — either way the caller remembers the outcome.
+    #
     # Used by:
-    #   - get_stored_transactions (below)
+    #   - _graph_answer (below)
     ############################################################
 
     def _refresh_address(self, network, address):
@@ -464,7 +534,7 @@ class EtherscanExplorer:
         last_block = row[0] if row and row[0] else 0
         start_block = max(0, last_block - REORG_OVERLAP_BLOCKS)
 
-        transactions = self.fetch_all_transactions_from_etherscan(address, network, start_block)
+        transactions, cut_short = self.fetch_all_transactions_from_etherscan(address, network, start_block)
 
         if address.lower() not in self.TRUSTED_ADDRESSES:
             counterparties = set()
@@ -497,9 +567,44 @@ class EtherscanExplorer:
                         VALUES (?, '', 0, 1)
                         ON CONFLICT(address) DO UPDATE SET is_hub = 1
                     ''', [address.lower()])
-                return
+                return cut_short
 
         self.store_transactions(transactions, network)
+        return cut_short
+
+
+
+
+
+
+    ############################################################
+    # _remember_refresh
+    ############################################################
+    #
+    # Records how an address' refresh ended: the failure
+    # sentence of the failure that ended it — the whole fetch's
+    # or the one that cut its paging short — told in the name of
+    # the server the network's explorer API is (Etherscan's or
+    # another block explorer's), or nothing once a refresh
+    # succeeded. The API key the failure's text may carry is
+    # scrubbed by failure_sentence.
+    #
+    # Used by:
+    #   - _graph_answer (below)
+    ############################################################
+
+    def _remember_refresh(self, network, fetch_key, failure):
+        sentence = None
+        if failure is not None:
+            api_url = self.NETWORK_CONFIGS[network]['explorer']['etherscan_api_url']
+            sentence = failure_sentence('Nepavyko atnaujinti transakcijų sąrašo', failure,
+                                        _api_server(api_url), ETHERSCAN_TIMEOUT_S)
+
+        with self._refresh_lock:
+            if sentence:
+                self.refresh_errors[fetch_key] = sentence
+            else:
+                self.refresh_errors.pop(fetch_key, None)
 
 
 
@@ -508,6 +613,34 @@ class EtherscanExplorer:
 
     ############################################################
     # get_stored_transactions
+    ############################################################
+    #
+    # The transaction graph's data (_graph_answer below) — or,
+    # when reading the cache fails, the sentence saying why
+    # instead of a bare 500: a locked, unreadable or missing
+    # database is told in SQLite's own words. A failed
+    # Etherscan refresh is no such failure; the cache is served
+    # with refresh_error instead.
+    #
+    # Used by:
+    #   - evm_routes.py —
+    #     GET /api/evm/<network>/get-stored-transactions
+    ############################################################
+
+    def get_stored_transactions(self, network, address, from_ts, to_ts):
+        try:
+            return self._graph_answer(network, address, from_ts, to_ts)
+        except Exception as error:
+            logging.exception(f"Serving the graph of {address} on {network} failed")
+            return {"error": failure_sentence('Nepavyko perskaityti išsaugotų transakcijų', error, 'database')}, 500
+
+
+
+
+
+
+    ############################################################
+    # _graph_answer
     ############################################################
     #
     # Data for the frontend's transaction graph: refresh the
@@ -521,12 +654,17 @@ class EtherscanExplorer:
     # student's BROWSER, so "today" means their local midnight,
     # not the server's.
     #
+    # The answer also carries refresh_error: the failure
+    # sentence of this address' latest refresh while that
+    # refresh failed, null otherwise — whether or not this
+    # request refreshed. A contract or public hub, never
+    # scraped, has none to report.
+    #
     # Used by:
-    #   - evm_routes.py —
-    #     GET /api/evm/<network>/get-stored-transactions
+    #   - get_stored_transactions (above)
     ############################################################
 
-    def get_stored_transactions(self, network, address, from_ts, to_ts):
+    def _graph_answer(self, network, address, from_ts, to_ts):
         if not address:
             return {"error": "Trūksta adreso"}, 400
         if not ADDRESS_PATTERN.match(address):
@@ -548,7 +686,9 @@ class EtherscanExplorer:
         # all: a global contract's history (a token like LINK)
         # or a community faucet's is the whole testnet's
         # traffic, not this graph's neighborhood — its cached
-        # faucet-related rows are served, nothing more.
+        # faucet-related rows are served, nothing more. However
+        # the refresh ends, its outcome is remembered for the
+        # answers that follow (_remember_refresh).
         # ===========================================================
         fetch_key = (network, address.lower())
         is_live_window = to_ts > int(time.time()) - 3600
@@ -572,12 +712,14 @@ class EtherscanExplorer:
         should_refresh = (is_live_window or needs_first_fetch) and not never_scrape
         if should_refresh and self._claim_refresh_slot(fetch_key):
             try:
-                self._refresh_address(network, address)
-            except Exception:
+                failure = self._refresh_address(network, address)
+            except Exception as error:
                 # Etherscan being down must not blank the graph — log
                 # it and serve whatever SQLite already has; the slot
                 # stays spent, the next interval retries.
                 logging.exception(f"Etherscan refresh failed for {address} on {network}; serving cached data")
+                failure = error
+            self._remember_refresh(network, fetch_key, failure)
 
 
         # STEP 2: aggregate the window. GetLatestUpdate: when each
@@ -671,7 +813,12 @@ class EtherscanExplorer:
             result = sqlQueryResult.fetchone()
             transactions_json = result[0] if result else '[]'
 
-            return {"transactions": json.loads(transactions_json)}, 200
+        # Read under the lock a refresh in another request writes
+        # its outcome under
+        with self._refresh_lock:
+            refresh_error = None if never_scrape else self.refresh_errors.get(fetch_key)
+
+        return {"transactions": json.loads(transactions_json), "refresh_error": refresh_error}, 200
 
 
 
@@ -694,7 +841,8 @@ class EtherscanExplorer:
     # rangeOfDay(), which turns a picked day back into a window
     # the same way. A bare numeric offset (seconds from UTC,
     # clamped to ±14 h) is still accepted as the old form; an
-    # unknown zone falls back to UTC.
+    # unknown zone falls back to UTC. A database that cannot be
+    # read is answered with the sentence saying why.
     #
     # Used by:
     #   - evm_routes.py —
@@ -710,13 +858,17 @@ class EtherscanExplorer:
             return {"error": "Neteisingas adresas"}, 400
 
         zone = _zone_of(tz)
-        with get_db_connection() as conn:
-            rows = conn.execute('''
-                SELECT timestamp
-                FROM Graph_Transactions
-                WHERE network = ?
-                  AND (from_address = ? OR to_address = ?)
-            ''', [network.lower(), address.lower(), address.lower()]).fetchall()
+        try:
+            with get_db_connection() as conn:
+                rows = conn.execute('''
+                    SELECT timestamp
+                    FROM Graph_Transactions
+                    WHERE network = ?
+                      AND (from_address = ? OR to_address = ?)
+                ''', [network.lower(), address.lower(), address.lower()]).fetchall()
+        except Exception as error:
+            logging.exception(f"Reading the transaction days of {address} on {network} failed")
+            return {"error": failure_sentence('Nepavyko gauti dienų sąrašo', error, 'database')}, 500
 
         counts = Counter(
             datetime.fromtimestamp(row[0], timezone.utc).astimezone(zone).strftime('%Y-%m-%d')
@@ -739,7 +891,9 @@ class EtherscanExplorer:
     # do nothing — the label then survives until the address
     # shows up in a transaction. The one user-written INSERT in
     # the app: the address must be a real one, and the label is
-    # cut to MAX_NAME_LENGTH (the dialog already stops there).
+    # cut to MAX_NAME_LENGTH (the dialog already stops there). A
+    # write the database refuses is answered with the sentence
+    # saying why, which the dialog shows under the field.
     #
     # Used by:
     #   - evm_routes.py — GET /api/evm/set-address-name
@@ -752,11 +906,15 @@ class EtherscanExplorer:
             return {"error": "Neteisingas adresas"}, 400
 
         label = (name or '').strip()[:MAX_NAME_LENGTH]
-        with get_db_connection() as conn:
-            conn.execute('''
-                INSERT INTO Graph_Addresses (address, name, is_contract)
-                VALUES (?, ?, 0)
-                ON CONFLICT(address) DO UPDATE SET name = excluded.name
-            ''', [address.lower(), label])
+        try:
+            with get_db_connection() as conn:
+                conn.execute('''
+                    INSERT INTO Graph_Addresses (address, name, is_contract)
+                    VALUES (?, ?, 0)
+                    ON CONFLICT(address) DO UPDATE SET name = excluded.name
+                ''', [address.lower(), label])
+        except Exception as error:
+            logging.exception(f"Saving the name of {address} failed")
+            return {"error": failure_sentence('Nepavyko išsaugoti pavadinimo', error, 'database')}, 500
 
         return {"status": "OK"}, 200
