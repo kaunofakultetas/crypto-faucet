@@ -62,7 +62,7 @@ UTXO_NETWORK_CONFIGS = {
         'faucet': {
             'coin': 'knfcoin',
             'network': 'mainnet',
-            'chunk_size': 1000,
+            'chunk_size': 50000,
             'electrum_server': 'ip-158-129-172-247--49002:443',
         },
         'explorer': {
@@ -76,7 +76,7 @@ UTXO_NETWORK_CONFIGS = {
         'faucet': {
             'coin': 'litecoin',
             'network': 'testnet',
-            'chunk_size': 1000,
+            'chunk_size': 100,
             'electrum_server': 'ip-158-129-172-247--50002:443',
         },
         'explorer': {
