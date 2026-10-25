@@ -108,8 +108,9 @@ def faucet_balance(network):
 # GET /api/utxo/<network>/request-btc
 #
 # The actual payout: sends one chunk of the network's coin to
-# ?address= — validation, the cooldown and the broadcast live
-# in UTXOFaucet.request_crypto.
+# ?address= — a bare address or a wallet invoice pasted
+# whole. Cutting the address out, validation, the cooldown
+# and the broadcast live in UTXOFaucet.request_crypto.
 #
 # Used by:
 #   - Faucet_UTXO/Page.jsx — handleRequest

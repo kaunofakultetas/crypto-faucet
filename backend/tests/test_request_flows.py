@@ -11,6 +11,9 @@
 #    - the cooldown is KEPT on success and RELEASED on every
 #      failure after the claim
 #    - the balance cache is dropped after a payout
+#    - a wallet invoice pasted whole pays the address inside
+#      it, under that address' cooldown, the invoice itself
+#      never checked
 #    - every refusal maps to the right HTTP status
 #      (400 / 403 / 429 / 500 / 503)
 #    - a failure on the chain's side names its cause in the
@@ -38,6 +41,7 @@ from embit.transaction import Transaction
 import requests
 from web3.exceptions import ContractCustomError, ContractLogicError, Web3RPCError
 
+from app.utxo_faucet.utxo_faucet import _invoice_address
 from tests import helpers
 
 
@@ -380,6 +384,111 @@ class UtxoRequestFlowTests(unittest.TestCase):
         # A claim on btc4 must not lock the same address out of knf
         self.faucet.request_crypto('btc4', self.recipient)
         self.assertEqual(self.faucet.cooldowns.claim(('knf', self.recipient.lower())), 0)
+
+
+
+
+
+
+
+
+############################################################
+# PastedInvoiceTests
+############################################################
+#
+# request_crypto given a wallet invoice instead of a bare
+# address — what students copy out of Electrum and the KNF
+# wallet. Only the address inside it counts: it is validated,
+# keys the cooldown and gets paid, while the invoice around it
+# is never checked, so a wallet that changes how it writes
+# invoices never breaks the faucet.
+############################################################
+
+class PastedInvoiceTests(unittest.TestCase):
+
+    # The invoices exactly as students pasted them — the KNF
+    # wallet writes its own under Litecoin's name
+    LTC_ADDRESS = 'tltc1qnjzjrwg5mhraxqyljwjdmr3s4g8lxt237xlq7q'
+    KNF_ADDRESS = 'knf1qqlyk4qjhny45mpn5hsdga48z3e3mf9syurgy4g'
+    LTC_INVOICE = f'litecoin:{LTC_ADDRESS}?time=1792950812&exp=86400'
+    KNF_INVOICE = f'litecoin:{KNF_ADDRESS}?time=1792950785&exp=86400'
+
+    # Enough for ltc4's and knf's 1000-coin chunk plus its fee
+    UTXOS = [{'tx_hash': 'bb' * 32, 'tx_pos': 0, 'value': 200_000_000_000}]
+
+    def setUp(self):
+        self.faucet = helpers.make_utxo_faucet()
+
+    def pay(self, network, text):
+        # One claim against a funded fake Electrum server; the
+        # captured raw transaction comes back with the answer
+        captured = helpers.fake_electrum(self.faucet, network, self.UTXOS)
+        self.faucet._electrum_clients[network].get_balance = \
+            lambda scripthash: {'confirmed': 5000.0, 'unconfirmed': 0.0, 'total': 5000.0}
+        data, status = self.faucet.request_crypto(network, text)
+        return data, status, captured
+
+    def paid_to(self, network, captured, address):
+        # Does the payout output go to this address' script?
+        tx = Transaction.from_string(captured['raw'])
+        return tx.vout[0].script_pubkey.data == self.faucet.network_dialect(network).recipient_script(address).data
+
+    def claimed(self, network, address):
+        return (network, address.lower()) in self.faucet.cooldowns._last_claim
+
+    def test_the_invoices_students_paste_pay_the_address_inside_them(self):
+        for network, invoice, address in (('ltc4', self.LTC_INVOICE, self.LTC_ADDRESS),
+                                          ('knf', self.KNF_INVOICE, self.KNF_ADDRESS)):
+            with self.subTest(network=network):
+                data, status, captured = self.pay(network, invoice)
+
+                self.assertEqual(status, 200, data)
+                self.assertTrue(self.paid_to(network, captured, address))
+                self.assertTrue(self.claimed(network, address))
+
+    def test_a_fresh_invoice_for_an_address_just_paid_is_inside_its_cooldown(self):
+        # A new invoice carries a new time — the cooldown is the
+        # address', so asking again through one changes nothing
+        self.pay('ltc4', self.LTC_INVOICE)
+        data, status, captured = self.pay('ltc4', f'litecoin:{self.LTC_ADDRESS}?time=1792950999&exp=86400')
+
+        self.assertEqual(status, 429)
+        self.assertNotIn('raw', captured)
+
+    def test_the_invoice_around_the_address_is_never_checked(self):
+        # Any coin's name in any case, slashes after it, any
+        # parameters or none, stray whitespace — all paid
+        for text in (f'knfcoin:{self.LTC_ADDRESS}?time=1',
+                     f'LITECOIN:{self.LTC_ADDRESS}?exp=86400',
+                     f'litecoin://{self.LTC_ADDRESS}?amount=abc&&label=x=y',
+                     f'litecoin:{self.LTC_ADDRESS}',
+                     f'  litecoin:{self.LTC_ADDRESS}?time=1  ',
+                     f' {self.LTC_ADDRESS} '):
+            with self.subTest(text=text):
+                self.faucet = helpers.make_utxo_faucet()
+                data, status, captured = self.pay('ltc4', text)
+
+                self.assertEqual(status, 200, data)
+                self.assertTrue(self.paid_to('ltc4', captured, self.LTC_ADDRESS))
+
+    def test_an_invoice_around_a_bad_address_is_400_and_claims_no_slot(self):
+        # The address inside still has to be a real one — validated
+        # before the cooldown, like a bare address
+        for text in (f'litecoin:{self.LTC_ADDRESS[:-1]}p?time=1', 'litecoin:?time=1', 'litecoin:'):
+            with self.subTest(text=text):
+                data, status, captured = self.pay('ltc4', text)
+
+                self.assertEqual(status, 400)
+                self.assertEqual(data['error'], 'Neteisingas adresas')
+                self.assertNotIn('raw', captured)
+                self.assertFalse(self.faucet.cooldowns._last_claim)
+
+    def test_a_bare_address_is_left_as_it_is(self):
+        # No address format the faucet speaks has a colon or a
+        # question mark — only the surrounding whitespace goes
+        for address in (self.LTC_ADDRESS, self.KNF_ADDRESS, helpers.ANCHOR_DOGE_RECIPIENT):
+            with self.subTest(address=address):
+                self.assertEqual(_invoice_address(f'  {address}\n'), address)
 
 
 

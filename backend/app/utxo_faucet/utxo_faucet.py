@@ -126,6 +126,44 @@ def _electrum_scripthash(script) -> str:
 
 
 ############################################################
+# _invoice_address
+############################################################
+#
+# The address inside whatever the student pasted. Wallets
+# like Electrum copy a payment request rather than a bare
+# address — the coin's name and a colon in front, the
+# request's parameters after a question mark — so the text is
+# cut down to what lies between: everything up to the first
+# colon goes (with any slashes right after it), and so does
+# everything from the first question mark on. Nothing about
+# the invoice itself is checked — not the coin's name, not
+# its parameters — on purpose: the KNF wallet still writes
+# its invoices under Litecoin's name, and when a wallet
+# changes how it writes them the faucet must keep paying. No
+# address format the faucet speaks contains either
+# character, so a bare address passes through unchanged, and
+# the address that comes out is validated as any other.
+#
+# Used by:
+#   - UTXOFaucet.request_crypto — before the address checks,
+#     so the cooldown is keyed by the address, not by the
+#     invoice it came in
+############################################################
+
+def _invoice_address(text: str) -> str:
+    address = text.strip()
+    if ':' in address:
+        address = address.split(':', 1)[1].lstrip('/')
+    return address.split('?', 1)[0].strip()
+
+
+
+
+
+
+
+
+############################################################
 # InsufficientFunds
 ############################################################
 #
@@ -958,13 +996,15 @@ class UTXOFaucet:
     # request_crypto
     ############################################################
     #
-    # The actual payout: validate the address, enforce the
-    # cooldown, check the faucet balance and broadcast one
-    # chunk to the student. Returns (payload, http_status);
-    # every refusal is one Lithuanian sentence, and a failure
-    # on the chain's side names its cause — the Electrum
-    # server's or the node's (failure_sentence) — while the
-    # full traceback goes to the server log.
+    # The actual payout: take the address out of what the
+    # student pasted (a bare address or a wallet invoice),
+    # validate it, enforce the cooldown, check the faucet
+    # balance and broadcast one chunk to the student. Returns
+    # (payload, http_status); every refusal is one Lithuanian
+    # sentence, and a failure on the chain's side names its
+    # cause — the Electrum server's or the node's
+    # (failure_sentence) — while the full traceback goes to the
+    # server log.
     #
     # Used by:
     #   - utxo_routes.py — GET /api/utxo/<network>/request-btc
@@ -980,14 +1020,15 @@ class UTXOFaucet:
             ctx = self._setup_wallet_for_network(network_key)
 
 
-            # STEP 1: input validation — address present, decodes
+            # STEP 1: input validation — address present, cut out
+            # of a pasted wallet invoice (_invoice_address), decodes
             # for this network, and not the faucet paying itself in
             # ANY encoding of its own key (see _pays_own_key).
-            # =====================================================
+            # ======================================================
             if not to_address:
                 return {"error": "Trūksta reikalingų parametrų"}, 400
 
-            to_address = to_address.strip()
+            to_address = _invoice_address(to_address)
 
             if not self._validate_address(ctx, to_address):
                 return {"error": "Neteisingas adresas"}, 400
