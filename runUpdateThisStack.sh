@@ -4,9 +4,7 @@
 
 # STEP 1: Create necessary files and directories
 # ==============================================
-mkdir -p ./_DATA/backend
-mkdir -p ./_DATA/dapps
-mkdir -p ./_DATA/etherpad
+mkdir -p ./_DATA/{backend,dapps,etherpad}
 touch .env
 sudo chown -R 1000:1000 ./_DATA ./_CONFIG
 
