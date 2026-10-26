@@ -254,7 +254,7 @@ services:
   # ------------------------------------------------------------
   faucet-dbgate:
     container_name: faucet-dbgate
-    image: dbgate/dbgate:7.2.0
+    image: dbgate/dbgate:7.3.2
     user: root
     read_only: true
     environment:
