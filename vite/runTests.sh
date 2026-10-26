@@ -18,5 +18,5 @@ set -e
 cd "$(dirname "$0")"
 
 sudo docker build --target builder -t faucet-vite-check .
-sudo docker run --rm --name faucet-vite-tests --memory=6g --memory-swap=6g --cpus=6 \
+sudo docker run --rm --name faucet-vite-tests --network none --memory=6g --memory-swap=6g --cpus=6 \
   faucet-vite-check npx vitest run --maxWorkers=4 "$@"
