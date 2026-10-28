@@ -164,6 +164,85 @@ def _invoice_address(text: str) -> str:
 
 
 ############################################################
+# _distinct_outpoints
+############################################################
+#
+# The server's UTXO list with every outpoint in it once.
+# ElectrumX builds the list from two sources — its block
+# database and its view of the mempool — and appends the one
+# to the other without checking for overlap. The mempool view
+# is refreshed on a timer, every five seconds, and a new block
+# does not wake it, so for those seconds after a block the
+# transactions the block confirmed are in both and their
+# outputs are listed twice. Counted twice they inflate the
+# faucet's balance; spent twice in one payout they make a
+# transaction the node refuses. Both copies name the same
+# coin, and the first one listed — the database's — is kept.
+#
+# Used by:
+#   - _read_balance (below) — the balance's total
+#   - UTXOFaucet._spendable_utxos — coin selection
+############################################################
+
+def _distinct_outpoints(utxos: list) -> list:
+    seen = set()
+    distinct = []
+    for utxo in utxos:
+        outpoint = (utxo['tx_hash'], utxo['tx_pos'])
+        if outpoint not in seen:
+            seen.add(outpoint)
+            distinct.append(utxo)
+    return distinct
+
+
+
+
+
+
+
+
+############################################################
+# _read_balance
+############################################################
+#
+# The faucet's balance on one chain, in whole coins: the
+# confirmed part, the unconfirmed part and their total. The
+# server's own balance answer cannot give the total: it adds
+# the mempool view's net change to the confirmed sum, and in
+# the seconds after a block (see _distinct_outpoints) that
+# view still counts what the block just confirmed — coins sent
+# back to the faucet showed up twice until the view caught
+# up, and the change of its own payout went missing. So the
+# confirmed part comes from that answer (the block database's
+# sum, right at every moment, and what the claim gate reads),
+# the total from the UTXO list with every coin in it once
+# (right at every moment too), and the unconfirmed part is
+# the difference. A confirmation never changes the total — it
+# only moves coins from one part into the other.
+#
+# Used by:
+#   - UTXOFaucet._warm_up_networks — the balance cache's first
+#     entry
+#   - UTXOFaucet._faucet_balance — every later read
+############################################################
+
+def _read_balance(client: ElectrumClient, scripthash: str) -> dict:
+    confirmed = client.get_balance(scripthash)['confirmed']
+    total = sum(utxo['value'] for utxo in _distinct_outpoints(client.list_unspent(scripthash))) / 1e8
+    return {
+        "confirmed": confirmed,
+        "unconfirmed": round(total - confirmed, 8),
+        "total": total,
+    }
+
+
+
+
+
+
+
+
+############################################################
 # InsufficientFunds
 ############################################################
 #
@@ -188,6 +267,9 @@ class InsufficientFunds(ValueError):
     ############################################################
     # __init__
     ############################################################
+    #
+    # Keeps both amounts for the refusal sentence, and puts
+    # them into the message the server log shows.
     #
     # Used by:
     #   - UTXOFaucet._create_and_broadcast_transaction (below)
@@ -428,8 +510,9 @@ class UTXOFaucet:
     #
     # The startup warmup, one thread per network so the
     # slowest server bounds the wall time: open every Electrum
-    # connection and fetch the faucet balance (which also
-    # primes the balance cache — the first page load answers
+    # connection and read the faucet balance (_read_balance,
+    # the same reading as every later one — which also primes
+    # the balance cache, so the first page load answers
     # instantly). Success and failure both go to the console.
     # A failed network deliberately does NOT raise: the rest
     # of the backend (EVM faucets included) keeps serving, and
@@ -447,7 +530,7 @@ class UTXOFaucet:
 
                 scripthash = self._faucet_scripthash_for(network_key)
                 if scripthash:
-                    balance = client.get_balance(scripthash)
+                    balance = _read_balance(client, scripthash)
                     self._balance_cache[network_key] = (int(time.time()), balance)
                     print(f"[UTXO] {network_key} ready — faucet balance {balance['confirmed']} confirmed")
                 else:
@@ -635,13 +718,15 @@ class UTXOFaucet:
     # _faucet_balance
     ############################################################
     #
-    # The faucet's balance on one chain, cached for
-    # BALANCE_CACHE_TTL seconds — the frontend polls it every
-    # few seconds per open browser tab, and a classroom of
-    # open tabs would otherwise turn every poll into an
-    # Electrum round trip. request_crypto drops the entry
-    # after a payout, so the next poll shows the new number
-    # immediately.
+    # The faucet's balance on one chain (_read_balance — the
+    # confirmed part the claim gate reads, and a total that
+    # counts every coin once, also in the seconds after a
+    # block), cached for BALANCE_CACHE_TTL seconds — the
+    # frontend polls it every few seconds per open browser
+    # tab, and a classroom of open tabs would otherwise turn
+    # every poll into Electrum round trips. request_crypto
+    # drops the entry after a payout, so the next poll shows
+    # the new number immediately.
     #
     # Used by:
     #   - get_faucet_balance / request_crypto (below)
@@ -655,7 +740,7 @@ class UTXOFaucet:
             return cached[1]
 
         try:
-            balance_info = ctx.electrum.get_balance(ctx.scripthash)
+            balance_info = _read_balance(ctx.electrum, ctx.scripthash)
         except Exception as error:
             # A FAILED read is remembered for the same TTL: during an
             # outage every poll from every tab would otherwise repeat
@@ -821,12 +906,15 @@ class UTXOFaucet:
     # _spendable_utxos
     ############################################################
     #
-    # The server's UTXO list as THIS process knows it: outpoints
-    # it broadcast within SPENT_MEMORY_S are removed (the server
-    # lists them until its next mempool refresh — re-selecting
-    # one builds a conflicting transaction the node rejects, and
-    # the second of two students clicking together fails for no
-    # reason), and the change those payouts created is added
+    # The server's UTXO list as THIS process knows it: every
+    # outpoint once (_distinct_outpoints — right after a block
+    # the server lists what the block confirmed twice, and a
+    # payout spending one coin twice is refused), outpoints it
+    # broadcast within SPENT_MEMORY_S removed (the server lists
+    # them until its next mempool refresh — re-selecting one
+    # builds a conflicting transaction the node rejects, and
+    # the second of two students clicking together fails for
+    # no reason), and the change those payouts created added
     # unless the server already lists it. Entries expire after
     # SPENT_MEMORY_S; by then the server has caught up.
     #
@@ -842,7 +930,8 @@ class UTXOFaucet:
         pending = [entry for entry in self._pending_change.get(ctx.network_key, []) if now - entry[0] < SPENT_MEMORY_S]
         self._pending_change[ctx.network_key] = pending
 
-        listed = [u for u in ctx.electrum.list_unspent(ctx.scripthash) if (u['tx_hash'], u['tx_pos']) not in spent]
+        listed = [u for u in _distinct_outpoints(ctx.electrum.list_unspent(ctx.scripthash))
+                  if (u['tx_hash'], u['tx_pos']) not in spent]
         known = {(u['tx_hash'], u['tx_pos']) for u in listed}
         for _, change in pending:
             outpoint = (change['tx_hash'], change['tx_pos'])

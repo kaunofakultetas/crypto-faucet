@@ -322,9 +322,13 @@ class ElectrumClient:
     #
     # A scripthash's balance in whole coins (Electrum answers
     # in satoshis), split into confirmed / unconfirmed / total.
+    # The unconfirmed part is ElectrumX's mempool view, which
+    # trails a new block by up to five seconds and meanwhile
+    # still counts what the block confirmed — the faucet takes
+    # only the confirmed part from here.
     #
     # Used by:
-    #   - utxo_faucet.py — UTXOFaucet._faucet_balance
+    #   - utxo_faucet.py — _read_balance
     ############################################################
 
     def get_balance(self, scripthash: str) -> dict:
@@ -347,9 +351,15 @@ class ElectrumClient:
     # list_unspent
     ############################################################
     #
+    # A scripthash's unspent outputs as the server lists them,
+    # values in satoshis — confirmed and unconfirmed alike, but
+    # for a few seconds after a block the ones it just
+    # confirmed twice over (see utxo_faucet.py's
+    # _distinct_outpoints).
+    #
     # Used by:
-    #   - utxo_faucet.py —
-    #     UTXOFaucet._create_and_broadcast_transaction
+    #   - utxo_faucet.py — _read_balance and
+    #     UTXOFaucet._spendable_utxos
     ############################################################
 
     def list_unspent(self, scripthash: str) -> list:

@@ -14,6 +14,9 @@
 #    - a wallet invoice pasted whole pays the address inside
 #      it, under that address' cooldown, the invoice itself
 #      never checked
+#    - the balance and the coin selection count every coin
+#      once, also in the seconds after a block, when ElectrumX
+#      lists what the block confirmed twice
 #    - every refusal maps to the right HTTP status
 #      (400 / 403 / 429 / 500 / 503)
 #    - a failure on the chain's side names its cause in the
@@ -27,8 +30,10 @@
 ############################################################
 
 
+import io
 import copy
 import socket
+import contextlib
 import logging
 import unittest
 
@@ -41,7 +46,7 @@ from embit.transaction import Transaction
 import requests
 from web3.exceptions import ContractCustomError, ContractLogicError, Web3RPCError
 
-from app.utxo_faucet.utxo_faucet import _invoice_address
+from app.utxo_faucet.utxo_faucet import _distinct_outpoints, _invoice_address
 from tests import helpers
 
 
@@ -489,6 +494,116 @@ class PastedInvoiceTests(unittest.TestCase):
         for address in (self.LTC_ADDRESS, self.KNF_ADDRESS, helpers.ANCHOR_DOGE_RECIPIENT):
             with self.subTest(address=address):
                 self.assertEqual(_invoice_address(f'  {address}\n'), address)
+
+
+
+
+
+
+
+
+############################################################
+# BlockWindowTests
+############################################################
+#
+# The faucet's balance and coin selection on btc4 across a
+# block, answered the way ElectrumX 1.18 answers: for up to
+# five seconds after a block its mempool view still holds the
+# transactions the block confirmed, so its balance answer
+# counts them twice (confirmed AND unconfirmed) and its UTXO
+# list names their outputs twice. The page must read the same
+# total before, during and after that window, and a claim in
+# it must spend each coin once.
+############################################################
+
+class BlockWindowTests(unittest.TestCase):
+
+    # 0.25 sent back to the faucet, which also holds 1.0
+    HELD = {'tx_hash': 'aa' * 32, 'tx_pos': 0, 'height': 100, 'value': 100_000_000}
+    RETURNED = {'tx_hash': 'bb' * 32, 'tx_pos': 1, 'value': 25_000_000}
+
+    # The faucet's own payout confirming: the 0.05 coin it spent
+    # and the 0.0398 change it created
+    CHANGE = {'tx_hash': 'cc' * 32, 'tx_pos': 1, 'value': 3_980_000}
+
+    def setUp(self):
+        self.faucet = helpers.make_utxo_faucet()
+        self.captured = helpers.fake_electrum(self.faucet, 'btc4', [])
+        self.client = self.faucet._electrum_clients['btc4']
+
+        prv = embit_ec.PrivateKey(bytes.fromhex(helpers.RECIPIENT_PRIVATE_KEY))
+        self.recipient = embit_script.p2wpkh(prv.get_public_key()).address({'bech32': 'tb'})
+
+    def answer(self, client, confirmed, unconfirmed, listed):
+        # The server's two answers at one moment — the balance in
+        # whole coins, the list in satoshis
+        client.get_balance = lambda scripthash: {'confirmed': confirmed, 'unconfirmed': unconfirmed,
+                                                 'total': confirmed + unconfirmed}
+        client.list_unspent = lambda scripthash: [dict(u) for u in listed]
+
+    def balance(self):
+        # What the page polls, past the balance cache
+        self.faucet._balance_cache.clear()
+        data, status = self.faucet.get_faucet_balance('btc4')
+        self.assertEqual(status, 200, data)
+        return data
+
+    def test_coins_sent_back_read_the_same_total_before_during_and_after_the_block(self):
+        returned_unconfirmed = dict(self.RETURNED, height=0)
+        returned_confirmed = dict(self.RETURNED, height=101)
+
+        self.answer(self.client, 1.0, 0.25, [self.HELD, returned_unconfirmed])
+        before = self.balance()
+        # The block is in the database, the mempool view not yet
+        # refreshed: 0.25 in both parts, its coin listed twice
+        self.answer(self.client, 1.25, 0.25, [self.HELD, returned_confirmed, returned_unconfirmed])
+        during = self.balance()
+        self.answer(self.client, 1.25, 0.0, [self.HELD, returned_confirmed])
+        after = self.balance()
+
+        self.assertEqual([before['balance'], during['balance'], after['balance']], [1.25, 1.25, 1.25])
+        self.assertEqual((during['balance_confirmed'], during['balance_unconfirmed']), (1.25, 0.0))
+
+    def test_the_faucets_own_payout_confirming_does_not_dip_the_balance(self):
+        # The stale view still nets the spent 0.05 against the change:
+        # the server's own sum would read 0.0296 for those seconds
+        self.answer(self.client, 0.0398, -0.0102, [dict(self.CHANGE, height=101), dict(self.CHANGE, height=0)])
+
+        during = self.balance()
+
+        self.assertEqual(during['balance'], 0.0398)
+        self.assertEqual(during['balance_unconfirmed'], 0.0)
+
+    def test_a_claim_in_the_window_spends_a_coin_listed_twice_only_once(self):
+        # A payout naming one coin twice is refused by the node
+        coin = {'tx_hash': 'dd' * 32, 'tx_pos': 0, 'value': 5_000_000}
+        self.answer(self.client, 0.05, 0.05, [dict(coin, height=101), dict(coin, height=0)])
+
+        data, status = self.faucet.request_crypto('btc4', self.recipient)
+
+        self.assertEqual(status, 200, data)
+        inputs = [(vin.txid.hex(), vin.vout) for vin in Transaction.from_string(self.captured['raw']).vin]
+        self.assertEqual(inputs, [(coin['tx_hash'], 0)])
+
+    def test_the_warm_up_caches_the_same_reading(self):
+        # The first page load is answered from what the warm-up read
+        for client in self.faucet._electrum_clients.values():
+            client.connect = lambda: None
+            self.answer(client, 1.25, 0.25, [self.HELD, dict(self.RETURNED, height=101), dict(self.RETURNED, height=0)])
+
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.faucet._warm_up_networks()
+
+        self.assertEqual(self.faucet._balance_cache['btc4'][1]['total'], 1.25)
+
+    def test_each_coin_is_kept_once_the_first_copy_in_the_servers_order(self):
+        listed = [dict(self.HELD), dict(self.RETURNED, height=101), dict(self.RETURNED, height=0),
+                  dict(self.RETURNED, tx_pos=2, height=0)]
+
+        distinct = _distinct_outpoints(listed)
+
+        self.assertEqual([(u['tx_hash'][:2], u['tx_pos'], u['height']) for u in distinct],
+                         [('aa', 0, 100), ('bb', 1, 101), ('bb', 2, 0)])
 
 
 

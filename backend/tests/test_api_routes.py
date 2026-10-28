@@ -470,12 +470,19 @@ class UtxoRouteTests(RouteTestCase):
 
     def test_the_balance_answer_carries_what_the_page_shows(self):
         # The balance counts the unconfirmed coins too, so a payout's
-        # change shows up at once
+        # change shows up at once: one confirmed coin of 1.0 and one
+        # unconfirmed of 0.25
+        self.electrum.list_unspent = lambda scripthash: [
+            {'tx_hash': 'aa' * 32, 'tx_pos': 0, 'height': 100, 'value': 100_000_000},
+            {'tx_hash': 'bb' * 32, 'tx_pos': 1, 'height': 0, 'value': 25_000_000},
+        ]
         status, body = self.get('/api/utxo/btc4/faucet-balance')
 
         self.assertEqual(status, 200)
         self.assertEqual(body['address'], self.faucet._setup_wallet_for_network('btc4').address)
         self.assertEqual(body['balance'], 1.25)
+        self.assertEqual(body['balance_confirmed'], 1.0)
+        self.assertEqual(body['balance_unconfirmed'], 0.25)
         self.assertEqual(body['chunk_size'], 0.01)
 
     def test_the_next_poll_is_answered_from_the_cache(self):

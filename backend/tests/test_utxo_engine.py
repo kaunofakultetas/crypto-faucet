@@ -358,7 +358,10 @@ class UtxoConsolidationTests(unittest.TestCase):
         return Transaction.from_string(captured['raw'])
 
     def dust(self, count):
-        return [{'tx_hash': f'{i:02x}' * 32, 'tx_pos': 0, 'value': 500} for i in range(1, count + 1)]
+        # Outpoints of their own — never 'aa' * 32, the big output's,
+        # which a two-digit pattern reaches at 170: the faucet counts
+        # one outpoint once, as the server means it
+        return [{'tx_hash': f'{i:04x}' * 16, 'tx_pos': 0, 'value': 500} for i in range(1, count + 1)]
 
     def students(self, count):
         return [p2wpkh_address(f'{i:02x}' * 32) for i in range(1, count + 1)]
