@@ -2,7 +2,9 @@
 
 A comprehensive multi-blockchain faucet system developed for Vilnius University. This platform provides free testnet tokens for various blockchain networks, educational tools, and DApp hosting capabilities.
 
-<img width="1234" height="960" alt="Screenshot 2025-08-14 at 11 07 20" src="https://github.com/user-attachments/assets/43f2eafa-8437-4757-b764-6b7f4a877c2a" />
+![Crypto Faucet](./_DOCS/img/faucet001.png)
+
+<br/>
 
 ## 🚀 Features
 
@@ -34,12 +36,15 @@ A comprehensive multi-blockchain faucet system developed for Vilnius University.
 - **Transaction Graph Visualizer**: Explore cryptocurrency transaction flows (See [more](_DOCS/txgraph/README.md))
 - **DApp Hosting**: File browser and hosting for decentralized applications
 
+<br/>
 
 ## 📋 Prerequisites
 
 - Docker and Docker Compose
 - Infura API key (for EVM networks)
 - Etherscan API key (optional, for the transaction graph)
+
+<br/>
 
 ## 🚀 Quick Start
 
@@ -75,6 +80,8 @@ Then set the GUI login password in `docker-compose.yml` (service `faucet-endpoin
 - **GUI Password**: the `APP_PASSWORD_1` you set above
 - **Database Browser**: `/dbgate` (login `admin` + your `DBGATE_PASSWORD`)
 
+<br/>
+
 ## 🔧 Configuration
 
 ### Environment Variables
@@ -99,6 +106,8 @@ The UTXO, SVM and Move entries name a *coin* / *chain* plus a network flavour (`
 
 **To add or change a coin**: edit `_CONFIG/coins.py`, then `docker restart faucet-backend` (~3 s).
 **To add or change an icon**: drop the file into `_CONFIG/icons/` — it appears on the next page load, no restart at all.
+
+<br/>
 
 ## 📚 Usage
 
@@ -153,75 +162,4 @@ The UTXO, SVM and Move entries name a *coin* / *chain* plus a network flavour (`
 - Upload static files via `/dapps` file browser
 - Host decentralized applications
 - Manage hosted content
-
-
-
-### Project Structure
-```
-├── _CONFIG/                # Operator-editable config (mounted into the backend)
-│   ├── coins.py            # EVM / ERC-20 / UTXO / SVM / Move network & token definitions
-│   └── icons/              # Crypto asset icons (evm/, erc20/, utxo/, svm/, move/)
-├── _DATA/                  # Runtime data (SQLite, dapps, notes) — created on first run
-├── backend/                # Python Flask API
-│   ├── app/
-│   │   ├── evm_faucet/     # Native EVM faucet + Etherscan explorer
-│   │   ├── erc_faucet/     # ERC-20 token faucet
-│   │   ├── utxo_faucet/    # UTXO faucet (Electrum-based)
-│   │   ├── svm_faucet/     # SVM faucet (Solana JSON-RPC)
-│   │   ├── move_faucet/    # Move faucet (Sui GraphQL)
-│   │   ├── faucet_catalog/ # /api/faucet/catalog — every family in one payload (the navbar)
-│   │   ├── cooldown.py     # The per-address claim cooldown every family shares
-│   │   ├── icons.py        # /api/icons — serves _CONFIG/icons
-│   │   └── database/       # SQLite helpers
-│   ├── tests/              # Regression tests (see backend/tests/README.md)
-│   ├── tools/              # Operator tools (graph cache pruning)
-│   └── main.py             # Entry point — loads & validates _CONFIG/coins.py
-├── vite/                   # React frontend (Vite + MUI + Tailwind)
-├── endpoint/               # Caddy ingress (login gate + routing)
-├── dapps/                  # DApp hosting configs (filebrowser + caddy)
-└── docker-compose.yml      # Container orchestration
-```
-
-### API Endpoints
-
-All endpoints are `GET`; the request endpoints take their inputs as query parameters.
-
-#### UTXO Faucet
-- `GET /api/utxo/networks` - List supported UTXO networks
-- `GET /api/utxo/{network}/request-btc?address=` - Request testnet coins
-- `GET /api/utxo/{network}/faucet-balance` - Check faucet balance
-
-#### EVM Faucet
-- `GET /api/evm/networks` - List supported EVM networks
-- `GET /api/evm/{network}/request?address=&signature=&nonce=` - Request testnet ETH (signature proves address ownership)
-- `GET /api/evm/{network}/faucet-balance` - Check faucet balance
-
-#### SVM Faucet
-- `GET /api/svm/networks` - List supported SVM networks
-- `GET /api/svm/{network}/request?address=&signature=&nonce=` - Request testnet SOL (Ed25519 signature proves address ownership)
-- `GET /api/svm/{network}/faucet-balance` - Check faucet balance
-
-#### Move Faucet
-- `GET /api/move/networks` - List supported Move networks
-- `GET /api/move/{network}/request?address=&signature=&nonce=` - Request testnet SUI (Ed25519 signature proves address ownership)
-- `GET /api/move/{network}/faucet-balance` - Check faucet balance
-
-#### ERC-20 Faucet
-- `GET /api/erc20/tokens` - List supported tokens and their networks
-- `GET /api/erc20/token/{symbol}?address=` - One token across all its chains (balances, gas thresholds)
-- `GET /api/erc20/{network}/{token}/request?address=&signature=&nonce=` - Request tokens on one chain
-
-#### Catalog
-- `GET /api/faucet/catalog` - Every family's network/token list in one payload (what the navbar loads)
-
-#### Transaction Graph (EVM)
-- `GET /api/evm/{network}/get-stored-transactions?address=&from=&to=` - Aggregated flows touching an address inside a `[from, to)` unix window
-- `GET /api/evm/{network}/transaction-days?address=&tz_offset=` - The days an address transacted on, in the browser's timezone
-- `GET /api/evm/set-address-name?address=&name=` - Label an address in the graph
-
-#### Blockchain Simulator
-- `GET /api/get-example-blockchain` - The pre-mined example chain the simulator loads
-
-#### Asset Icons
-- `GET /api/icons/{type}/{key}` - Icon of a network or token (`type`: `evm` / `erc20` / `utxo` / `svm` / `move`)
 
