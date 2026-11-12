@@ -44,7 +44,7 @@ export default function PayoutMessage({ sentence, txid, explorer }) {
 
   return (
     <>
-      {sentence} Transakcija:{' '}
+      {sentence}<br/><br/>Transakcija:<br/>{' '}
       {href ? (
         <a href={href} target="_blank" rel="noopener noreferrer" className="break-all underline">
           {txid}
