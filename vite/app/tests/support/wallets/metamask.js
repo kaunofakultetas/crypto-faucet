@@ -17,14 +17,26 @@
 //      site is connected; eth_requestAccounts is the popup —
 //      approved by default (accountsChanged fires), declined
 //      (4001), or left open (hold / hang — a second request
-//      meanwhile is MetaMask's -32002 "already pending")
+//      meanwhile is MetaMask's -32002 "already pending") —
+//      and once the site is connected it answers at once,
+//      with no popup, like the extension
+//    - accounts PER NETWORK, as MetaMask keeps them since
+//      13.55: a chain the SITE adds while connected is
+//      permitted without the accounts, and personal_sign on it
+//      is refused (4100) with no popup. A switch to a chain
+//      the wallet already knows grants them; so does a fresh
+//      connect, and so does wallet_requestPermissions — the
+//      connect popup once more, approved, declined or held
+//      like the first
 //    - chains: eth_chainId in hex; wallet_switchEthereumChain
 //      to a chain the wallet does not know is 4902 (optionally
 //      wrapped the way newer builds do);
 //      wallet_addEthereumChain makes it known WITHOUT switching,
 //      like current builds
 //    - personal_sign decodes the hex message (UTF-8) into
-//      `signed` and answers SIGNATURE; eth_getBalance answers
+//      `signed` and answers SIGNATURE — for an account the
+//      site may use on the wallet's current chain, otherwise
+//      4100; eth_getBalance answers
 //      the current chain's balance in hex wei;
 //      wallet_watchAsset records the token in `watched`
 //    - any other method is -32601, so a page calling something
@@ -69,10 +81,14 @@ export const SIGNATURE = `0x${'5a'.repeat(65)}`;
 // What MetaMask says when the student presses "Cancel"
 export const USER_REJECTED = 'User rejected the request.';
 
+// What MetaMask says (error 4100) when the account may not be
+// used by the site on the wallet's current chain
+export const NOT_AUTHORIZED = 'The requested account and/or method has not been authorized by the user.';
+
 export const hexChain = (id) => `0x${Number(id).toString(16)}`;
 
 // The methods whose popup MetaMask refuses to open twice
-const PROMPT_TYPES = { eth_requestAccounts: 'wallet_requestPermissions' };
+const PROMPT_TYPES = { eth_requestAccounts: 'wallet_requestPermissions', wallet_requestPermissions: 'wallet_requestPermissions' };
 
 const WALLET_ICON = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg"/%3E';
 
@@ -162,6 +178,16 @@ function decodeMessage(data) {
 // newer builds do; switchesOnAdd makes adding a chain switch
 // to it as well.
 //
+// The accounts are permitted chain by chain, as MetaMask has
+// kept them since 13.55. A chain the site adds while it is
+// connected comes without them — MetaMask's own slip, and
+// the reason a claim signed right after adding a network is
+// refused — until the account permission is asked for again
+// (wallet_requestPermissions, the connect popup once more) or
+// the site is disconnected and connects afresh;
+// copiesAccountsOnAdd is the wallet without that slip: the
+// builds before 13.55 and any build that mends it.
+//
 // The handle it returns keeps the record: the provider and
 // its EIP-6963 info, every call, the signed messages, the
 // watched tokens, the added chains, and the wallet's chain,
@@ -201,13 +227,17 @@ export function installEvmWallet({
   emitsAccountsChanged = true,
   wraps4902 = false,
   switchesOnAdd = false,
+  copiesAccountsOnAdd = false,
 } = {}) {
 
+  // `bare` holds the chains the site may use WITHOUT the
+  // accounts — the ones it added itself while connected
   const state = {
     accounts: accounts.map((a) => a.toLowerCase()),
     connected,
     chainId,
     known: new Set([...chains, chainId]),
+    bare: new Set(),
     balances: new Map(),
     defaultBalance: BigInt(balance),
   };
@@ -244,12 +274,28 @@ export function installEvmWallet({
   const answers = {
     eth_accounts: () => visibleAccounts(),
 
+    // A site already connected is answered at once; a fresh
+    // connect writes the accounts onto every permitted chain
     eth_requestAccounts: () => {
       if (!state.connected && state.accounts.length) {
         state.connected = true;
+        state.bare.clear();
         if (emitsAccountsChanged) emit('accountsChanged', visibleAccounts());
       }
       return visibleAccounts();
+    },
+
+    // The connect popup once more: the accounts land on every
+    // permitted chain, and the answer lists both permissions
+    wallet_requestPermissions: () => {
+      const wasConnected = state.connected;
+      state.connected = state.accounts.length > 0;
+      state.bare.clear();
+      if (!wasConnected && state.connected && emitsAccountsChanged) emit('accountsChanged', visibleAccounts());
+      return [
+        { parentCapability: 'eth_accounts', caveats: [{ type: 'restrictReturnedAccounts', value: visibleAccounts() }] },
+        { parentCapability: 'endowment:permitted-chains', caveats: [{ type: 'restrictNetworkSwitching', value: [...state.known].map(hexChain) }] },
+      ];
     },
 
     eth_chainId: () => hexChain(state.chainId),
@@ -257,9 +303,8 @@ export function installEvmWallet({
     eth_getBalance: () => `0x${(state.balances.get(state.chainId) ?? state.defaultBalance).toString(16)}`,
 
     personal_sign: ([data, address] = []) => {
-      if (!state.connected || !state.accounts.includes(String(address).toLowerCase())) {
-        throw rpcError(4100, 'The requested account and/or method has not been authorized by the user.');
-      }
+      const permitted = state.connected && !state.bare.has(state.chainId) && state.accounts.includes(String(address).toLowerCase());
+      if (!permitted) throw rpcError(4100, NOT_AUTHORIZED);
       signed.push({ message: decodeMessage(data), raw: data, address });
       return SIGNATURE;
     },
@@ -274,6 +319,7 @@ export function installEvmWallet({
     wallet_addEthereumChain: ([chain] = []) => {
       added.push(chain);
       const id = parseInt(chain.chainId, 16);
+      if (!state.known.has(id) && state.connected && !copiesAccountsOnAdd) state.bare.add(id);
       state.known.add(id);
       if (switchesOnAdd) moveTo(id, { silently: !emitsChainChanged });
       return null;

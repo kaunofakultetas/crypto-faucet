@@ -22,15 +22,24 @@
 //  bundled for them. Hex answers are decoded here: chain ids
 //  to numbers, the balance to a BigInt of wei.
 //
+//  A signature MetaMask refuses as unauthorized is repaired
+//  here and asked for once more: since MetaMask 13.55 a
+//  network the page itself had it add is permitted without
+//  the student's account, and the claim's signature was
+//  refused there with no window at all (MetaMask issue 47773
+//  — a whole laboratory of fresh wallets could not claim).
+//
 //  Split into (root last) — the MetaMask conversations are
 //  plain functions, the hook wires their results into state:
 //
 //    WALLET_REFRESH_MS   — balance and chain repoll cadence
+//    UNAUTHORIZED        — MetaMask's "not authorized" code
 //    utf8ToHex           — personal_sign's message encoding
 //    getMetamaskProvider — MetaMask's provider, nobody else's
 //    onMetamaskProvider  — called back whenever the pick changes
 //    connectMetamask     — the connect conversation
 //    requestChainHop     — the switch/add-chain conversation
+//    reauthorizeAccount  — the repair of a refused signature
 //    signClaimMessage    — the ownership-proof conversation
 //    useMetamaskWallet   — state wiring + balance + step
 //                          (default export)
@@ -50,6 +59,11 @@ import { RefusalError } from '@/utils/requestError';
 // see it tick up right after a claim; a page with no chain
 // to expect re-reads only the chain on the same cadence
 const WALLET_REFRESH_MS = 1000;
+
+// MetaMask's error code for a request the site is not
+// authorized to make — what it refuses a signature with when
+// the account is not permitted on the wallet's network
+const UNAUTHORIZED = 4100;
 
 // The module's pick — the provider every conversation uses —
 // and its rdns, so the stable build can outrank the one
@@ -273,6 +287,52 @@ async function requestChainHop(networkInfo) {
 
 
 // -----------------------------------------------------------
+// reauthorizeAccount
+// -----------------------------------------------------------
+//
+// The repair for a signature MetaMask refused as
+// unauthorized. Since MetaMask 13.55 a signature is checked
+// against the accounts the site may use on the wallet's
+// CURRENT network only, and a network the page itself had
+// MetaMask add (requestChainHop) is permitted without any
+// account — so the signature is refused there although the
+// wallet is connected, and asking for the accounts again
+// changes nothing, because MetaMask answers that at once
+// from what it already granted. Asking for the account
+// PERMISSION again is what mends it: MetaMask shows its
+// connect window once more and writes the chosen accounts
+// onto every permitted network, the new one included.
+//
+// Hands back the account to sign with — the one the page was
+// using while it is still permitted, otherwise the first one
+// the student left selected. Throws a ready-to-display
+// Lithuanian message, with MetaMask's own words at its end,
+// when the student declines the window or MetaMask fails.
+//
+// Used by:
+//   - signClaimMessage (below) — after a refused signature
+// -----------------------------------------------------------
+
+async function reauthorizeAccount(provider, account) {
+  try {
+    await provider.request({ method: 'wallet_requestPermissions', params: [{ eth_accounts: {} }] });
+  } catch (err) {
+    throw new Error(`MetaMask paprašė dar kartą patvirtinti prisijungimą šiame tinkle, bet patvirtinti nepavyko. Bandykite dar kartą ir patvirtinkite prisijungimą MetaMask lange. MetaMask atsakė: ${err.message}`);
+  }
+
+  const accounts = await provider.request({ method: 'eth_accounts' });
+  const permitted = accounts.find((candidate) => candidate.toLowerCase() === account.toLowerCase()) ?? accounts[0];
+  if (!permitted) throw new Error('MetaMask piniginė neprijungta.');
+  return permitted;
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // signClaimMessage
 // -----------------------------------------------------------
 //
@@ -283,6 +343,18 @@ async function requestChainHop(networkInfo) {
 // backend's verification byte for byte — this is the only
 // place it is written, so the EVM and ERC-20 pages can never
 // drift apart.
+//
+// A signature refused as unauthorized is repaired
+// (reauthorizeAccount) and asked for ONE more time, the same
+// message under the same nonce; any other refusal — the
+// student pressing cancel among them — is passed through as
+// MetaMask worded it. A second unauthorized refusal ends in a
+// Lithuanian message that tells the student how to disconnect
+// the site inside MetaMask, the way that always mends it.
+//
+// Hands back the nonce, the signature and the account that
+// signed. After a repair that can be another account than
+// the page was showing, and the claim must name the signer.
 //
 // Used by:
 //   - useMetamaskWallet (below) — signMessage()
@@ -296,12 +368,25 @@ async function signClaimMessage(account) {
 
   const nonce = Date.now().toString();
   const message = `Pasirašykite žinutę kad patvirtintumėte jog naudojate šią piniginę. Nonce: ${nonce}`;
-  const signature = await provider.request({
+  const sign = (signer) => provider.request({
     method: 'personal_sign',
-    params: [utf8ToHex(message), account],
+    params: [utf8ToHex(message), signer],
   });
 
-  return { nonce, signature };
+  try {
+    return { nonce, signature: await sign(account), account };
+  } catch (err) {
+    if (err?.code !== UNAUTHORIZED) throw err;
+  }
+
+
+  const signer = await reauthorizeAccount(provider, account);
+  try {
+    return { nonce, signature: await sign(signer), account: signer };
+  } catch (err) {
+    if (err?.code !== UNAUTHORIZED) throw err;
+    throw new Error(`MetaMask vis dar neleidžia pasirašyti šiame tinkle. MetaMask meniu atidarykite leidimus („Permissions“), atjunkite šią svetainę, tada vėl prijunkite piniginę ir bandykite dar kartą. MetaMask atsakė: ${err.message}`);
+  }
 }
 
 
@@ -321,6 +406,9 @@ async function signClaimMessage(account) {
 // and the refusal behind it, the step of the ladder, and the
 // three actions — connect, switchNetwork and signMessage —
 // which all reject with a ready-to-display message.
+// signMessage resolves with the nonce, the signature and the
+// account that signed; a page sends THAT account with the
+// claim, not the one it was showing.
 //
 // The page passes the chain its faucet pays on. The balance
 // is only fetched while the wallet actually sits there, so a

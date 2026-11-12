@@ -395,6 +395,9 @@ export default function FaucetEVM() {
 
   // Sign the ownership message and let the backend verify it
   // before paying out — no transaction on the student's side.
+  // The address sent is the one that SIGNED: when MetaMask had
+  // to be asked for the account permission again, the student
+  // may have left another account selected than the page shows.
   // A successful claim invalidates the balance query, so the
   // faucet's number drops immediately instead of on the next
   // poll, and is announced with its transaction. A 200 that
@@ -406,10 +409,10 @@ export default function FaucetEVM() {
     const forNetwork = network;
     setClaimingFor(forNetwork);
     try {
-      const { nonce, signature } = await wallet.signMessage();
+      const { nonce, signature, account } = await wallet.signMessage();
 
       const { data: payout } = await axios.get(`/api/evm/${forNetwork}/request`, {
-        params: { address: wallet.account, signature, nonce },
+        params: { address: account, signature, nonce },
       });
       const txHash = payoutTxid(payout, 'transaction_hash', CLAIM_FAILED);
 

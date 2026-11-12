@@ -777,19 +777,22 @@ function useTokenActions({ symbol, wallet, data, addAlert, clearAlerts, reload }
 
 
   // Claim on ONE chain. The wallet's current chain doesn't
-  // matter — the backend sends on the chain named in the URL,
-  // the signature only proves who is asking. A payout names
-  // its transaction, linked on that chain's explorer; a 200
-  // that names none paid nothing out and is reported as a
-  // failed claim.
+  // decide where the tokens go — the backend sends on the
+  // chain named in the URL, the signature only proves who is
+  // asking. The address sent is the one that SIGNED: when
+  // MetaMask had to be asked for the account permission again,
+  // the student may have left another account selected than
+  // the page shows. A payout names its transaction, linked on
+  // that chain's explorer; a 200 that names none paid nothing
+  // out and is reported as a failed claim.
   const claim = async (deployment) => {
     const thisClaim = { symbol, network: deployment.network };
     setClaimingFor(thisClaim);
     try {
-      const { nonce, signature } = await wallet.signMessage();
+      const { nonce, signature, account } = await wallet.signMessage();
 
       const { data: payout } = await axios.get(`/api/erc20/${deployment.network}/${symbol}/request`, {
-        params: { address: wallet.account, signature, nonce },
+        params: { address: account, signature, nonce },
       });
       const txHash = payoutTxid(payout, 'transaction_hash', CLAIM_FAILED);
 

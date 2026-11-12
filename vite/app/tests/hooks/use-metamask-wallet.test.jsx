@@ -13,10 +13,13 @@
 //  connect, switchNetwork (the 4902 add-then-switch, the
 //  wrapped 4902, every refusal, the landing check),
 //  signMessage (the exact Lithuanian claim message as UTF-8
-//  hex, the nonce), the balance poll (1 s, the chain written
-//  back, a wrong chain's null, a failing RPC and its recovery)
-//  and the chain tick that does the same repair with no chain
-//  to expect.
+//  hex, the nonce, the account that signed), the signature
+//  MetaMask 13.55 refuses as unauthorized on a network the
+//  page had it add (the account permission asked again, one
+//  more try, every way that ends), the balance poll (1 s, the
+//  chain written back, a wrong chain's null, a failing RPC
+//  and its recovery) and the chain tick that does the same
+//  repair with no chain to expect.
 //
 //  The hook caches the first MetaMask it hears for the life of
 //  its module — every test gets a fresh copy of the module
@@ -31,13 +34,21 @@ import { settle } from '../support/backend/contract';
 import * as f from '../support/backend/fixtures';
 import {
   installMetamask, installPhantomEvm, rpcError, hexChain,
-  MAINNET, SEPOLIA, HOODI, OTHER_ACCOUNT, ETH, SIGNATURE, USER_REJECTED,
+  MAINNET, SEPOLIA, HOODI, OTHER_ACCOUNT, ETH, SIGNATURE, USER_REJECTED, NOT_AUTHORIZED,
 } from '../support/wallets/metamask';
 
 
 const CLAIM_MESSAGE = 'Pasirašykite žinutę kad patvirtintumėte jog naudojate šią piniginę. Nonce: ';
 const NOT_LOADED = 'MetaMask dar neįkelta. Bandykite dar kartą.';
 const NOT_LANDED = 'Tinklas dar neįjungtas — paspauskite mygtuką dar kartą arba perjunkite tinklą MetaMask lange.';
+
+// The hook's sentence when the connect window it asked for,
+// to mend a signature refused as unauthorized, was declined
+const REPAIR_DECLINED = `MetaMask paprašė dar kartą patvirtinti prisijungimą šiame tinkle, bet patvirtinti nepavyko. Bandykite dar kartą ir patvirtinkite prisijungimą MetaMask lange. MetaMask atsakė: ${USER_REJECTED}`;
+
+// Its sentence when MetaMask refuses again after that window
+// was confirmed — the way out the student is left with
+const STILL_REFUSED = `MetaMask vis dar neleidžia pasirašyti šiame tinkle. MetaMask meniu atidarykite leidimus („Permissions“), atjunkite šią svetainę, tada vėl prijunkite piniginę ir bandykite dar kartą. MetaMask atsakė: ${NOT_AUTHORIZED}`;
 
 const sepolia = f.evmNetworksMap.sepolia;
 const hoodi = f.evmNetworksMap.hoodi;
@@ -761,6 +772,19 @@ describe('signMessage()', () => {
   });
 
 
+  it('hands back the account that signed, and asks MetaMask for nothing more when the signature goes through', async () => {
+    const metamask = installMetamask({ connected: true });
+    const { result } = renderWallet();
+    await waitFor(() => expect(result.current.step).toBe(3));
+
+    const proof = await act(() => result.current.signMessage());
+
+    expect(proof).toEqual({ nonce: expect.any(String), signature: SIGNATURE, account: f.STUDENT_EVM });
+    expect(metamask.callsTo('personal_sign')).toHaveLength(1);
+    expect(metamask.callsTo('wallet_requestPermissions')).toEqual([]);
+  });
+
+
   it('sends the message as UTF-8 hex — "ž", "ė" and "š" travel as their two-byte sequences', async () => {
     const metamask = installMetamask({ connected: true });
     const { result } = renderWallet();
@@ -805,11 +829,191 @@ describe('signMessage()', () => {
   });
 
 
-  it("passes MetaMask's refusal through when the student declines to sign", async () => {
-    installMetamask({ connected: true }).decline('personal_sign');
+  it("passes MetaMask's refusal through when the student declines to sign — and asks for no permission", async () => {
+    const metamask = installMetamask({ connected: true }).decline('personal_sign');
     const { result } = renderWallet();
     await waitFor(() => expect(result.current.step).toBe(3));
     await expect(result.current.signMessage()).rejects.toMatchObject({ code: 4001, message: USER_REJECTED });
+    expect(metamask.callsTo('personal_sign')).toHaveLength(1);
+    expect(metamask.callsTo('wallet_requestPermissions')).toEqual([]);
+  });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// A signature refused as unauthorized
+// -----------------------------------------------------------
+//
+// MetaMask 13.55 and later keep a site's accounts network by
+// network, and a network the page had MetaMask add comes
+// without them: the claim's signature is refused there (4100)
+// with no window at all — a whole laboratory of fresh wallets
+// could not claim on zkSync Sepolia. signMessage asks for the
+// account permission again (the connect window once more) and
+// signs: one repair, one more try, never a loop, and every
+// way it can end said so the student knows what to do.
+// onAddedNetwork is that student: connected, then switched to
+// Hoodi through the page, which had MetaMask add it.
+// -----------------------------------------------------------
+
+describe('A signature refused as unauthorized (MetaMask 13.55 and later)', () => {
+
+  const SIGNING = ['personal_sign', 'wallet_requestPermissions', 'eth_requestAccounts'];
+  const signingCalls = (wallet) => wallet.methods().filter((m) => SIGNING.includes(m));
+
+  async function onAddedNetwork(options = {}) {
+    const metamask = installMetamask({ connected: true, ...options });
+    const { result } = renderWallet(HOODI);
+    await waitFor(() => expect(result.current.step).toBe(2));
+    await act(() => result.current.switchNetwork(hoodi));
+    expect(result.current.step).toBe(3);
+    return { metamask, result };
+  }
+
+
+  it('asks for the account permission again and then signs — the same message under the same nonce', async () => {
+    const { metamask, result } = await onAddedNetwork();
+
+    const proof = await act(() => result.current.signMessage());
+
+    expect(proof).toEqual({ nonce: expect.any(String), signature: SIGNATURE, account: f.STUDENT_EVM });
+    expect(signingCalls(metamask)).toEqual(['personal_sign', 'wallet_requestPermissions', 'personal_sign']);
+    expect(metamask.callsTo('wallet_requestPermissions')[0].params).toEqual([{ eth_accounts: {} }]);
+    const [refused, signed] = metamask.callsTo('personal_sign');
+    expect(signed.params).toEqual(refused.params);
+    expect(metamask.signed).toEqual([{ message: `${CLAIM_MESSAGE}${proof.nonce}`, raw: expect.any(String), address: f.STUDENT_EVM }]);
+  });
+
+
+  it('never asks for the accounts instead — MetaMask answers a connected site at once and mends nothing', async () => {
+    const { metamask, result } = await onAddedNetwork();
+    await act(() => result.current.signMessage());
+    expect(metamask.callsTo('eth_requestAccounts')).toEqual([]);
+  });
+
+
+  it('signs at once the next time — the repair holds', async () => {
+    const { metamask, result } = await onAddedNetwork();
+    await act(() => result.current.signMessage());
+
+    await act(() => result.current.signMessage());
+
+    expect(signingCalls(metamask)).toEqual(['personal_sign', 'wallet_requestPermissions', 'personal_sign', 'personal_sign']);
+    expect(metamask.signed).toHaveLength(2);
+  });
+
+
+  it('signs at once on an added network when the wallet kept the accounts on it — the builds before 13.55', async () => {
+    const { metamask, result } = await onAddedNetwork({ copiesAccountsOnAdd: true });
+
+    const proof = await act(() => result.current.signMessage());
+
+    expect(proof.account).toBe(f.STUDENT_EVM);
+    expect(signingCalls(metamask)).toEqual(['personal_sign']);
+  });
+
+
+  it("signs with the account the student left selected in the window when the page's one is no longer permitted", async () => {
+    const { metamask, result } = await onAddedNetwork();
+    const connectWindow = metamask.hold('wallet_requestPermissions');
+
+    let signing;
+    act(() => { signing = result.current.signMessage(); });
+    await waitFor(() => expect(connectWindow.called).toBe(true));
+    let proof;
+    await act(async () => {
+      metamask.changeAccounts([OTHER_ACCOUNT]);
+      connectWindow.release();
+      proof = await signing;
+    });
+
+    expect(proof.account).toBe(OTHER_ACCOUNT);
+    expect(metamask.signed).toEqual([{ message: `${CLAIM_MESSAGE}${proof.nonce}`, raw: expect.any(String), address: OTHER_ACCOUNT }]);
+    expect(result.current.account).toBe(OTHER_ACCOUNT);
+  });
+
+
+  it("keeps the page's account when it is still among the permitted ones, wherever MetaMask lists it", async () => {
+    const { metamask, result } = await onAddedNetwork();
+    const connectWindow = metamask.hold('wallet_requestPermissions');
+
+    let signing;
+    act(() => { signing = result.current.signMessage(); });
+    await waitFor(() => expect(connectWindow.called).toBe(true));
+    let proof;
+    await act(async () => {
+      metamask.changeAccounts([OTHER_ACCOUNT, f.STUDENT_EVM]);
+      connectWindow.release();
+      proof = await signing;
+    });
+
+    expect(proof.account).toBe(f.STUDENT_EVM);
+    expect(metamask.signed[0].address).toBe(f.STUDENT_EVM);
+  });
+
+
+  it('says the connection was not confirmed, with MetaMask\'s words, when the student declines the window — and signs nothing', async () => {
+    const { metamask, result } = await onAddedNetwork();
+    metamask.decline('wallet_requestPermissions');
+
+    await expect(result.current.signMessage()).rejects.toHaveProperty('message', REPAIR_DECLINED);
+
+    expect(signingCalls(metamask)).toEqual(['personal_sign', 'wallet_requestPermissions']);
+    expect(metamask.signed).toEqual([]);
+  });
+
+
+  it('is ready for another try after a declined window — the next claim asks again and signs', async () => {
+    const { metamask, result } = await onAddedNetwork();
+    metamask.decline('wallet_requestPermissions', { once: true });
+    await expect(result.current.signMessage()).rejects.toHaveProperty('message', REPAIR_DECLINED);
+
+    const proof = await act(() => result.current.signMessage());
+
+    expect(proof.signature).toBe(SIGNATURE);
+    expect(metamask.callsTo('wallet_requestPermissions')).toHaveLength(2);
+  });
+
+
+  it('tells how to disconnect the site when MetaMask refuses again after the repair — two attempts, one window, no loop', async () => {
+    const metamask = installMetamask({ connected: true }).fail('personal_sign', rpcError(4100, NOT_AUTHORIZED));
+    const { result } = renderWallet();
+    await waitFor(() => expect(result.current.step).toBe(3));
+
+    await expect(result.current.signMessage()).rejects.toHaveProperty('message', STILL_REFUSED);
+
+    expect(signingCalls(metamask)).toEqual(['personal_sign', 'wallet_requestPermissions', 'personal_sign']);
+  });
+
+
+  it("passes another refusal of the second signature through — the student pressing cancel on it", async () => {
+    const metamask = installMetamask({ connected: true })
+      .fail('personal_sign', rpcError(4100, NOT_AUTHORIZED), { once: true })
+      .decline('personal_sign', { once: true });
+    const { result } = renderWallet();
+    await waitFor(() => expect(result.current.step).toBe(3));
+
+    await expect(result.current.signMessage()).rejects.toMatchObject({ code: 4001, message: USER_REJECTED });
+
+    expect(signingCalls(metamask)).toEqual(['personal_sign', 'wallet_requestPermissions', 'personal_sign']);
+  });
+
+
+  it('says "MetaMask piniginė neprijungta." when the window comes back with no account at all', async () => {
+    const { metamask, result } = await onAddedNetwork();
+    metamask.answer('wallet_requestPermissions', () => {
+      metamask.changeAccounts([]);
+      return [];
+    });
+
+    await act(() => expect(result.current.signMessage()).rejects.toThrow('MetaMask piniginė neprijungta.'));
+
+    expect(metamask.callsTo('personal_sign')).toHaveLength(1);
   });
 });
 

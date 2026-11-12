@@ -24,7 +24,11 @@
 //  (cooldown 429, empty faucet 503, 400, 403, 500), a dropped
 //  connection and a proxy's error page in Lithuanian, a
 //  declined signature, a double click, a network switch
-//  mid-claim; and the backend contract matrices for
+//  mid-claim; the claim on a network the page had MetaMask
+//  add, where MetaMask 13.55 refuses the first signature (the
+//  connect window once more, then the payout — for the account
+//  that signed — or the Lithuanian sentence when the student
+//  declines it); and the backend contract matrices for
 //  /api/evm/networks, /api/evm/:network/faucet-balance and the
 //  payout's failure answers.
 //
@@ -43,7 +47,7 @@ import { describeEndpointContract, settle, VARIANTS } from '../support/backend/c
 import * as f from '../support/backend/fixtures';
 import {
   installMetamask, installPhantomEvm, rpcError,
-  MAINNET, SEPOLIA, HOODI, OTHER_ACCOUNT, ETH, SIGNATURE, USER_REJECTED,
+  MAINNET, SEPOLIA, HOODI, OTHER_ACCOUNT, ETH, SIGNATURE, USER_REJECTED, NOT_AUTHORIZED,
 } from '../support/wallets/metamask';
 
 
@@ -956,6 +960,133 @@ describe('Claiming', () => {
     await user.click(screen.getByRole('link', { name: 'Hoodi' }));
     await pageLoaded('Ethereum Hoodi');
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// Claiming on a network the page had MetaMask add
+// -----------------------------------------------------------
+//
+// The laboratory that failed: a fresh wallet does not know the
+// network, the page has MetaMask add it, and MetaMask 13.55
+// then refuses the claim's signature (4100, no window) because
+// it permitted the new network without the student's account.
+// The claim asks for the account permission again — MetaMask's
+// connect window once more — signs and is paid out; the
+// address it sends is the one that signed.
+// -----------------------------------------------------------
+
+describe('Claiming on a network the page had MetaMask add (MetaMask 13.55 and later)', () => {
+
+  const HOODI_SUCCESS = 'Ethereum Hoodi išsiųstas į jūsų piniginę.';
+  const REPAIR_FAILED = `MetaMask paprašė dar kartą patvirtinti prisijungimą šiame tinkle, bet patvirtinti nepavyko. Bandykite dar kartą ir patvirtinkite prisijungimą MetaMask lange. MetaMask atsakė: ${USER_REJECTED}`;
+
+  // The student of that laboratory: connected, then switched
+  // to Hoodi through the page, which had MetaMask add it
+  async function onAddedNetwork(options = {}) {
+    const metamask = installMetamask({ connected: true, ...options });
+    const rendered = renderEvmFaucet('hoodi');
+    await rendered.user.click(await switchButton('Ethereum Hoodi'));
+    await claimButton('Ethereum Hoodi');
+    expect(metamask.added).toHaveLength(1);
+    return { metamask, user: rendered.user };
+  }
+
+
+  it('asks MetaMask for the account permission again, signs and is paid out — one connect window, one claim', async () => {
+    const payouts = given.capture('get', '/api/evm/:network/request', f.evmPayout());
+    const { metamask, user } = await onAddedNetwork();
+
+    await claim(user, 'Ethereum Hoodi');
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toBe(`${HOODI_SUCCESS} Transakcija: ${TX_HASH}`);
+    expect(metamask.callsTo('wallet_requestPermissions')).toEqual([{ method: 'wallet_requestPermissions', params: [{ eth_accounts: {} }] }]);
+    expect(metamask.callsTo('personal_sign')).toHaveLength(2);
+    expect(payouts).toHaveLength(1);
+    const { nonce } = payouts[0].query;
+    expect(payouts[0].url.startsWith(url('/api/evm/hoodi/request?'))).toBe(true);
+    expect(payouts[0].query).toEqual({ address: f.STUDENT_EVM, signature: SIGNATURE, nonce });
+    expect(metamask.signed).toEqual([{ message: `${CLAIM_MESSAGE}${nonce}`, raw: expect.any(String), address: f.STUDENT_EVM }]);
+  });
+
+
+  it('keeps the button busy while the connect window is open, and shows no error meanwhile', async () => {
+    const { metamask, user } = await onAddedNetwork();
+    const connectWindow = metamask.hold('wallet_requestPermissions');
+
+    await claim(user, 'Ethereum Hoodi');
+    await waitFor(() => expect(connectWindow.called).toBe(true));
+
+    expect(await screen.findByRole('button', { name: 'Siunčiama…' })).toHaveAttribute('aria-busy', 'true');
+    expect(screen.queryByRole('alert')).toBeNull();
+    await act(async () => connectWindow.release());
+    expect(await screen.findByText(HOODI_SUCCESS, { exact: false })).toBeInTheDocument();
+  });
+
+
+  it('sends the claim for the account that signed when the student picked another one in the window', async () => {
+    const payouts = given.capture('get', '/api/evm/:network/request', f.evmPayout());
+    const { metamask, user } = await onAddedNetwork();
+    const connectWindow = metamask.hold('wallet_requestPermissions');
+
+    await claim(user, 'Ethereum Hoodi');
+    await waitFor(() => expect(connectWindow.called).toBe(true));
+    await act(async () => {
+      metamask.changeAccounts([OTHER_ACCOUNT]);
+      connectWindow.release();
+    });
+
+    expect(await screen.findByText(HOODI_SUCCESS, { exact: false })).toBeInTheDocument();
+    expect(payouts).toHaveLength(1);
+    expect(payouts[0].query.address).toBe(OTHER_ACCOUNT);
+    expect(metamask.signed.map((entry) => entry.address)).toEqual([OTHER_ACCOUNT]);
+  });
+
+
+  it('tells the student to confirm the connection when they decline the window — in Lithuanian, nothing asked of the backend, the button free', async () => {
+    const payouts = given.capture('get', '/api/evm/:network/request', f.evmPayout());
+    const { metamask, user } = await onAddedNetwork();
+    metamask.decline('wallet_requestPermissions');
+
+    await claim(user, 'Ethereum Hoodi');
+
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toBe(REPAIR_FAILED);
+    expect(within(alert).getByTestId('ErrorOutlineIcon')).toBeInTheDocument();
+    expect(payouts).toEqual([]);
+    expect(await claimButton('Ethereum Hoodi')).toHaveAttribute('aria-disabled', 'false');
+  });
+
+
+  it('tells how to disconnect the site when MetaMask still refuses after the window was confirmed', async () => {
+    const payouts = given.capture('get', '/api/evm/:network/request', f.evmPayout());
+    installMetamask({ connected: true }).fail('personal_sign', rpcError(4100, NOT_AUTHORIZED));
+    const { user } = renderEvmFaucet();
+
+    await claim(user);
+
+    expect((await screen.findByRole('alert')).textContent).toBe(`MetaMask vis dar neleidžia pasirašyti šiame tinkle. MetaMask meniu atidarykite leidimus („Permissions“), atjunkite šią svetainę, tada vėl prijunkite piniginę ir bandykite dar kartą. MetaMask atsakė: ${NOT_AUTHORIZED}`);
+    expect(payouts).toEqual([]);
+  });
+
+
+  it('claims at once on an added network with a wallet that kept the accounts on it — no second connect window', async () => {
+    const payouts = given.capture('get', '/api/evm/:network/request', f.evmPayout());
+    const { metamask, user } = await onAddedNetwork({ copiesAccountsOnAdd: true });
+
+    await claim(user, 'Ethereum Hoodi');
+
+    expect(await screen.findByText(HOODI_SUCCESS, { exact: false })).toBeInTheDocument();
+    expect(metamask.callsTo('wallet_requestPermissions')).toEqual([]);
+    expect(metamask.callsTo('personal_sign')).toHaveLength(1);
+    expect(payouts).toHaveLength(1);
   });
 });
 

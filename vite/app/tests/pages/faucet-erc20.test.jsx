@@ -20,7 +20,10 @@
 //  chain's explorer, a 200 that names none), the reload, every
 //  button waiting while one claim is in flight, the backend's
 //  refusals word for word, a dropped connection and a proxy's
-//  error page in Lithuanian, a declined signature; "Rodyti
+//  error page in Lithuanian, a declined signature; the claim
+//  on a chain the page had MetaMask add, where MetaMask 13.55
+//  refuses the first signature (the connect window once more,
+//  then the payout for the account that signed); "Rodyti
 //  MetaMask" (wallet_watchAsset, the hop to that chain first,
 //  every refusal in its card); the student's moves inside
 //  MetaMask (a lost chain read and an unannounced switch
@@ -893,6 +896,89 @@ describe('Claiming a token', () => {
     await user.click(claimIn(cardOf('Ethereum Sepolia')));
     await payoutAlert();
     expect(payouts[0].query.address).toBe(OTHER_ACCOUNT);
+  });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// Claiming on a chain the page had MetaMask add
+// -----------------------------------------------------------
+//
+// "Rodyti MetaMask" hops to the card's chain and has MetaMask
+// add one it does not know — and MetaMask 13.55 then refuses
+// the next claim's signature there (4100, no window), having
+// permitted the new chain without the student's account. The
+// claim asks for the account permission again, signs and is
+// paid out for the account that signed.
+// -----------------------------------------------------------
+
+describe('Claiming on a chain the page had MetaMask add (MetaMask 13.55 and later)', () => {
+
+  // Connected on Sepolia, then moved to Hoodi by the Hoodi
+  // card's "Rodyti MetaMask", which had MetaMask add the chain
+  async function onAddedChain() {
+    serveToken({ chains: ['sepolia', 'hoodi'] });
+    const payouts = given.capture('get', '/api/erc20/:network/:symbol/request', f.erc20Payout('LINK', 'hoodi'));
+    const metamask = installMetamask({ connected: true });
+    const { user } = renderTokenFaucet();
+    await readyToClaim();
+    await user.click(showIn(cardOf('Ethereum Hoodi')));
+    await waitFor(() => expect(metamask.watched).toHaveLength(1));
+    expect(metamask.added).toHaveLength(1);
+    expect(metamask.chainId).toBe(HOODI);
+    return { metamask, user, payouts };
+  }
+
+
+  it('asks MetaMask for the account permission again, signs and is paid out in the card', async () => {
+    const { metamask, user, payouts } = await onAddedChain();
+    const hoodi = cardOf('Ethereum Hoodi');
+
+    await user.click(claimIn(hoodi));
+
+    await payoutAlert(hoodi);
+    expect(metamask.callsTo('wallet_requestPermissions')).toEqual([{ method: 'wallet_requestPermissions', params: [{ eth_accounts: {} }] }]);
+    expect(metamask.callsTo('personal_sign')).toHaveLength(2);
+    expect(payouts).toHaveLength(1);
+    const { nonce } = payouts[0].query;
+    expect(payouts[0].params).toEqual({ network: 'hoodi', symbol: 'LINK' });
+    expect(payouts[0].query).toEqual({ address: f.STUDENT_EVM, signature: SIGNATURE, nonce });
+  });
+
+
+  it('sends the claim for the account that signed when the student picked another one in the window', async () => {
+    const { metamask, user, payouts } = await onAddedChain();
+    const connectWindow = metamask.hold('wallet_requestPermissions');
+    const hoodi = cardOf('Ethereum Hoodi');
+
+    await user.click(claimIn(hoodi));
+    await waitFor(() => expect(connectWindow.called).toBe(true));
+    await act(async () => {
+      metamask.changeAccounts([OTHER_ACCOUNT]);
+      connectWindow.release();
+    });
+
+    await waitFor(() => expect(payouts).toHaveLength(1));
+    expect(payouts[0].query.address).toBe(OTHER_ACCOUNT);
+    expect(metamask.signed.map((entry) => entry.address)).toEqual([OTHER_ACCOUNT]);
+  });
+
+
+  it('tells the student to confirm the connection when they decline the window — in the card, nothing asked of the backend', async () => {
+    const { metamask, user, payouts } = await onAddedChain();
+    metamask.decline('wallet_requestPermissions');
+    const hoodi = cardOf('Ethereum Hoodi');
+
+    await user.click(claimIn(hoodi));
+
+    const alert = await within(hoodi).findByRole('alert');
+    expect(alert.textContent).toBe(`MetaMask paprašė dar kartą patvirtinti prisijungimą šiame tinkle, bet patvirtinti nepavyko. Bandykite dar kartą ir patvirtinkite prisijungimą MetaMask lange. MetaMask atsakė: ${USER_REJECTED}`);
+    expect(payouts).toEqual([]);
   });
 });
 
