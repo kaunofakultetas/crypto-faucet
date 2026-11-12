@@ -22,6 +22,15 @@
 //  bundled for them. Hex answers are decoded here: chain ids
 //  to numbers, the balance to a BigInt of wei.
 //
+//  MetaMask installed WHILE the page is open is noticed too.
+//  A browser never hands a new extension to a page that was
+//  already loaded, so no provider can arrive there — but
+//  Chromium lets the page ask the extension itself whether it
+//  exists, and the moment it does the page reloads once and
+//  comes up on the connect step (other browsers are covered
+//  by the install button's own reload, components/
+//  WalletFlow.jsx).
+//
 //  A signature MetaMask refuses as unauthorized is repaired
 //  here and asked for once more: since MetaMask 13.55 a
 //  network the page itself had it add is permitted without
@@ -34,9 +43,16 @@
 //
 //    WALLET_REFRESH_MS   — balance and chain repoll cadence
 //    UNAUTHORIZED        — MetaMask's "not authorized" code
+//    METAMASK_EXTENSION_IDS — the extension in the stores
+//    INSTALL_PROBE_MS    — how often a missing wallet is asked
+//                          after
+//    PROBE_SETTLE_MS     — how long an answer may take
 //    utf8ToHex           — personal_sign's message encoding
 //    getMetamaskProvider — MetaMask's provider, nobody else's
 //    onMetamaskProvider  — called back whenever the pick changes
+//    extensionAnswers    — is this extension installed?
+//    metamaskExtensionInstalled — is MetaMask's, in any store's
+//                          build?
 //    connectMetamask     — the connect conversation
 //    requestChainHop     — the switch/add-chain conversation
 //    reauthorizeAccount  — the repair of a refused signature
@@ -64,6 +80,21 @@ const WALLET_REFRESH_MS = 1000;
 // authorized to make — what it refuses a signature with when
 // the account is not permitted on the wallet's network
 const UNAUTHORIZED = 4100;
+
+// MetaMask's extension ids in the stores students install it
+// from: the Chrome Web Store build — Chrome, Brave and the
+// other Chromium browsers — and the Edge Add-ons build
+const METAMASK_EXTENSION_IDS = ['nkbihfbeogaeaoehlefnkodbefgpgknn', 'ejbalbakoplchlghecdalmeeeajnimhm'];
+
+// How often a page without MetaMask asks whether the
+// extension has been installed meanwhile
+const INSTALL_PROBE_MS = 1500;
+
+// How long a connection to the extension must stay open to
+// count as answered — a refusal comes back within
+// milliseconds, an extension still starting up says nothing
+// for a while
+const PROBE_SETTLE_MS = 800;
 
 // The module's pick — the provider every conversation uses —
 // and its rdns, so the stable build can outrank the one
@@ -176,6 +207,100 @@ export const onMetamaskProvider = (notify) => {
   waiters.add(notify);
   return () => waiters.delete(notify);
 };
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// extensionAnswers
+// -----------------------------------------------------------
+//
+// Whether the extension with this id is installed, asked of
+// the browser directly — the one question a page can put to
+// an extension that was installed after the page loaded.
+// Chromium opens a channel from web pages to an extension
+// that allows it, as MetaMask does for every site, and that
+// channel appears on pages already open; a connection to an
+// id nobody has is closed at once, one to an extension that
+// is there stays open. So: connect, and see whether the
+// browser hangs up. Nothing is sent, and the connection is
+// closed again as soon as it has answered the question.
+//
+// No such channel — Firefox, Safari, or no extension that
+// offers one — is a plain no.
+//
+// Used by:
+//   - metamaskExtensionInstalled (below)
+// -----------------------------------------------------------
+
+function extensionAnswers(extensionId) {
+  return new Promise((resolve) => {
+    const runtime = globalThis.chrome?.runtime;
+    if (typeof runtime?.connect !== 'function') {
+      resolve(false);
+      return;
+    }
+
+    let port;
+    try {
+      port = runtime.connect(extensionId);
+    } catch {
+      resolve(false);
+      return;
+    }
+
+    let settled = false;
+    const settle = (answered) => {
+      if (settled) return;
+      settled = true;
+      resolve(answered);
+    };
+
+    // The browser hanging up: nobody is there. Chrome logs a
+    // refusal nobody looked at as an unchecked error on every
+    // probe — reading lastError is the looking
+    port.onDisconnect.addListener(() => {
+      void runtime.lastError;
+      settle(false);
+    });
+
+    // Still open after the wait: the extension is there
+    setTimeout(() => {
+      if (settled) return;
+      settle(true);
+      try {
+        port.disconnect();
+      } catch { /* the extension went away meanwhile */ }
+    }, PROBE_SETTLE_MS);
+  });
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// metamaskExtensionInstalled
+// -----------------------------------------------------------
+//
+// Whether MetaMask's extension is installed in this browser,
+// in any of the store builds the students get — asked without
+// needing its provider, which a page opened before the
+// install does not have.
+//
+// Used by:
+//   - useMetamaskWallet (below) — the install watch
+// -----------------------------------------------------------
+
+async function metamaskExtensionInstalled() {
+  const answers = await Promise.all(METAMASK_EXTENSION_IDS.map(extensionAnswers));
+  return answers.some(Boolean);
+}
 
 
 
@@ -410,6 +535,11 @@ async function signClaimMessage(account) {
 // account that signed; a page sends THAT account with the
 // claim, not the one it was showing.
 //
+// A page that came up without MetaMask watches for the
+// extension being installed and reloads itself once when it
+// is, so the student who went off to install it finds the
+// connect step waiting instead of "Susidiegti MetaMask".
+//
 // The page passes the chain its faucet pays on. The balance
 // is only fetched while the wallet actually sits there, so a
 // wrong-chain wallet shows "not connected" instead of a
@@ -491,6 +621,51 @@ export default function useMetamaskWallet(expectedChainId) {
       wired = null;
     };
   }, []);
+
+
+  // The install watch: while this page has no MetaMask, ask
+  // now and then — and when the student returns to the tab —
+  // whether the extension has been installed meanwhile, and
+  // reload once when it has; only a reload brings its provider
+  // into a page that was open before it. The reload needs the
+  // extension to have been seen MISSING first: one that
+  // answers from the first question on was there when the page
+  // loaded and still gave it no provider (switched off for
+  // this site, say), and reloading for that would never end.
+  // The first question waits a full interval — a page that has
+  // MetaMask finds its provider within milliseconds and never
+  // asks at all.
+  useEffect(() => {
+    if (installed) return undefined;
+
+    let stopped = false;
+    let asking = false;
+    let seenMissing = false;
+
+    const ask = async () => {
+      if (stopped || asking) return;
+      asking = true;
+      const answers = await metamaskExtensionInstalled();
+      asking = false;
+      if (stopped) return;
+
+      if (!answers) {
+        seenMissing = true;
+        return;
+      }
+      if (!seenMissing) return;
+      stopped = true;
+      window.location.reload();
+    };
+
+    const tick = setInterval(ask, INSTALL_PROBE_MS);
+    document.addEventListener('visibilitychange', ask);
+    return () => {
+      stopped = true;
+      clearInterval(tick);
+      document.removeEventListener('visibilitychange', ask);
+    };
+  }, [installed]);
 
 
   // Balance repoll — TanStack Query owns the timer and the

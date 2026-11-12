@@ -8,7 +8,10 @@
 //  over flask / mmi, also when it arrives after flask was
 //  wired — the hook then follows it, one provider for every
 //  read, event and action; a wallet that announces late; a
-//  malformed announcement), the bootstrap reads and the events
+//  malformed announcement), MetaMask INSTALLED while the page
+//  is open (the extension asked after through the browser's
+//  own channel, one reload when it appears, never a loop),
+//  the bootstrap reads and the events
 //  that keep account and chain fresh, the step ladder,
 //  connect, switchNetwork (the 4902 add-then-switch, the
 //  wrapped 4902, every refusal, the landing check),
@@ -31,10 +34,12 @@ import { renderHook, act, waitFor } from '@testing-library/react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { makeQueryClient } from '../support/render';
 import { settle } from '../support/backend/contract';
+import { installLocationDouble } from '../support/location';
 import * as f from '../support/backend/fixtures';
 import {
-  installMetamask, installPhantomEvm, rpcError, hexChain,
+  installMetamask, installPhantomEvm, installExtensionChannel, rpcError, hexChain,
   MAINNET, SEPOLIA, HOODI, OTHER_ACCOUNT, ETH, SIGNATURE, USER_REJECTED, NOT_AUTHORIZED,
+  METAMASK_STORE_ID, METAMASK_EDGE_ID, NO_SUCH_EXTENSION,
 } from '../support/wallets/metamask';
 
 
@@ -335,6 +340,227 @@ describe('Finding MetaMask', () => {
     expect(stable.chainId).toBe(SEPOLIA);
     expect(flask.callsTo('wallet_switchEthereumChain')).toEqual([]);
     await waitFor(() => expect(result.current.step).toBe(3));
+  });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// MetaMask installed while the page is open
+// -----------------------------------------------------------
+//
+// A browser never hands a newly installed extension to a page
+// that was already loaded: no provider, no announcement, and
+// the page sat on "Susidiegti MetaMask" until somebody pressed
+// reload. Chromium does let the page ask whether the extension
+// EXISTS (chrome.runtime.connect to its id), so a hook without
+// MetaMask asks every second and a half, and when the student
+// returns to the tab, and reloads the page once the extension
+// answers — having seen it missing first, so a wallet that was
+// there all along and still gave no provider never starts a
+// loop. The timers are faked and advanced by hand: ASK is one
+// question's interval, ANSWER the wait a connection must
+// survive to count.
+// -----------------------------------------------------------
+
+describe('MetaMask installed while the page is open', () => {
+
+  const ASK = 1500;
+  const ANSWER = 800;
+
+  const advance = (ms) => act(() => vi.advanceTimersByTimeAsync(ms));
+
+  // A page without MetaMask, its reloads counted
+  function openWithoutMetamask(channelOptions) {
+    vi.useFakeTimers();
+    const channel = channelOptions === null ? null : installExtensionChannel(channelOptions);
+    const location = installLocationDouble('/faucet/evm/sepolia');
+    const rendered = renderWallet();
+    return { channel, location, ...rendered };
+  }
+
+
+  it('reloads the page once when the extension appears after having been missing', async () => {
+    const { channel, location, result } = openWithoutMetamask();
+    await advance(ASK + ANSWER);
+    expect(result.current.step).toBe(0);
+    expect(location.reloads).toBe(0);
+
+    channel.install(METAMASK_STORE_ID);
+    await advance(ASK + ANSWER);
+
+    expect(location.reloads).toBe(1);
+    await advance(10 * ASK);
+    expect(location.reloads).toBe(1);
+  });
+
+
+  it("recognises the Edge Add-ons build by its own id", async () => {
+    const { channel, location } = openWithoutMetamask();
+    await advance(ASK + ANSWER);
+
+    channel.install(METAMASK_EDGE_ID);
+    await advance(ASK + ANSWER);
+
+    expect(location.reloads).toBe(1);
+  });
+
+
+  it('asks after both store builds and nothing else — one connection each per question', async () => {
+    const { channel } = openWithoutMetamask();
+    await advance(ASK);
+    expect(channel.asked).toEqual([METAMASK_STORE_ID, METAMASK_EDGE_ID]);
+    await advance(ASK);
+    expect(channel.asked).toEqual([METAMASK_STORE_ID, METAMASK_EDGE_ID, METAMASK_STORE_ID, METAMASK_EDGE_ID]);
+  });
+
+
+  it('waits a full interval before the first question', async () => {
+    const { channel } = openWithoutMetamask();
+    await advance(ASK - 1);
+    expect(channel.asked).toEqual([]);
+  });
+
+
+  it('never reloads for an extension that answered from the first question on — it was there at load and still gave no provider', async () => {
+    const { location, result } = openWithoutMetamask({ installed: [METAMASK_STORE_ID] });
+
+    await advance(10 * ASK);
+
+    expect(location.reloads).toBe(0);
+    expect(result.current.step).toBe(0);
+  });
+
+
+  it('reloads when such an extension goes away and comes back — it has been seen missing then', async () => {
+    const { channel, location } = openWithoutMetamask({ installed: [METAMASK_STORE_ID] });
+    await advance(ASK + ANSWER);
+    channel.remove(METAMASK_STORE_ID);
+    await advance(ASK + ANSWER);
+    expect(location.reloads).toBe(0);
+
+    channel.install(METAMASK_STORE_ID);
+    await advance(ASK + ANSWER);
+
+    expect(location.reloads).toBe(1);
+  });
+
+
+  it('is not fooled by another extension offering the channel — an id nobody has is refused', async () => {
+    const { channel, location } = openWithoutMetamask({ installed: [NO_SUCH_EXTENSION] });
+
+    await advance(6 * ASK);
+
+    expect(location.reloads).toBe(0);
+    expect(channel.asked).not.toContain(NO_SUCH_EXTENSION);
+  });
+
+
+  it('asks at once when the student comes back to the tab, without waiting for the next interval', async () => {
+    const { channel, location } = openWithoutMetamask();
+    await advance(ASK + ANSWER);
+    const asked = channel.asked.length;
+    channel.install(METAMASK_STORE_ID);
+
+    await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
+    expect(channel.asked.length).toBe(asked + 2);
+    await advance(ANSWER);
+
+    expect(location.reloads).toBe(1);
+  });
+
+
+  it('never asks at all on a page that has MetaMask — its provider is found before the first question is due', async () => {
+    vi.useFakeTimers();
+    const channel = installExtensionChannel({ installed: [METAMASK_STORE_ID] });
+    const location = installLocationDouble('/faucet/evm/sepolia');
+    installMetamask();
+    const { result } = renderWallet();
+
+    await advance(10 * ASK);
+
+    expect(result.current.installed).toBe(true);
+    expect(channel.asked).toEqual([]);
+    expect(location.reloads).toBe(0);
+  });
+
+
+  it('stops asking the moment MetaMask announces itself after all', async () => {
+    const { channel, location, result } = openWithoutMetamask();
+    await advance(ASK + ANSWER);
+    const asked = channel.asked.length;
+
+    await act(async () => { installMetamask(); });
+    expect(result.current.installed).toBe(true);
+    await advance(10 * ASK);
+
+    expect(channel.asked.length).toBe(asked);
+    expect(location.reloads).toBe(0);
+  });
+
+
+  it('closes every connection it opened, and reads the refusal so the browser logs no unchecked error', async () => {
+    const { channel } = openWithoutMetamask();
+    await advance(ASK + ANSWER);
+    expect(channel.lastErrorReads).toBeGreaterThanOrEqual(2);
+
+    channel.install(METAMASK_STORE_ID);
+    await advance(ASK + ANSWER);
+
+    expect(channel.openConnections).toBe(0);
+    expect(channel.closedByPage).toBe(1);
+  });
+
+
+  it('does nothing in a browser without the channel — no chrome.runtime, no reload, no error', async () => {
+    const { location, result } = openWithoutMetamask(null);
+
+    await advance(10 * ASK);
+
+    expect(location.reloads).toBe(0);
+    expect(result.current.step).toBe(0);
+  });
+
+
+  it('takes a channel that refuses the id outright for a no', async () => {
+    const { channel, location } = openWithoutMetamask({ installed: [METAMASK_STORE_ID], throws: true });
+
+    await advance(6 * ASK);
+
+    expect(channel.asked.length).toBeGreaterThan(0);
+    expect(location.reloads).toBe(0);
+  });
+
+
+  it('stops asking once the page is gone', async () => {
+    const { channel, unmount } = openWithoutMetamask();
+    await advance(ASK + ANSWER);
+    const asked = channel.asked.length;
+
+    unmount();
+    await advance(10 * ASK);
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    expect(channel.asked.length).toBe(asked);
+  });
+
+
+  it('does not reload for an answer that arrives after the page is gone', async () => {
+    const { channel, location, unmount } = openWithoutMetamask();
+    await advance(ASK + ANSWER);
+    channel.install(METAMASK_STORE_ID);
+    // The next question is out; its answer is still on its way
+    await advance(ASK - ANSWER + 1);
+    expect(channel.openConnections).toBe(1);
+
+    unmount();
+    await advance(ANSWER);
+
+    expect(location.reloads).toBe(0);
   });
 });
 

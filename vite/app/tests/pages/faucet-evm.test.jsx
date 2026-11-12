@@ -14,7 +14,10 @@
 //  the graph shortcut; the four-step flow — no MetaMask (and
 //  the Phantom squatter), connecting, declining, a popup
 //  already open, a wrong chain switched, added (4902) or
-//  refused, a late MetaMask; the student's own moves inside
+//  refused, a late MetaMask, a MetaMask INSTALLED while the
+//  page is open (the page reloads itself — the extension
+//  noticed through the browser's channel, or the student back
+//  from the store); the student's own moves inside
 //  MetaMask while on the page (chain, a silent switch,
 //  account, a disconnected site, a dead RPC); the claim — the
 //  signed nonce and the request it rides on, the success with
@@ -42,12 +45,13 @@ import { screen, within, waitFor, fireEvent, act } from '@testing-library/react'
 import { Link, Route, Routes, useParams } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
 import { makeQueryClient, renderPage } from '../support/render';
+import { installLocationDouble } from '../support/location';
 import { server, given, url } from '../support/backend/server';
 import { describeEndpointContract, settle, VARIANTS } from '../support/backend/contract';
 import * as f from '../support/backend/fixtures';
 import {
-  installMetamask, installPhantomEvm, rpcError,
-  MAINNET, SEPOLIA, HOODI, OTHER_ACCOUNT, ETH, SIGNATURE, USER_REJECTED, NOT_AUTHORIZED,
+  installMetamask, installPhantomEvm, installExtensionChannel, rpcError,
+  MAINNET, SEPOLIA, HOODI, OTHER_ACCOUNT, ETH, SIGNATURE, USER_REJECTED, NOT_AUTHORIZED, METAMASK_STORE_ID,
 } from '../support/wallets/metamask';
 
 
@@ -564,6 +568,56 @@ describe('The MetaMask flow', () => {
     act(() => metamask.announce());
     expect(await screen.findByRole('button', { name: 'Prijungti piniginę' })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: 'Susidiegti MetaMask' })).toBeNull();
+  });
+
+
+  it('reloads itself when MetaMask is installed while the page is open — the browser hands the extension only to a page loaded after it', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const channel = installExtensionChannel();
+    renderEvmFaucet();
+    await pageLoaded();
+    const location = installLocationDouble('/faucet/evm/sepolia');
+    await act(() => vi.advanceTimersByTimeAsync(2300));
+    expect(location.reloads).toBe(0);
+    expect(screen.getByRole('link', { name: 'Susidiegti MetaMask' })).toBeInTheDocument();
+
+    channel.install(METAMASK_STORE_ID);
+    await act(() => vi.advanceTimersByTimeAsync(2300));
+
+    expect(location.reloads).toBe(1);
+  });
+
+
+  it('reloads itself when the student comes back from installing — "Susidiegti MetaMask" pressed, the tab left and returned to', async () => {
+    renderEvmFaucet();
+    await pageLoaded();
+    const location = installLocationDouble('/faucet/evm/sepolia');
+
+    fireEvent.click(screen.getByRole('link', { name: 'Susidiegti MetaMask' }));
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(location.reloads).toBe(0);
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    expect(location.reloads).toBe(1);
+  });
+
+
+  it('with MetaMask there, a return to the tab reloads nothing and the note of an install is gone', async () => {
+    localStorage.setItem('walletInstall:MetaMask', String(Date.now()));
+    installMetamask();
+    renderEvmFaucet();
+    expect(await screen.findByRole('button', { name: 'Prijungti piniginę' })).toBeInTheDocument();
+    const location = installLocationDouble('/faucet/evm/sepolia');
+
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    expect(location.reloads).toBe(0);
+    expect(localStorage.getItem('walletInstall:MetaMask')).toBeNull();
   });
 });
 

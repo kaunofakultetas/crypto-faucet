@@ -41,11 +41,12 @@
 // -----------------------------------------------------------
 
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, within, waitFor, act } from '@testing-library/react';
+import { render, screen, within, waitFor, act, fireEvent } from '@testing-library/react';
 import { Link, Route, Routes } from 'react-router-dom';
 import { http, HttpResponse } from 'msw';
 import QRCode from 'react-qr-code';
 import { renderPage, renderApp } from '../support/render';
+import { installLocationDouble } from '../support/location';
 import { server, given, url } from '../support/backend/server';
 import { describeEndpointContract, VARIANTS, settle } from '../support/backend/contract';
 import * as f from '../support/backend/fixtures';
@@ -377,6 +378,22 @@ describe('The page and its numbers', () => {
 // -----------------------------------------------------------
 
 describe('Finding the wallet', () => {
+
+  it('reloads itself when the student comes back from installing Slush — the link pressed, the tab left and returned to', async () => {
+    renderMove();
+    await pageLoaded();
+    const location = installLocationDouble('/faucet/move/suiTestnet');
+
+    fireEvent.click(screen.getByRole('link', { name: 'Susidiegti Slush' }));
+    expect(localStorage.getItem('walletInstall:Slush')).not.toBeNull();
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden');
+    document.dispatchEvent(new Event('visibilitychange'));
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
+    document.dispatchEvent(new Event('visibilitychange'));
+
+    expect(location.reloads).toBe(1);
+  });
+
 
   it('with no Sui wallet shows three steps — no network step — the first current, and suggests Slush', async () => {
     renderMove();

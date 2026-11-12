@@ -15,6 +15,13 @@
 //  name, the last step's icon, and any extra help rendered
 //  under the switch button.
 //
+//  The install step also waits for the wallet it sent the
+//  student after: a browser shows a newly installed extension
+//  only to pages loaded afterwards, so the page reloads itself
+//  when the student comes back and the wallet is still
+//  missing (useReloadAfterInstall) — otherwise it sat on
+//  "Susidiegti …" until somebody said to press reload.
+//
 //  Split into (last used first is fine here — no root
 //  component, this is a toolbox):
 //
@@ -24,6 +31,8 @@
 //    ColorlibStepIconRoot — gradient step bubble (styled)
 //    ColorlibStepIcon     — icon inside a step bubble
 //    WalletStepper        — the step progress bar
+//    useReloadAfterInstall — the reload on the student's
+//                           return from installing the wallet
 //    WalletGateButton     — install / connect / switch button
 //    FadingAlert          — one self-fading outcome row
 //    useAlerts            — the alert list + addAlert
@@ -43,6 +52,8 @@ import HubIcon from '@mui/icons-material/Hub';
 import InstallDesktopIcon from '@mui/icons-material/InstallDesktop';
 import PowerSettingsNewIcon from '@mui/icons-material/PowerSettingsNew';
 import CheckIcon from '@mui/icons-material/Check';
+
+import { noteInstallStarted, installUnderWay, forgetInstall } from '@/utils/walletInstall';
 
 
 // How long an outcome alert stays fully visible
@@ -250,6 +261,69 @@ export function WalletStepper({ activeStep, steps, icons }) {
 
 
 // -----------------------------------------------------------
+// useReloadAfterInstall
+// -----------------------------------------------------------
+//
+// While the wallet is missing: reloads the page when the
+// student comes BACK to it after an install of that wallet
+// was started (the install link's press, remembered by
+// utils/walletInstall.js). A reload is the only way a page
+// gets to see an extension installed after it was opened, and
+// at the install step there is nothing typed to lose.
+//
+// The reload needs the student to have left this very page
+// load first — the tab hidden or the window out of focus —
+// and then to be back. A page that has only just loaded
+// never reloads itself, so there is no way into a loop: every
+// reload costs one going away and coming back. A return with
+// the wallet still missing (the install not finished) reloads
+// into the same step, and the next return counts again, for
+// as long as the note does.
+//
+// Once the wallet is found the note is dropped.
+//
+// Used by:
+//   - WalletGateButton (below)
+// -----------------------------------------------------------
+
+function useReloadAfterInstall(missing, walletName) {
+  useEffect(() => {
+    if (!missing) {
+      forgetInstall(walletName);
+      return undefined;
+    }
+
+    let away = false;
+    let reloading = false;
+
+    const leave = () => {
+      away = true;
+    };
+    const comeBack = () => {
+      if (!away || reloading || !installUnderWay(walletName)) return;
+      reloading = true;
+      window.location.reload();
+    };
+    const onVisibility = () => (document.visibilityState === 'hidden' ? leave() : comeBack());
+
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('blur', leave);
+    window.addEventListener('focus', comeBack);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('blur', leave);
+      window.removeEventListener('focus', comeBack);
+    };
+  }, [missing, walletName]);
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // WalletGateButton
 // -----------------------------------------------------------
 //
@@ -258,6 +332,11 @@ export function WalletStepper({ activeStep, steps, icons }) {
 // (step 1) or the network switch (step 2). Renders NOTHING at
 // step 3 and above — the pages put their own gas/claim UI
 // there.
+//
+// The download link opens the store in a new tab and notes
+// that an install was started — a middle click included —
+// so the page can reload itself when the student comes back
+// (useReloadAfterInstall).
 //
 // walletName / installUrl default to MetaMask. switchHelp is
 // an optional node shown under the switch button, for wallets
@@ -273,6 +352,8 @@ export function WalletGateButton({
   walletName = METAMASK_NAME, installUrl = METAMASK_DOWNLOAD_URL, switchHelp = null,
 }) {
 
+  useReloadAfterInstall(step === 0, walletName);
+
   if (step === 0) {
     return (
       <Button
@@ -282,6 +363,8 @@ export function WalletGateButton({
         rel="noopener noreferrer"
         variant="contained"
         fullWidth
+        onClick={() => noteInstallStarted(walletName)}
+        onAuxClick={() => noteInstallStarted(walletName)}
       >
         Susidiegti {walletName}
       </Button>

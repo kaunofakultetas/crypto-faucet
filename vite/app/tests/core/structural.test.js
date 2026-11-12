@@ -468,9 +468,9 @@ describe('structural rules — what the SPA remembers', () => {
   });
 
 
-  it('writes these keys: the catalog, the last picks, the favourites, and both graphs\' positions', () => {
+  it('writes these keys: the catalog, the last picks, the favourites, both graphs\' positions, and the note of a wallet install started', () => {
     expect([...new Set(storageKeyPrefixes())].sort()).toEqual([
-      'catalog:v2', 'favFaucetPicks', 'graphNodePositions:', 'lastPick:', 'utxo-graph-positions:',
+      'catalog:v2', 'favFaucetPicks', 'graphNodePositions:', 'lastPick:', 'utxo-graph-positions:', 'walletInstall:',
     ]);
   });
 

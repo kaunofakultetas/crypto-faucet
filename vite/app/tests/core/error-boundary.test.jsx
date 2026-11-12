@@ -14,8 +14,8 @@
 //  "Perkrauti" reloads and touches nothing; "Išvalyti
 //  įsimintus duomenis ir perkrauti" removes exactly the keys
 //  its list names — catalog:*, lastPick:*, favFaucetPicks,
-//  graphNodePositions:* — keeps everything else, then reloads,
-//  also when the storage refuses.
+//  graphNodePositions:*, walletInstall:* — keeps everything
+//  else, then reloads, also when the storage refuses.
 //
 //  Last, the recovery the second button exists for, through
 //  the real App: a remembered catalog the navbar cannot read
@@ -76,6 +76,7 @@ const SPA_KEYS = {
   'lastPick:erc20': 'LINK',
   favFaucetPicks: JSON.stringify(['evm:sepolia']),
   'graphNodePositions:sepolia:2026-09-29': JSON.stringify({ '0xabc': 120 }),
+  'walletInstall:MetaMask': '1794500000000',
 };
 
 const remember = (entries) => Object.entries(entries).forEach(([key, value]) => localStorage.setItem(key, value));

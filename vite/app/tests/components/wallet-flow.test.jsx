@@ -9,7 +9,11 @@
 //  icons that survive a re-render), WalletGateButton (the
 //  install link, connect and switch with their refusals routed
 //  to onError, another wallet's name / link / switch help,
-//  nothing from step 3 on), FadingAlert (a message carrying a
+//  nothing from step 3 on), the install step waiting for its
+//  wallet (the press noted, the page reloaded when the student
+//  comes back and the wallet is still missing — once per
+//  going away, per wallet, for a quarter of an hour, never on
+//  its own), FadingAlert (a message carrying a
 //  link, 8 s visible, a 0.5 s fade, the pause on pointer and
 //  focus, the close button, measured on fake timers) and
 //  useAlerts (the list, the tags, a dismiss per row,
@@ -21,6 +25,7 @@ import { useState } from 'react';
 import { screen, within, fireEvent, act, renderHook } from '@testing-library/react';
 import LocalGasStationIcon from '@mui/icons-material/LocalGasStation';
 import { renderPage } from '../support/render';
+import { installLocationDouble } from '../support/location';
 import * as f from '../support/backend/fixtures';
 import { WalletStepper, WalletGateButton, FadingAlert, useAlerts } from '@/components/WalletFlow';
 
@@ -244,6 +249,198 @@ describe('WalletGateButton', () => {
       expect(screen.queryByRole('link')).toBeNull();
       unmount();
     }
+  });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// The install step waits for its wallet
+// -----------------------------------------------------------
+//
+// A browser gives a newly installed extension only to pages
+// loaded afterwards, so the page that sent the student off to
+// install the wallet reloads itself when they come back and
+// the wallet is still missing. leave / comeBack are the tab
+// going out of sight and back; blur / focus the window losing
+// and regaining the keyboard, the two windows side by side.
+// -----------------------------------------------------------
+
+describe('The install step waits for its wallet', () => {
+
+  const NOTE = 'walletInstall:MetaMask';
+  const WAIT_MS = 15 * 60 * 1000;
+
+  const gate = (props = {}) => <WalletGateButton step={0} networkInfo={sepolia} onConnect={vi.fn()} onSwitch={vi.fn()} onError={vi.fn()} {...props} />;
+
+  // The gate at the install step, its page's reloads counted
+  function renderInstallStep(props) {
+    const location = installLocationDouble('/faucet/evm/sepolia');
+    const view = renderPage(gate(props));
+    return { location, ...view };
+  }
+
+  const visibility = (state) => {
+    vi.spyOn(document, 'visibilityState', 'get').mockReturnValue(state);
+    document.dispatchEvent(new Event('visibilitychange'));
+  };
+  const leave = () => visibility('hidden');
+  const comeBack = () => visibility('visible');
+  const pressInstall = () => fireEvent.click(screen.getByRole('link', { name: /^Susidiegti / }));
+
+
+  it('notes the press under walletInstall:<wallet>, as the time it happened', () => {
+    vi.useFakeTimers({ now: new Date('2026-11-12T10:00:00Z') });
+    renderInstallStep();
+    expect(localStorage.getItem(NOTE)).toBeNull();
+    pressInstall();
+    expect(localStorage.getItem(NOTE)).toBe(String(Date.parse('2026-11-12T10:00:00Z')));
+  });
+
+
+  it('notes a middle click too — the store opened in a background tab', () => {
+    renderInstallStep();
+    fireEvent(screen.getByRole('link', { name: 'Susidiegti MetaMask' }), new MouseEvent('auxclick', { bubbles: true, button: 1 }));
+    expect(localStorage.getItem(NOTE)).not.toBeNull();
+  });
+
+
+  it('reloads the page when the student comes back to the tab with the wallet still missing', () => {
+    const { location } = renderInstallStep();
+    pressInstall();
+    leave();
+    expect(location.reloads).toBe(0);
+    comeBack();
+    expect(location.reloads).toBe(1);
+  });
+
+
+  it('reloads when the window regains the keyboard — the store was open in a window beside it', () => {
+    const { location } = renderInstallStep();
+    pressInstall();
+    window.dispatchEvent(new Event('blur'));
+    window.dispatchEvent(new Event('focus'));
+    expect(location.reloads).toBe(1);
+  });
+
+
+  it('reloads once for a return that the tab and the window both report', () => {
+    const { location } = renderInstallStep();
+    pressInstall();
+    leave();
+    window.dispatchEvent(new Event('blur'));
+    comeBack();
+    window.dispatchEvent(new Event('focus'));
+    expect(location.reloads).toBe(1);
+  });
+
+
+  it('never reloads on its own — a page that was not left stays, whatever the browser reports', () => {
+    const { location } = renderInstallStep();
+    pressInstall();
+    comeBack();
+    window.dispatchEvent(new Event('focus'));
+    expect(location.reloads).toBe(0);
+  });
+
+
+  it('does not reload a student who never pressed the link', () => {
+    const { location } = renderInstallStep();
+    leave();
+    comeBack();
+    expect(location.reloads).toBe(0);
+  });
+
+
+  it('counts the next return too, after a reload into the same install step — the note outlives the page', () => {
+    const first = renderInstallStep();
+    pressInstall();
+    leave();
+    comeBack();
+    expect(first.location.reloads).toBe(1);
+    first.unmount();
+
+    // The reloaded page: nothing pressed on it, the note still there
+    const second = renderInstallStep();
+    leave();
+    comeBack();
+    expect(second.location.reloads).toBe(1);
+  });
+
+
+  it('stops counting a quarter of an hour after the press', () => {
+    vi.useFakeTimers({ now: new Date('2026-11-12T10:00:00Z') });
+    const { location } = renderInstallStep();
+    pressInstall();
+    vi.setSystemTime(Date.parse('2026-11-12T10:00:00Z') + WAIT_MS);
+    leave();
+    comeBack();
+    expect(location.reloads).toBe(0);
+  });
+
+
+  it('drops the note once the wallet is found, and no return reloads after that', () => {
+    const { location, rerender } = renderInstallStep();
+    pressInstall();
+    rerender(gate({ step: 1 }));
+    expect(localStorage.getItem(NOTE)).toBeNull();
+    leave();
+    comeBack();
+    expect(location.reloads).toBe(0);
+  });
+
+
+  it('drops a note left by an earlier visit when the page comes up with the wallet there', () => {
+    localStorage.setItem(NOTE, String(Date.now()));
+    renderPage(gate({ step: 3 }));
+    expect(localStorage.getItem(NOTE)).toBeNull();
+  });
+
+
+  it("keeps the wallets apart — Phantom on its way does not reload a page waiting for MetaMask", () => {
+    localStorage.setItem('walletInstall:Phantom', String(Date.now()));
+    const { location } = renderInstallStep();
+    leave();
+    comeBack();
+    expect(location.reloads).toBe(0);
+  });
+
+
+  it("waits for the wallet it names — Phantom's page reloads for Phantom, and leaves MetaMask's note alone", () => {
+    localStorage.setItem(NOTE, String(Date.now()));
+    const { location } = renderInstallStep({ walletName: 'Phantom', installUrl: 'https://phantom.com/download' });
+    pressInstall();
+    leave();
+    comeBack();
+    expect(location.reloads).toBe(1);
+    expect(localStorage.getItem('walletInstall:Phantom')).not.toBeNull();
+    expect(localStorage.getItem(NOTE)).not.toBeNull();
+  });
+
+
+  it('stops listening when the page is gone', () => {
+    const { location, unmount } = renderInstallStep();
+    pressInstall();
+    leave();
+    unmount();
+    comeBack();
+    window.dispatchEvent(new Event('focus'));
+    expect(location.reloads).toBe(0);
+  });
+
+
+  it('just stays put in a browser that blocks storage — no note, no reload, no error', () => {
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new DOMException('The operation is insecure.', 'SecurityError'); });
+    vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new DOMException('The operation is insecure.', 'SecurityError'); });
+    const { location } = renderInstallStep();
+    pressInstall();
+    leave();
+    comeBack();
+    expect(location.reloads).toBe(0);
   });
 });
 

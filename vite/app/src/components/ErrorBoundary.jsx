@@ -32,7 +32,7 @@ import { Box, Button } from '@mui/material';
 // keeps throwing. A new localStorage key belongs here too:
 // tests/core/structural.test.js compares this list with every
 // key the code writes
-const CACHE_KEY_PREFIXES = ['catalog:', 'lastPick:', 'favFaucetPicks', 'graphNodePositions:', 'utxo-graph-positions:'];
+const CACHE_KEY_PREFIXES = ['catalog:', 'lastPick:', 'favFaucetPicks', 'graphNodePositions:', 'utxo-graph-positions:', 'walletInstall:'];
 
 
 

@@ -42,6 +42,13 @@
 //    - any other method is -32601, so a page calling something
 //      new shows up in the call record instead of passing
 //
+//  A page that was open BEFORE MetaMask was installed has none
+//  of that: no provider, no announcement. What it can do, in
+//  Chromium, is ask the browser whether the extension exists —
+//  installExtensionChannel is that channel (chrome.runtime),
+//  with extensions that can be installed and removed while the
+//  test runs.
+//
 //  Every call lands in wallet.calls. Any method can be made to
 //  fail, to be declined, to hang, to wait for the test (hold,
 //  then release or decline) or to answer something else; what
@@ -84,6 +91,12 @@ export const USER_REJECTED = 'User rejected the request.';
 // What MetaMask says (error 4100) when the account may not be
 // used by the site on the wallet's current chain
 export const NOT_AUTHORIZED = 'The requested account and/or method has not been authorized by the user.';
+
+// MetaMask's extension id in the Chrome Web Store (Chrome,
+// Brave) and in Edge Add-ons, and an id no extension has
+export const METAMASK_STORE_ID = 'nkbihfbeogaeaoehlefnkodbefgpgknn';
+export const METAMASK_EDGE_ID = 'ejbalbakoplchlghecdalmeeeajnimhm';
+export const NO_SUCH_EXTENSION = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 
 export const hexChain = (id) => `0x${Number(id).toString(16)}`;
 
@@ -542,3 +555,89 @@ export const installPhantomEvm = (options = {}) => installEvmWallet({
   flags: { isMetaMask: true, isPhantom: true },
   ...options,
 });
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// installExtensionChannel
+// -----------------------------------------------------------
+//
+// Chromium's channel from a web page to the extensions that
+// allow it (chrome.runtime.connect), as a page sees it: a
+// connection to an extension that is installed stays open
+// until one side closes it; one to an id nobody has is hung
+// up a moment later, with chrome.runtime.lastError holding
+// the browser's words for the length of that callback only —
+// Chrome logs a refusal nobody read as an unchecked error,
+// so the double counts the reads.
+//
+// The handle installs and removes extensions while the test
+// runs — the student adding MetaMask next to an open page —
+// and keeps the record: every id asked for, the connections
+// still open, the ones the page closed itself. `throws`
+// makes connect itself throw, as it does for a malformed id.
+// The stubbed global is undone by setup.js.
+//
+// Used by:
+//   - hooks/use-metamask-wallet.test.jsx, pages/faucet-evm.test.jsx
+// -----------------------------------------------------------
+
+export function installExtensionChannel({ installed = [], throws = false } = {}) {
+
+  const present = new Set(installed);
+  const asked = [];
+  const open = new Set();
+  let closedByPage = 0;
+  let lastError;
+  let lastErrorReads = 0;
+
+  const runtime = {
+    connect(extensionId) {
+      asked.push(extensionId);
+      if (throws) throw new TypeError(`Invalid extension id: '${extensionId}'`);
+
+      const hangUps = [];
+      const port = {
+        name: '',
+        onDisconnect: { addListener: (listener) => hangUps.push(listener) },
+        onMessage: { addListener: () => {} },
+        postMessage: () => {},
+        disconnect() {
+          if (open.delete(port)) closedByPage += 1;
+        },
+      };
+
+      if (present.has(extensionId)) {
+        open.add(port);
+      } else {
+        queueMicrotask(() => {
+          lastError = { message: 'Could not establish connection. Receiving end does not exist.' };
+          for (const listener of hangUps) listener(port);
+          lastError = undefined;
+        });
+      }
+      return port;
+    },
+  };
+  Object.defineProperty(runtime, 'lastError', {
+    get() {
+      lastErrorReads += 1;
+      return lastError;
+    },
+  });
+
+  vi.stubGlobal('chrome', { runtime });
+
+  return {
+    asked,
+    get openConnections() { return open.size; },
+    get closedByPage() { return closedByPage; },
+    get lastErrorReads() { return lastErrorReads; },
+    install: (extensionId) => present.add(extensionId),
+    remove: (extensionId) => present.delete(extensionId),
+  };
+}
