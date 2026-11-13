@@ -49,6 +49,7 @@ import { installLocationDouble } from '../support/location';
 import { server, given, url } from '../support/backend/server';
 import { describeEndpointContract, settle, VARIANTS } from '../support/backend/contract';
 import * as f from '../support/backend/fixtures';
+import { linesOf, payoutLines } from '../support/payout';
 import {
   installMetamask, installPhantomEvm, installExtensionChannel, rpcError,
   MAINNET, SEPOLIA, HOODI, OTHER_ACCOUNT, ETH, SIGNATURE, USER_REJECTED, NOT_AUTHORIZED, METAMASK_STORE_ID,
@@ -797,7 +798,7 @@ describe('Claiming', () => {
     const { user } = renderEvmFaucet();
     await claim(user);
     const alert = await screen.findByRole('alert');
-    expect(alert.textContent).toBe(`${SUCCESS} Transakcija: ${TX_HASH}`);
+    expect(linesOf(alert)).toEqual(payoutLines(SUCCESS, TX_HASH));
     expect(within(alert).getByTestId('SuccessOutlinedIcon')).toBeInTheDocument();
     expect(await claimButton()).toHaveAttribute('aria-disabled', 'false');
   });
@@ -819,7 +820,7 @@ describe('Claiming', () => {
     const { user } = renderEvmFaucet('hoodi');
     await claim(user, 'Ethereum Hoodi');
     const alert = await screen.findByRole('alert');
-    expect(alert.textContent).toBe(`Ethereum Hoodi išsiųstas į jūsų piniginę. Transakcija: ${TX_HASH}`);
+    expect(linesOf(alert)).toEqual(payoutLines('Ethereum Hoodi išsiųstas į jūsų piniginę.', TX_HASH));
     expect(within(alert).getByRole('link', { name: TX_HASH })).toHaveAttribute('href', `https://light-hoodi.beaconcha.in/tx/${TX_HASH}`);
   });
 
@@ -833,7 +834,7 @@ describe('Claiming', () => {
     const { user } = renderEvmFaucet();
     await claim(user);
     const alert = await payoutAlert();
-    expect(alert.textContent).toBe(`${SUCCESS} Transakcija: ${TX_HASH}`);
+    expect(linesOf(alert)).toEqual(payoutLines(SUCCESS, TX_HASH));
     expect(within(alert).queryByRole('link')).toBeNull();
   });
 
@@ -984,7 +985,7 @@ describe('Claiming', () => {
     expect(await screen.findByRole('button', { name: 'Siunčiama…' })).toHaveAttribute('aria-busy', 'true');
 
     await act(async () => answer(HttpResponse.json(f.evmPayout())));
-    expect(await payoutAlert()).toHaveTextContent(`${SUCCESS} Transakcija: ${TX_HASH}`);
+    expect(linesOf(await payoutAlert())).toEqual(payoutLines(SUCCESS, TX_HASH));
     expect(await claimButton()).toHaveAttribute('aria-disabled', 'false');
   });
 
@@ -1060,7 +1061,7 @@ describe('Claiming on a network the page had MetaMask add (MetaMask 13.55 and la
     await claim(user, 'Ethereum Hoodi');
 
     const alert = await screen.findByRole('alert');
-    expect(alert.textContent).toBe(`${HOODI_SUCCESS} Transakcija: ${TX_HASH}`);
+    expect(linesOf(alert)).toEqual(payoutLines(HOODI_SUCCESS, TX_HASH));
     expect(metamask.callsTo('wallet_requestPermissions')).toEqual([{ method: 'wallet_requestPermissions', params: [{ eth_accounts: {} }] }]);
     expect(metamask.callsTo('personal_sign')).toHaveLength(2);
     expect(payouts).toHaveLength(1);

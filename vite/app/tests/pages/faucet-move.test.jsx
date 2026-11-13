@@ -50,6 +50,7 @@ import { installLocationDouble } from '../support/location';
 import { server, given, url } from '../support/backend/server';
 import { describeEndpointContract, VARIANTS, settle } from '../support/backend/contract';
 import * as f from '../support/backend/fixtures';
+import { linesOf, payoutLines } from '../support/payout';
 import {
   STUDENT_SUI, OTHER_SUI, SUI_SIGNATURE, ALL_SUI_CHAINS,
   installSuiWallet, suiAccount, walletError,
@@ -798,7 +799,7 @@ describe('The claim', () => {
     const { user, claim } = await atClaimStep();
     await user.click(claim);
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent(exactly(`Sui Testnet išsiųstas į jūsų piniginę. Transakcija: ${TXID}`));
+    expect(linesOf(alert)).toEqual(payoutLines('Sui Testnet išsiųstas į jūsų piniginę.', TXID));
     const link = within(alert).getByRole('link', { name: TXID });
     expect(link).toHaveAttribute('href', `https://suiscan.xyz/testnet/tx/${TXID}`);
     expect(link).toHaveAttribute('target', '_blank');
@@ -817,7 +818,7 @@ describe('The claim', () => {
     const { user, claim } = await atClaimStep();
     await user.click(claim);
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent(exactly(`Sui Testnet išsiųstas į jūsų piniginę. Transakcija: ${TXID}`));
+    expect(linesOf(alert)).toEqual(payoutLines('Sui Testnet išsiųstas į jūsų piniginę.', TXID));
     expect(within(alert).queryByRole('link')).toBeNull();
   });
 

@@ -51,6 +51,7 @@ import { installLocationDouble } from '../support/location';
 import { server, given, url } from '../support/backend/server';
 import { describeEndpointContract, VARIANTS, settle } from '../support/backend/contract';
 import * as f from '../support/backend/fixtures';
+import { linesOf, payoutLines } from '../support/payout';
 import { STUDENT_SOL, OTHER_SOL, SOL_SIGNATURE, createPhantom, installPhantom, phantomError } from '../support/wallets/phantom';
 import FaucetSVM from '@/pages/Faucet_SVM/Page';
 
@@ -769,7 +770,7 @@ describe('The claim', () => {
     const { user, claim } = await atClaimStep();
     await user.click(claim);
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent(exactly(`Solana Devnet išsiųstas į jūsų piniginę. Transakcija: ${TXID}`));
+    expect(linesOf(alert)).toEqual(payoutLines('Solana Devnet išsiųstas į jūsų piniginę.', TXID));
     const link = within(alert).getByRole('link', { name: TXID });
     // The Solana explorer learns its cluster after the question
     // mark — the transaction's path goes in front of it
@@ -801,7 +802,7 @@ describe('The claim', () => {
     const { user, claim } = await atClaimStep();
     await user.click(claim);
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent(exactly(`Solana Devnet išsiųstas į jūsų piniginę. Transakcija: ${TXID}`));
+    expect(linesOf(alert)).toEqual(payoutLines('Solana Devnet išsiųstas į jūsų piniginę.', TXID));
     expect(within(alert).queryByRole('link')).toBeNull();
   });
 

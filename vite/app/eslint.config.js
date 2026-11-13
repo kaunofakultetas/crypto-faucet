@@ -55,4 +55,18 @@ export default [
     languageOptions: { globals: { ...globals.browser, ...globals.node } },
     rules: { 'react-refresh/only-export-components': 'off' },
   },
+  // The MetaMask browser suite is node code that drives a real
+  // browser (Playwright, not vitest), and some of its
+  // functions are handed to the page to run there — both sets
+  // of globals are real. Its .mjs files match no block above
+  // and would otherwise be read without a single rule
+  {
+    files: ['tests-metamask/**/*.{js,mjs}'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      globals: { ...globals.browser, ...globals.node },
+    },
+    rules: { ...js.configs.recommended.rules },
+  },
 ]

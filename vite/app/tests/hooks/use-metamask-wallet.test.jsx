@@ -358,13 +358,13 @@ describe('Finding MetaMask', () => {
 // the page sat on "Susidiegti MetaMask" until somebody pressed
 // reload. Chromium does let the page ask whether the extension
 // EXISTS (chrome.runtime.connect to its id), so a hook without
-// MetaMask asks every second and a half, and when the student
-// returns to the tab, and reloads the page once the extension
-// answers — having seen it missing first, so a wallet that was
-// there all along and still gave no provider never starts a
-// loop. The timers are faked and advanced by hand: ASK is one
-// question's interval, ANSWER the wait a connection must
-// survive to count.
+// MetaMask asks at once, then every second and a half, and
+// when the student returns to the tab, and reloads the page
+// once the extension answers — having seen it missing first,
+// so a wallet that was there all along and still gave no
+// provider never starts a loop. The timers are faked and
+// advanced by hand: ASK is one question's interval, ANSWER
+// the wait a connection must survive to count.
 // -----------------------------------------------------------
 
 describe('MetaMask installed while the page is open', () => {
@@ -410,19 +410,23 @@ describe('MetaMask installed while the page is open', () => {
   });
 
 
-  it('asks after both store builds and nothing else — one connection each per question', async () => {
+  it('asks after both store builds and nothing else — one connection each per question, the first at once', async () => {
     const { channel } = openWithoutMetamask();
-    await advance(ASK);
+    await advance(0);
     expect(channel.asked).toEqual([METAMASK_STORE_ID, METAMASK_EDGE_ID]);
     await advance(ASK);
     expect(channel.asked).toEqual([METAMASK_STORE_ID, METAMASK_EDGE_ID, METAMASK_STORE_ID, METAMASK_EDGE_ID]);
   });
 
 
-  it('waits a full interval before the first question', async () => {
-    const { channel } = openWithoutMetamask();
-    await advance(ASK - 1);
-    expect(channel.asked).toEqual([]);
+  it('notices an install that completes right after the page loaded — it was asked after before that', async () => {
+    const { channel, location } = openWithoutMetamask();
+    await advance(100);
+
+    channel.install(METAMASK_STORE_ID);
+    await advance(ASK + ANSWER);
+
+    expect(location.reloads).toBe(1);
   });
 
 

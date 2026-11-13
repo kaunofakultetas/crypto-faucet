@@ -43,6 +43,7 @@ import { renderPage, renderApp } from '../support/render';
 import { server, given, url } from '../support/backend/server';
 import { describeEndpointContract, VARIANTS, settle } from '../support/backend/contract';
 import * as f from '../support/backend/fixtures';
+import { linesOf, payoutLines } from '../support/payout';
 import FaucetUTXO from '@/pages/Faucet_UTXO/Page';
 
 
@@ -493,7 +494,7 @@ describe('The payout', () => {
     await balancesLoaded();
     await requestTo(user, f.JONAS);
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent(`Išsiųsta 0.1 tBTC4. Transakcija: ${TXID}`);
+    expect(linesOf(alert)).toEqual(payoutLines('Išsiųsta 0.1 tBTC4.', TXID));
     const link = within(alert).getByRole('link', { name: TXID });
     expect(link).toHaveAttribute('href', `https://mempool.space/testnet4/tx/${TXID}`);
     expect(link).toHaveAttribute('target', '_blank');
@@ -529,7 +530,7 @@ describe('The payout', () => {
     await balancesLoaded();
     await requestTo(user, f.JONAS);
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent(`Išsiųsta 0.1 tBTC4. Transakcija: ${TXID}`);
+    expect(linesOf(alert)).toEqual(payoutLines('Išsiųsta 0.1 tBTC4.', TXID));
     expect(within(alert).queryByRole('link')).toBeNull();
   });
 
@@ -540,7 +541,7 @@ describe('The payout', () => {
     await balancesLoaded();
     await requestTo(user, f.JONAS);
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent(`Išsiųsta 0.1 tBTC4. Transakcija: ${TXID}`);
+    expect(linesOf(alert)).toEqual(payoutLines('Išsiųsta 0.1 tBTC4.', TXID));
     expect(within(alert).queryByRole('link')).toBeNull();
   });
 
@@ -808,7 +809,7 @@ describe('Switching networks', () => {
     await screen.findByRole('heading', { level: 1, name: "KNF Coin faucet'as" });
     await user.clear(addressField('KNF'));
     await requestTo(user, KNF_STUDENT, 'KNF');
-    expect(await screen.findByRole('alert')).toHaveTextContent(`Išsiųsta 1000 KNF. Transakcija: ${TXID}`);
+    expect(linesOf(await screen.findByRole('alert'))).toEqual(payoutLines('Išsiųsta 1000 KNF.', TXID));
     expect(calls).toEqual(['btc4', 'knf']);
   });
 
@@ -825,7 +826,7 @@ describe('Switching networks', () => {
     // Still its request, still in flight
     expect(screen.getByRole('button', { name: 'Siunčiama…' })).toBeDisabled();
     await held.release();
-    expect(await screen.findByRole('alert')).toHaveTextContent(`Išsiųsta 0.1 tBTC4. Transakcija: ${TXID}`);
+    expect(linesOf(await screen.findByRole('alert'))).toEqual(payoutLines('Išsiųsta 0.1 tBTC4.', TXID));
   });
 });
 

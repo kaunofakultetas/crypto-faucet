@@ -632,9 +632,11 @@ export default function useMetamaskWallet(expectedChainId) {
   // answers from the first question on was there when the page
   // loaded and still gave it no provider (switched off for
   // this site, say), and reloading for that would never end.
-  // The first question waits a full interval — a page that has
-  // MetaMask finds its provider within milliseconds and never
-  // asks at all.
+  // A page whose MetaMask has not announced itself asks at
+  // once — an install that completes right after the page
+  // loaded would otherwise answer the first question already
+  // and never be seen missing. A page that has MetaMask holds
+  // its provider before it mounts and never asks at all.
   useEffect(() => {
     if (installed) return undefined;
 
@@ -660,6 +662,7 @@ export default function useMetamaskWallet(expectedChainId) {
 
     const tick = setInterval(ask, INSTALL_PROBE_MS);
     document.addEventListener('visibilitychange', ask);
+    if (!getMetamaskProvider()) ask();
     return () => {
       stopped = true;
       clearInterval(tick);

@@ -4,6 +4,11 @@ The vitest suite of the faucet SPA: every page, component and hook
 rendered in jsdom against a fake backend (msw), with no real backend,
 wallet, browser or network anywhere.
 
+What the real MetaMask does with these pages is checked by a separate
+suite that runs a real browser, `../tests-metamask` (see its README) — the
+wallet doubles here behave the way MetaMask is supposed to, which is
+not always the way the build students install does.
+
 ## Running
 
 ```sh
@@ -28,7 +33,7 @@ the suite like the app.
 
 | Folder | What lives there |
 |---|---|
-| `support/` | The harness: `setup.js` (polyfills, the backend double's lifecycle, the per-test slate, the console and unhandled-request guards), `render.jsx` (`renderPage`, `renderApp`), `location.js`, `backend/` (the msw server with `given.*`, the default `handlers.js`, `fixtures.js`, the `contract.js` matrix) and the wallet doubles |
+| `support/` | The harness: `setup.js` (polyfills, the backend double's lifecycle, the per-test slate, the console and unhandled-request guards), `render.jsx` (`renderPage`, `renderApp`), `location.js`, `payout.js` (an element read line by line, and the lines every payout alert has), `backend/` (the msw server with `given.*`, the default `handlers.js`, `fixtures.js`, the `contract.js` matrix) and the wallet doubles |
 | `core/` | The app as a whole: the harness smoke test, structural rules (every backend call has a handler …), App routing and titles, the error boundary |
 | `components/` | Shared components: Navbar, FaucetPicker, AssetIcon, UniversalModal, WalletFlow, Footer, ErrorCard |
 | `hooks/` | The wallet hooks (MetaMask, Phantom, Sui) against wallet doubles |
@@ -81,6 +86,11 @@ What the suite learned the hard way:
 - **Clipboard.** `userEvent.setup()` (inside `renderPage` / `renderApp`)
   installs its own clipboard on `navigator`; spy on
   `navigator.clipboard.writeText` rather than stubbing the global.
+- **Line breaks.** An element's text content carries no trace of a
+  `<br>`: `a<br/>b` reads `ab`, with the break or without it. Where the
+  lines are the point, read them with `linesOf` (`support/payout.js`).
+  The payout alert's layout is written once, in `payoutLines`, for all
+  five faucet pages.
 - **Dialogs.** An open MUI dialog hides the rest of the page from role
   queries (`aria-hidden`) — read the page behind it with
   `{ hidden: true }`.

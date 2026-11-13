@@ -1,0 +1,9 @@
+{
+  "name": "faucet-metamask-tests",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@playwright/test": "1.56.1",
+    "ethers": "6.17.0"
+  }
+}

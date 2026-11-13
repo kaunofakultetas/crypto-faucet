@@ -1,0 +1,37 @@
+{
+  "deployments": [
+    {
+      "balance": 145.0,
+      "balance_error": null,
+      "block_explorer_urls": [
+        "https://sepolia.etherscan.io"
+      ],
+      "chain_id": 11155111,
+      "chain_name": "Sepolia",
+      "contract_address": "0x779877A7B0D9E8603169DdbD7836e478b4624789",
+      "full_name": "Ethereum Sepolia",
+      "icon": "/api/icons/evm/sepolia",
+      "min_native_wei": "100000000000000000",
+      "native_currency": {
+        "decimals": 18,
+        "name": "Ethereum",
+        "symbol": "SepETH"
+      },
+      "network": "sepolia",
+      "rpc_urls": [
+        "https://rpc.sepolia.org"
+      ],
+      "short_name": "SepETH",
+      "wallet_native_error": null,
+      "wallet_native_wei": null
+    }
+  ],
+  "faucet_address": "0x87efe7dfb3b49162385bbe36ec0f3e5f3b41ed7d",
+  "token": {
+    "chunk_size": 5.0,
+    "decimals": 18,
+    "icon": "/api/icons/erc20/LINK",
+    "name": "Chainlink",
+    "symbol": "LINK"
+  }
+}

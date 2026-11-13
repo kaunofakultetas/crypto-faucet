@@ -1,0 +1,131 @@
+{
+  "default_network": "sepolia",
+  "networks": {
+    "arbitrumSepolia": {
+      "block_explorer_urls": [
+        "https://sepolia.arbiscan.io"
+      ],
+      "chain_id": 421614,
+      "chain_name": "Arbitrum Sepolia",
+      "faucet_address": "0x87EfE7dfB3b49162385bBE36EC0f3e5F3b41ed7D",
+      "full_name": "Arbitrum Sepolia",
+      "has_explorer": false,
+      "icon": "/api/icons/evm/arbitrumSepolia",
+      "id": 7,
+      "native_currency": {
+        "decimals": 18,
+        "name": "Ethereum",
+        "symbol": "ETH"
+      },
+      "rpc_urls": [
+        "https://sepolia.arbitrum.io/rpc"
+      ],
+      "short_name": "ETH"
+    },
+    "hoodi": {
+      "block_explorer_urls": [
+        "https://light-hoodi.beaconcha.in"
+      ],
+      "chain_id": 560048,
+      "chain_name": "Ethereum Hoodi",
+      "faucet_address": "0x87EfE7dfB3b49162385bBE36EC0f3e5F3b41ed7D",
+      "full_name": "Ethereum Hoodi",
+      "has_explorer": true,
+      "icon": "/api/icons/evm/hoodi",
+      "id": 6,
+      "native_currency": {
+        "decimals": 18,
+        "name": "Ethereum",
+        "symbol": "ETH"
+      },
+      "rpc_urls": [
+        "https://rpc.hoodi.ethpandaops.io"
+      ],
+      "short_name": "ETH"
+    },
+    "lineaSepolia": {
+      "block_explorer_urls": [
+        "https://sepolia.lineascan.build"
+      ],
+      "chain_id": 59141,
+      "chain_name": "Linea Sepolia",
+      "faucet_address": "0x87EfE7dfB3b49162385bBE36EC0f3e5F3b41ed7D",
+      "full_name": "Linea Sepolia",
+      "has_explorer": true,
+      "icon": "/api/icons/evm/lineaSepolia",
+      "id": 5,
+      "native_currency": {
+        "decimals": 18,
+        "name": "LineaETH",
+        "symbol": "LineaETH"
+      },
+      "rpc_urls": [
+        "https://linea-sepolia-rpc.publicnode.com"
+      ],
+      "short_name": "ETH"
+    },
+    "polygonAmoy": {
+      "block_explorer_urls": [
+        "https://amoy.polygonscan.com"
+      ],
+      "chain_id": 80002,
+      "chain_name": "Amoy",
+      "faucet_address": "0x87EfE7dfB3b49162385bBE36EC0f3e5F3b41ed7D",
+      "full_name": "Polygon Amoy",
+      "has_explorer": true,
+      "icon": "/api/icons/evm/polygonAmoy",
+      "id": 8,
+      "native_currency": {
+        "decimals": 18,
+        "name": "POL",
+        "symbol": "POL"
+      },
+      "rpc_urls": [
+        "https://polygon-amoy-bor-rpc.publicnode.com"
+      ],
+      "short_name": "POL"
+    },
+    "sepolia": {
+      "block_explorer_urls": [
+        "https://sepolia.etherscan.io"
+      ],
+      "chain_id": 11155111,
+      "chain_name": "Sepolia",
+      "faucet_address": "0x87EfE7dfB3b49162385bBE36EC0f3e5F3b41ed7D",
+      "full_name": "Ethereum Sepolia",
+      "has_explorer": true,
+      "icon": "/api/icons/evm/sepolia",
+      "id": 1,
+      "native_currency": {
+        "decimals": 18,
+        "name": "Ethereum",
+        "symbol": "SepETH"
+      },
+      "rpc_urls": [
+        "https://rpc.sepolia.org"
+      ],
+      "short_name": "SepETH"
+    },
+    "zkSyncSepolia": {
+      "block_explorer_urls": [
+        "https://sepolia.explorer.zksync.io"
+      ],
+      "chain_id": 300,
+      "chain_name": "zkSync Sepolia Testnet",
+      "faucet_address": "0x87EfE7dfB3b49162385bBE36EC0f3e5F3b41ed7D",
+      "full_name": "zkSync Sepolia",
+      "has_explorer": true,
+      "icon": "/api/icons/evm/zkSyncSepolia",
+      "id": 3,
+      "native_currency": {
+        "decimals": 18,
+        "name": "Ethereum",
+        "symbol": "ETH"
+      },
+      "rpc_urls": [
+        "https://sepolia.era.zksync.dev"
+      ],
+      "short_name": "ETH"
+    }
+  }
+}

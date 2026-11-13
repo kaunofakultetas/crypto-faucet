@@ -46,6 +46,7 @@ import { renderPage } from '../support/render';
 import { server, given, url } from '../support/backend/server';
 import { describeEndpointContract, settle, VARIANTS } from '../support/backend/contract';
 import * as f from '../support/backend/fixtures';
+import { linesOf, payoutLines } from '../support/payout';
 import {
   installMetamask, rpcError,
   MAINNET, SEPOLIA, HOODI, OTHER_ACCOUNT, SIGNATURE, USER_REJECTED,
@@ -721,7 +722,7 @@ describe('Claiming a token', () => {
     await user.click(claimIn(hoodi));
 
     const alert = await within(hoodi).findByRole('alert');
-    expect(alert.textContent).toBe(`${SUCCESS} Transakcija: ${TX_HASH}`);
+    expect(linesOf(alert)).toEqual(payoutLines(SUCCESS, TX_HASH));
     expect(within(alert).getByTestId('SuccessOutlinedIcon')).toBeInTheDocument();
     expect(within(alert).getByRole('link', { name: TX_HASH })).toHaveAttribute('href', `https://light-hoodi.beaconcha.in/tx/${TX_HASH}`);
     expect(payouts[0].params).toEqual({ network: 'hoodi', symbol: 'LINK' });
@@ -735,7 +736,7 @@ describe('Claiming a token', () => {
     const card = await readyToClaim();
     await user.click(claimIn(card));
     const alert = await payoutAlert(card);
-    expect(alert.textContent).toBe(`${SUCCESS} Transakcija: ${TX_HASH}`);
+    expect(linesOf(alert)).toEqual(payoutLines(SUCCESS, TX_HASH));
     const link = within(alert).getByRole('link', { name: TX_HASH });
     expect(link).toHaveAttribute('href', `https://sepolia.etherscan.io/tx/${TX_HASH}`);
     expect(link).toHaveAttribute('target', '_blank');
@@ -750,7 +751,7 @@ describe('Claiming a token', () => {
     const card = await readyToClaim();
     await user.click(claimIn(card));
     const alert = await payoutAlert(card);
-    expect(alert.textContent).toBe(`${SUCCESS} Transakcija: ${TX_HASH}`);
+    expect(linesOf(alert)).toEqual(payoutLines(SUCCESS, TX_HASH));
     expect(within(alert).queryByRole('link')).toBeNull();
   });
 
@@ -1334,7 +1335,7 @@ describe('The token poll and a token switch', () => {
     expect(await within(cardOf('Ethereum Sepolia')).findByRole('button', { name: 'Siunčiama…' })).toHaveAttribute('aria-busy', 'true');
 
     await act(async () => answer(HttpResponse.json(f.erc20Payout())));
-    expect(await payoutAlert(cardOf('Ethereum Sepolia'))).toHaveTextContent(`${SUCCESS} Transakcija: ${TX_HASH}`);
+    expect(linesOf(await payoutAlert(cardOf('Ethereum Sepolia')))).toEqual(payoutLines(SUCCESS, TX_HASH));
     await waitFor(() => expect(claimIn(cardOf('Ethereum Sepolia'))).not.toHaveAttribute('aria-disabled'));
   });
 

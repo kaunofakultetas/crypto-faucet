@@ -1,0 +1,56 @@
+# -----------------------------------------------------------
+#  [*] Frontend — the image the MetaMask tests run in
+#
+#  A real Chromium, the real MetaMask extension and the built
+#  faucet site in one image, so the tests can run with no
+#  network at all (runMetamaskTests.sh). Everything that needs
+#  the internet happens here, while the image is built:
+#
+#    - Playwright's own image brings Chromium and node; the
+#      test runner installed on top must be the SAME version
+#      as the image's tag (app/tests-metamask/package.json),
+#      or it looks for a Chromium the image does not have
+#    - MetaMask, by default the build the Chrome Web Store
+#      serves on the day (METAMASK_VERSION picks a release
+#      instead; METAMASK_FETCHED only makes the day part of
+#      the layer, so a new day fetches anew)
+#    - an OLDER MetaMask release (METAMASK_PREVIOUS), under
+#      which the tests make the wallet of a student who comes
+#      back at a later lecture — today's build is put over it
+#      then, as MetaMask updates itself between lectures
+#
+#  The site is NOT built here: it is copied out of the
+#  production Dockerfile's builder stage, which the run script
+#  builds first under the name below — the tests see exactly
+#  the site that ships.
+# -----------------------------------------------------------
+FROM mcr.microsoft.com/playwright:v1.56.1-noble
+
+WORKDIR /work/harness
+
+
+# The test runner, matching the image's Chromium
+COPY app/tests-metamask/package.json ./
+RUN npm install --no-audit --no-fund
+
+
+# The older MetaMask a returning student's wallet was made under
+ARG METAMASK_PREVIOUS=13.54.0
+COPY app/tests-metamask/fetch-metamask.mjs ./
+RUN node fetch-metamask.mjs "${METAMASK_PREVIOUS}" /work/extension-previous
+
+
+# MetaMask, unpacked under the store's extension id
+ARG METAMASK_VERSION=store
+ARG METAMASK_FETCHED=never
+RUN echo "MetaMask: ${METAMASK_VERSION}, fetched ${METAMASK_FETCHED}" \
+ && node fetch-metamask.mjs "${METAMASK_VERSION}" /work/extension
+
+
+# The tests, and the site exactly as the production build makes it
+COPY app/tests-metamask/ ./
+COPY --from=faucet-vite-check /app/dist /work/site
+
+
+USER pwuser
+CMD ["npx", "playwright", "test"]

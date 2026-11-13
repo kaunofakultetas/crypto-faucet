@@ -1,0 +1,236 @@
+{
+  "erc20": {
+    "default_token": "LINK",
+    "tokens": {
+      "FOLD": {
+        "chunk_size": 5.0,
+        "decimals": 18,
+        "icon": "/api/icons/erc20/FOLD",
+        "name": "Interfold",
+        "networks": [
+          "sepolia"
+        ],
+        "symbol": "FOLD"
+      },
+      "LINK": {
+        "chunk_size": 5.0,
+        "decimals": 18,
+        "icon": "/api/icons/erc20/LINK",
+        "name": "Chainlink",
+        "networks": [
+          "sepolia"
+        ],
+        "symbol": "LINK"
+      }
+    }
+  },
+  "evm": {
+    "default_network": "sepolia",
+    "networks": {
+      "arbitrumSepolia": {
+        "block_explorer_urls": [
+          "https://sepolia.arbiscan.io"
+        ],
+        "chain_id": 421614,
+        "chain_name": "Arbitrum Sepolia",
+        "faucet_address": "0x87EfE7dfB3b49162385bBE36EC0f3e5F3b41ed7D",
+        "full_name": "Arbitrum Sepolia",
+        "has_explorer": false,
+        "icon": "/api/icons/evm/arbitrumSepolia",
+        "id": 7,
+        "native_currency": {
+          "decimals": 18,
+          "name": "Ethereum",
+          "symbol": "ETH"
+        },
+        "rpc_urls": [
+          "https://sepolia.arbitrum.io/rpc"
+        ],
+        "short_name": "ETH"
+      },
+      "hoodi": {
+        "block_explorer_urls": [
+          "https://light-hoodi.beaconcha.in"
+        ],
+        "chain_id": 560048,
+        "chain_name": "Ethereum Hoodi",
+        "faucet_address": "0x87EfE7dfB3b49162385bBE36EC0f3e5F3b41ed7D",
+        "full_name": "Ethereum Hoodi",
+        "has_explorer": true,
+        "icon": "/api/icons/evm/hoodi",
+        "id": 6,
+        "native_currency": {
+          "decimals": 18,
+          "name": "Ethereum",
+          "symbol": "ETH"
+        },
+        "rpc_urls": [
+          "https://rpc.hoodi.ethpandaops.io"
+        ],
+        "short_name": "ETH"
+      },
+      "lineaSepolia": {
+        "block_explorer_urls": [
+          "https://sepolia.lineascan.build"
+        ],
+        "chain_id": 59141,
+        "chain_name": "Linea Sepolia",
+        "faucet_address": "0x87EfE7dfB3b49162385bBE36EC0f3e5F3b41ed7D",
+        "full_name": "Linea Sepolia",
+        "has_explorer": true,
+        "icon": "/api/icons/evm/lineaSepolia",
+        "id": 5,
+        "native_currency": {
+          "decimals": 18,
+          "name": "LineaETH",
+          "symbol": "LineaETH"
+        },
+        "rpc_urls": [
+          "https://linea-sepolia-rpc.publicnode.com"
+        ],
+        "short_name": "ETH"
+      },
+      "polygonAmoy": {
+        "block_explorer_urls": [
+          "https://amoy.polygonscan.com"
+        ],
+        "chain_id": 80002,
+        "chain_name": "Amoy",
+        "faucet_address": "0x87EfE7dfB3b49162385bBE36EC0f3e5F3b41ed7D",
+        "full_name": "Polygon Amoy",
+        "has_explorer": true,
+        "icon": "/api/icons/evm/polygonAmoy",
+        "id": 8,
+        "native_currency": {
+          "decimals": 18,
+          "name": "POL",
+          "symbol": "POL"
+        },
+        "rpc_urls": [
+          "https://polygon-amoy-bor-rpc.publicnode.com"
+        ],
+        "short_name": "POL"
+      },
+      "sepolia": {
+        "block_explorer_urls": [
+          "https://sepolia.etherscan.io"
+        ],
+        "chain_id": 11155111,
+        "chain_name": "Sepolia",
+        "faucet_address": "0x87EfE7dfB3b49162385bBE36EC0f3e5F3b41ed7D",
+        "full_name": "Ethereum Sepolia",
+        "has_explorer": true,
+        "icon": "/api/icons/evm/sepolia",
+        "id": 1,
+        "native_currency": {
+          "decimals": 18,
+          "name": "Ethereum",
+          "symbol": "SepETH"
+        },
+        "rpc_urls": [
+          "https://rpc.sepolia.org"
+        ],
+        "short_name": "SepETH"
+      },
+      "zkSyncSepolia": {
+        "block_explorer_urls": [
+          "https://sepolia.explorer.zksync.io"
+        ],
+        "chain_id": 300,
+        "chain_name": "zkSync Sepolia Testnet",
+        "faucet_address": "0x87EfE7dfB3b49162385bBE36EC0f3e5F3b41ed7D",
+        "full_name": "zkSync Sepolia",
+        "has_explorer": true,
+        "icon": "/api/icons/evm/zkSyncSepolia",
+        "id": 3,
+        "native_currency": {
+          "decimals": 18,
+          "name": "Ethereum",
+          "symbol": "ETH"
+        },
+        "rpc_urls": [
+          "https://sepolia.era.zksync.dev"
+        ],
+        "short_name": "ETH"
+      }
+    }
+  },
+  "move": {
+    "default_network": "suiTestnet",
+    "networks": {
+      "suiTestnet": {
+        "block_explorer_urls": [
+          "https://suiscan.xyz/testnet"
+        ],
+        "chunk_size": 0.5,
+        "coin_type": "0x2::sui::SUI",
+        "decimals": 9,
+        "full_name": "Sui Testnet",
+        "icon": "/api/icons/move/suiTestnet",
+        "id": 1,
+        "network": "testnet",
+        "rpc_urls": [
+          "https://graphql.testnet.sui.io/graphql"
+        ],
+        "short_name": "tSUI",
+        "symbol": "SUI"
+      }
+    }
+  },
+  "svm": {
+    "default_network": "solanaDevnet",
+    "networks": {
+      "solanaDevnet": {
+        "block_explorer_urls": [
+          "https://explorer.solana.com/?cluster=devnet"
+        ],
+        "chunk_size": 5.0,
+        "cluster": "devnet",
+        "decimals": 9,
+        "full_name": "Solana Devnet",
+        "icon": "/api/icons/svm/solanaDevnet",
+        "id": 1,
+        "rpc_urls": [
+          "https://api.devnet.solana.com"
+        ],
+        "short_name": "devSOL",
+        "symbol": "SOL"
+      }
+    }
+  },
+  "utxo": {
+    "default_network": "btc4",
+    "networks": {
+      "btc4": {
+        "block_explorer": "https://mempool.space/testnet4",
+        "chain": "testnet",
+        "chain_id": 0,
+        "chunk_size": 0.1,
+        "full_name": "Bitcoin Testnet4",
+        "icon": "/api/icons/utxo/btc4",
+        "id": 4,
+        "short_name": "tBTC4"
+      },
+      "knf": {
+        "block_explorer": "https://knfcoin.knf.vu.lt/explorer",
+        "chain": "mainnet",
+        "chain_id": 0,
+        "chunk_size": 50000.0,
+        "full_name": "KNF Coin",
+        "icon": "/api/icons/utxo/knf",
+        "id": 1,
+        "short_name": "KNF"
+      },
+      "ltc4": {
+        "block_explorer": "https://litecoinspace.org/testnet",
+        "chain": "testnet",
+        "chain_id": 0,
+        "chunk_size": 100.0,
+        "full_name": "Litecoin Testnet4",
+        "icon": "/api/icons/utxo/ltc4",
+        "id": 2,
+        "short_name": "tLTC4"
+      }
+    }
+  }
+}
