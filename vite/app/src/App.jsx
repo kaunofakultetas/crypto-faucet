@@ -11,7 +11,8 @@
 //    - graph    — /graph/:network (EVM transaction flow),
 //                 /graph/utxo/:network (UTXO transactions
 //                 by block)
-//    - teaching — /sha256 (simulator), /presentations
+//    - teaching — /sha256 (simulator), /presentations,
+//                 /bitcoin-script (the script playground)
 //    - dapps    — /dapps-server launcher
 //  "/" redirects into the first faucet family that has
 //  entries configured, EVM preferred — a family the operator
@@ -65,6 +66,7 @@ import GraphUtxoPage from '@/pages/Graph_UTXO/Page';
 import BlockchainSimulatorPage from '@/pages/BlockchainSimulator/Page';
 import DappsServerPage from '@/pages/DappsServer/Page';
 import PresentationsPage from '@/pages/Presentations/Page';
+import BitcoinScriptPage from '@/pages/BitcoinScript/Page';
 import NotFoundPage from '@/pages/NotFound/Page';
 
 
@@ -85,6 +87,7 @@ const ROUTE_TITLES = [
   ['/graph', 'Transakcijų srautas'],
   ['/sha256', 'Blokų grandinės simuliatorius'],
   ['/presentations', 'Prezentacijos'],
+  ['/bitcoin-script', 'Bitcoin skriptų žaidimų aikštelė'],
   ['/dapps-server', 'DAPPS serveris'],
 ];
 
@@ -278,6 +281,7 @@ function PageArea() {
         {/* Teaching pages */}
         <Route path="sha256" element={<BlockchainSimulatorPage />} />
         <Route path="presentations" element={<PresentationsPage />} />
+        <Route path="bitcoin-script" element={<BitcoinScriptPage />} />
 
         {/* Dapps server launcher */}
         <Route path="dapps-server" element={<DappsServerPage />} />

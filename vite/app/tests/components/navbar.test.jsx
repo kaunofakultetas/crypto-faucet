@@ -114,6 +114,7 @@ describe('Navbar — the fixed parts', () => {
     expect(within(menu).getAllByRole('menuitem').map((item) => [item.textContent, item.getAttribute('href')])).toEqual([
       ['DAPPS serveris', '/dapps-server'],
       ['Blokų grandinės simuliatorius', '/sha256'],
+      ['Bitcoin skriptų žaidimų aikštelė', '/bitcoin-script'],
     ]);
   });
 
@@ -121,6 +122,7 @@ describe('Navbar — the fixed parts', () => {
   it.each([
     ['DAPPS serveris', '/dapps-server'],
     ['Blokų grandinės simuliatorius', '/sha256'],
+    ['Bitcoin skriptų žaidimų aikštelė', '/bitcoin-script'],
   ])('the tool "%s" leads to %s and the menu closes', async (name, path) => {
     const { user } = renderNavbar();
     await user.click(within(navbar()).getByRole('button', { name: 'Kiti įrankiai' }));

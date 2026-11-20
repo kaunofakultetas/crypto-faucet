@@ -492,6 +492,9 @@ function ToolsMenu() {
         <MenuItem to="/sha256" component={Link} onClick={handleClose}>
           Blokų grandinės simuliatorius
         </MenuItem>
+        <MenuItem to="/bitcoin-script" component={Link} onClick={handleClose}>
+          Bitcoin skriptų žaidimų aikštelė
+        </MenuItem>
       </Menu>
     </>
   );

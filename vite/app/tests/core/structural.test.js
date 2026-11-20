@@ -320,7 +320,7 @@ describe('structural rules — the route table', () => {
     expect(PAGE_ROUTES.map((route) => route.path)).toEqual([
       '/faucet/evm/:network', '/faucet/svm/:network', '/faucet/move/:network', '/faucet/erc20/:token', '/faucet/utxo/:network',
       '/graph/:network', '/graph/utxo/:network',
-      '/sha256', '/presentations', '/dapps-server',
+      '/sha256', '/presentations', '/bitcoin-script', '/dapps-server',
     ]);
     expect(appRoutes().find((route) => route.path === '*')?.element).toBe('NotFoundPage');
     expect(appRoutes().find((route) => route.path === '/' && route.index)?.element).toBe('DynamicDefaultRedirect');

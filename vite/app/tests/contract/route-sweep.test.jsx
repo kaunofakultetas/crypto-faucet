@@ -131,6 +131,7 @@ const ROUTES = [
   { path: '/graph/utxo/btc4', title: 'UTXO transakcijos', shows: heading('Transakcijų Srautas - Bitcoin Testnet4'), failed: (message) => status(message ?? 'Nepavyko gauti transakcijų. Patikrinkite interneto ryšį.')() },
   { path: '/sha256', title: 'Blokų grandinės simuliatorius', shows: heading('Blokų grandinės simuliatorius') },
   { path: '/presentations', title: 'Prezentacijos', shows: heading('Prezentacijos') },
+  { path: '/bitcoin-script', title: 'Bitcoin skriptų žaidimų aikštelė', shows: heading('Bitcoin skriptų žaidimų aikštelė') },
   { path: '/dapps-server', title: 'DAPPS serveris', shows: heading('DAPPS serveris') },
   { path: '/nieko/nera', title: null, shows: text('Tokio puslapio nėra.') },
   { path: '/', index: true, ...FAUCET },

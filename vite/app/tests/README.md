@@ -33,7 +33,7 @@ the suite like the app.
 
 | Folder | What lives there |
 |---|---|
-| `support/` | The harness: `setup.js` (polyfills, the backend double's lifecycle, the per-test slate, the console and unhandled-request guards), `render.jsx` (`renderPage`, `renderApp`), `location.js`, `payout.js` (an element read line by line, and the lines every payout alert has), `backend/` (the msw server with `given.*`, the default `handlers.js`, `fixtures.js`, the `contract.js` matrix) and the wallet doubles |
+| `support/` | The harness: `setup.js` (polyfills, the backend double's lifecycle, the per-test slate, the console and unhandled-request guards), `render.jsx` (`renderPage`, `renderApp`), `location.js`, `payout.js` (an element read line by line, and the lines every payout alert has), `backend/` (the msw server with `given.*`, the default `handlers.js`, `fixtures.js`, the `contract.js` matrix), the wallet doubles, and `bitcoin-script/` (what the script playground's engine is held against: Bitcoin Core's own script vectors with the helper that runs them, and transactions built by an independent library) |
 | `core/` | The app as a whole: the harness smoke test, structural rules (every backend call has a handler …), App routing and titles, the error boundary |
 | `components/` | Shared components: Navbar, FaucetPicker, AssetIcon, UniversalModal, WalletFlow, Footer, ErrorCard |
 | `hooks/` | The wallet hooks (MetaMask, Phantom, Sui) against wallet doubles |
@@ -99,6 +99,11 @@ What the suite learned the hard way:
 - **Re-rendering.** `renderPage(...).rerender(nextUi)` keeps the frame
   and the page's state; `installLocationDouble` under `renderApp` only
   after the app has rendered (see `support/location.js`).
+- **Drag and drop.** jsdom has no layout and no `DragEvent`: build the
+  events with `createEvent.dragStart / dragOver / drop`, hand them a
+  `dataTransfer` double, define `clientX` / `clientY` on them, and give
+  the elements a size through `getBoundingClientRect` (see
+  `pages/bitcoin-script/page.test.jsx`).
 - **Contract matrix.** `render` may be async (a click that triggers the
   request); the huge-list variant repeats entries with equal keys, so
   React's "two children with the same key" warning there is expected —
