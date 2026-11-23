@@ -170,7 +170,8 @@ function KeyDetails({ pair, removable, change }) {
 //
 // One key pair: its badge and name — a button that opens the
 // pair's details — and under them its three pieces, without
-// the name on each, since it stands right above.
+// the name on each, since it stands right above. Which three
+// depends on whether the page is about Taproot (tiles.js).
 //
 // Used by:
 //   - Keys (below)
@@ -197,7 +198,7 @@ function KeyRow({ pair, lexicon, removable, rows, change }) {
       </button>
 
       <div className="flex flex-wrap gap-1.5">
-        {keyWords(pair.id).map((word) => <WordTile key={word} word={word} lexicon={lexicon} rows={rows} brief />)}
+        {keyWords(pair.id, rows.taproot).map((word) => <WordTile key={word} word={word} lexicon={lexicon} rows={rows} brief />)}
       </div>
 
       <Popover open={anchor !== null} anchorEl={anchor} onClose={() => setAnchor(null)} anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}>

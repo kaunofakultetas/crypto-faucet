@@ -9,7 +9,11 @@
 //  and references in angle brackets to things the playground
 //  works out itself — a person's public key, that key's hash,
 //  a person's signature of the spending transaction, the
-//  redeem script and its hash. Reading the text gives a list
+//  redeem script and its hash, and their counterparts in the
+//  newer kinds of lock: the witness script and its hash, a
+//  person's 32-byte key and the Taproot output key made from
+//  it, the two scripts of the Taproot tree and the control
+//  block that proves each. Reading the text gives a list
 //  of items, each either an opcode or a push of some bytes,
 //  and a list of what could not be read, by where it stands
 //  in the text.
@@ -38,8 +42,10 @@
 //  Split into:
 //
 //    WORD, REFERENCE, KINDS — how the text is cut and read
+//    UNFILLED       — why a reference has no bytes, as a code
 //    NUMBER_LIMIT   — the largest number a script may hold
 //    PAY_TO_SCRIPT_HASH — the one lock a node reads twice
+//    witnessProgramOf — a lock that is a witness program
 //    wordsOf        — a typed script cut into its words
 //    numberHex      — a number as Script writes it
 //    numberOf       — a number as Script reads it
@@ -49,6 +55,8 @@
 //    resolveScript  — references filled in
 //    serializeScript — items to bytes
 //    readScript     — bytes back to items
+//    withoutPush    — a script with one push taken out
+//    withoutSeparators — a script without its separators
 //    isPushOnly     — whether a script only puts data down
 //    describeLock   — which well-known lock a script is
 // -----------------------------------------------------------
@@ -71,8 +79,32 @@ const KINDS = {
   sig: { what: 'sig', personal: true },
   pubkey: { what: 'pubkey', personal: true },
   pubkeyhash: { what: 'pubkeyhash', personal: true },
+  xonly: { what: 'xonly', personal: true },
+  tapkey: { what: 'tapkey', personal: true },
   redeemscript: { what: 'redeemScript', personal: false },
   scripthash: { what: 'scriptHash', personal: false },
+  witnessscript: { what: 'witnessScript', personal: false },
+  witnesshash: { what: 'witnessHash', personal: false },
+  leafa: { what: 'leafA', personal: false },
+  leafb: { what: 'leafB', personal: false },
+  controla: { what: 'controlA', personal: false },
+  controlb: { what: 'controlB', personal: false },
+};
+
+// The code a reference gets when its bytes cannot be had, by
+// what it refers to
+const UNFILLED = {
+  sig: 'signature-outside-unlock',
+  redeemScript: 'no-redeem-script',
+  scriptHash: 'no-redeem-script',
+  witnessScript: 'no-witness-script',
+  witnessHash: 'no-witness-script',
+  leafA: 'no-leaf',
+  leafB: 'no-leaf',
+  controlA: 'no-control-block',
+  controlB: 'no-control-block',
+  tapkey: 'no-taproot-key',
+  xonly: 'no-taproot-key',
 };
 
 // The opcodes whose only job is to announce a push — never
@@ -120,6 +152,38 @@ export const NUMBER_LIMIT = 2 ** 39 - 1;
 // -----------------------------------------------------------
 
 export const PAY_TO_SCRIPT_HASH = /^a914([0-9a-f]{40})87$/;
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// witnessProgramOf
+// -----------------------------------------------------------
+//
+// Whether a script is a witness program, and which: a version
+// — zero, or one to sixteen — followed by ONE push of two to
+// forty bytes and nothing else. A script of that shape is not
+// run for what it says; a node reads the version and the
+// bytes and goes to the witness. Hands back both, or nothing.
+//
+// Used by:
+//   - interpreter.js — a lock, or a redeem script, that hands
+//     the spend over to the witness
+//   - describeLock (below)
+//   - model.js — which kind of signature a spend needs
+// -----------------------------------------------------------
+
+export function witnessProgramOf(hex) {
+  const shape = /^(00|5[1-9a-f]|60)([0-9a-f]{2})((?:[0-9a-f]{2})*)$/.exec(hex);
+  if (!shape) return null;
+
+  const size = parseInt(shape[2], 16);
+  if (size < 2 || size > 40 || shape[3].length !== size * 2) return null;
+  return { version: shape[1] === '00' ? 0 : parseInt(shape[1], 16) - 0x50, program: shape[3] };
+}
 
 
 
@@ -334,11 +398,17 @@ export function parseScript(text, people = []) {
 // -----------------------------------------------------------
 //
 // Fills in the bytes of every reference from the values the
-// page has worked out — public keys and their hashes by
-// name, signatures by name, the redeem script and its hash —
-// and lists the references it could not fill: a signature
-// where none can be made, a redeem script nobody wrote.
-// Items that are not references pass through as they are.
+// page has worked out — public keys, their hashes, 32-byte
+// keys and Taproot output keys by name, the redeem script and
+// the witness script with their hashes, the Taproot tree's
+// scripts and control blocks — and lists the references it
+// could not fill: a signature where none can be made, a
+// script nobody wrote, a proof for a tree that has no lock.
+// A signature is not looked up by name but by the place of
+// its word in the text: what a signature signs depends on
+// where it stands, so the same key pair's two signatures in
+// one script may differ. Items that are not references pass
+// through as they are.
 //
 // Used by:
 //   - model.js — every script on the page
@@ -347,22 +417,22 @@ export function parseScript(text, people = []) {
 export function resolveScript(items, values) {
   const problems = [];
 
-  const bytesFor = ({ what, who }) => {
+  const bytesFor = ({ what, who }, start) => {
     if (what === 'pubkey') return values.publicKeys?.[who] ?? null;
     if (what === 'pubkeyhash') return values.publicKeyHashes?.[who] ?? null;
-    if (what === 'sig') return values.signatures?.[who] ?? null;
-    if (what === 'redeemScript') return values.redeemScript ?? null;
-    return values.scriptHash ?? null;
+    if (what === 'xonly') return values.xOnlyKeys?.[who] ?? null;
+    if (what === 'tapkey') return values.outputKeys?.[who] ?? null;
+    if (what === 'sig') return values.signatures?.[start] ?? null;
+    if (what === 'leafA' || what === 'leafB') return values.leaves?.[what === 'leafA' ? 0 : 1] ?? null;
+    if (what === 'controlA' || what === 'controlB') return values.controls?.[what === 'controlA' ? 0 : 1] ?? null;
+    return values[what] ?? null;
   };
 
   const resolved = items.map((item) => {
     if (!item.ref) return item;
 
-    const hex = bytesFor(item.ref);
-    if (hex === null) {
-      const code = item.ref.what === 'sig' ? 'signature-outside-unlock' : 'no-redeem-script';
-      problems.push({ code, text: item.text, start: item.start, end: item.end });
-    }
+    const hex = bytesFor(item.ref, item.start);
+    if (hex === null) problems.push({ code: UNFILLED[item.ref.what], text: item.text, start: item.start, end: item.end });
     return { ...item, hex };
   });
 
@@ -405,11 +475,13 @@ export const serializeScript = (items) => items.map((item) => (item.type === 'op
 // opcode was given becomes a nameless opcode that fails when
 // it is reached, as it does in a node. A push that announces
 // more bytes than the script has left ends the reading, and
-// the answer says so: such a script is broken.
+// the answer says so: such a script is broken. Every item
+// remembers the byte it ends at.
 //
 // Used by:
-//   - interpreter.js — the redeem script
-//   - describeLock (below)
+//   - interpreter.js — a script that arrives as bytes: a
+//     redeem script, a witness script, a Taproot leaf
+//   - withoutPush, withoutSeparators, describeLock (below)
 // -----------------------------------------------------------
 
 export function readScript(hex) {
@@ -431,15 +503,92 @@ export function readScript(hex) {
       if (at + length > bytes.length) return { items, broken: true };
 
       const data = hex.slice(2 * at, 2 * (at + length));
-      items.push({ type: 'push', literal: 'hex', hex: data, text: `0x${data}` });
       at += length;
+      items.push({ type: 'push', literal: 'hex', hex: data, text: `0x${data}`, until: at });
     } else {
       const opcode = opcodeAt(code) ?? { name: `0x${uintLE(code, 1)}`, code, state: 'reserved', about: '' };
-      items.push({ type: 'op', opcode, text: opcode.name });
+      items.push({ type: 'op', opcode, text: opcode.name, until: at });
     }
   }
 
   return { items, broken: false };
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// withoutPush
+// -----------------------------------------------------------
+//
+// A script's bytes with every push of some bytes taken out —
+// what the original rules do to a script before a signature
+// found in it is checked against it: a signature cannot sign
+// itself. Only a push that stands where an item begins is
+// taken; the same bytes inside another item's data stay. A
+// script that cannot be read to its end keeps its unread
+// tail.
+//
+// Used by:
+//   - interpreter.js — the script a signature is checked
+//     against, under the original rules
+// -----------------------------------------------------------
+
+export function withoutPush(hex, dataHex) {
+  const push = pushOf(dataHex);
+  const next = new Map();
+  let begins = 0;
+  for (const item of readScript(hex).items) {
+    next.set(begins, item.until * 2);
+    begins = item.until * 2;
+  }
+
+  let kept = '';
+  let from = 0;
+  let at = 0;
+  for (;;) {
+    kept += hex.slice(from, at);
+    while (hex.startsWith(push, at)) at += push.length;
+    from = at;
+    if (!next.has(at)) break;
+    at = next.get(at);
+  }
+  return kept + hex.slice(from);
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// withoutSeparators
+// -----------------------------------------------------------
+//
+// A script's bytes without its OP_CODESEPARATOR opcodes — the
+// form the original rules hash a script in. A script that
+// cannot be read to its end keeps its unread tail.
+//
+// Used by:
+//   - node.js — the script inside the message a signature
+//     signs, under the original rules
+// -----------------------------------------------------------
+
+export function withoutSeparators(hex) {
+  let kept = '';
+  let from = 0;
+
+  for (const item of readScript(hex).items) {
+    if (item.type === 'op' && item.opcode.code === 0xab) {
+      kept += hex.slice(from, item.until * 2 - 2);
+      from = item.until * 2;
+    }
+  }
+  return kept + hex.slice(from);
 }
 
 
@@ -476,7 +625,10 @@ export const isPushOnly = (items) => items.every((item) => item.type === 'push' 
 // the pieces that make it that one: pay to a public key, pay
 // to a public key's hash, pay to a script's hash, a bare
 // m-of-n multisig, data that can never be spent, an empty
-// script — or none of them, a lock of the student's own.
+// script; the witness programs — to a key's hash, to a
+// script's hash, to a Taproot key, the anchor anybody may
+// spend, and one of a version nobody has given rules yet —
+// or none of them, a lock of the student's own.
 //
 // Used by:
 //   - model.js — the label on an output
@@ -484,6 +636,13 @@ export const isPushOnly = (items) => items.every((item) => item.type === 'push' 
 
 export function describeLock(hex) {
   if (hex === '') return { kind: 'empty' };
+
+  const witness = witnessProgramOf(hex);
+  if (witness?.version === 0 && witness.program.length === 40) return { kind: 'p2wpkh', hash: witness.program };
+  if (witness?.version === 0 && witness.program.length === 64) return { kind: 'p2wsh', hash: witness.program };
+  if (witness?.version === 1 && witness.program.length === 64) return { kind: 'p2tr', key: witness.program };
+  if (witness?.version === 1 && witness.program === '4e73') return { kind: 'anchor' };
+  if (witness) return { kind: 'witness', version: witness.version, program: witness.program };
 
   const keyHash = /^76a914([0-9a-f]{40})88ac$/.exec(hex);
   if (keyHash) return { kind: 'p2pkh', hash: keyHash[1] };

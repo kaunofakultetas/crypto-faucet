@@ -11,12 +11,18 @@
 //    - Lightning and the swaps: every way through each of
 //      their scripts, what time does to them, and the two
 //      chains of one swap
+//    - witness programs and Taproot: where what opens them
+//      rides, the layers of the wrapped forms, the scripts a
+//      key hides and the proof each needs
+//    - what a signature signs: each one the message the node
+//      will check it against at the place it stands
 //    - the bytes: transaction A, its id, the lock and the
 //      message B's signatures sign agree with what an
 //      independent Bitcoin library (embit) makes of the same
 //      transactions — reference.json — that library's own
 //      signatures pass the playground's check, and with them
-//      in place transaction B is the library's, byte for byte
+//      in place transaction B is the library's, byte for
+//      byte, witness and all
 //    - the words: every step of every scene can be told, and
 //      a value is called what it is
 //    - the reducer: every change a student can make — key
@@ -29,13 +35,16 @@
 
 import { describe, it, expect } from 'vitest';
 import reference from '../../support/bitcoin-script/reference.json';
+import bs58 from 'bs58';
+import { GENESIS_HEADER, SHA1_COLLISION } from '@/pages/BitcoinScript/chaindata';
 import { KEY_COLOURS, LIMITS, SPARE_NAMES } from '@/pages/BitcoinScript/constants';
-import { byteLength, textToHex } from '@/pages/BitcoinScript/engine/bytes';
+import { byteLength, hexOf, reverseBytes, textToHex } from '@/pages/BitcoinScript/engine/bytes';
+import { hash160, hash256, sha1Hex, sha256Hex } from '@/pages/BitcoinScript/engine/hashes';
 import { freshKey } from '@/pages/BitcoinScript/engine/keys';
 import { FINAL_SEQUENCE } from '@/pages/BitcoinScript/engine/node';
-import { verifyDigest } from '@/pages/BitcoinScript/engine/secp256k1';
+import { verifyDigest, verifySchnorr } from '@/pages/BitcoinScript/engine/secp256k1';
 import { EXAMPLES, FIRST_EXAMPLE, GROUPS } from '@/pages/BitcoinScript/examples';
-import { PREVIOUS_ID, buildModel, payTo, readAmount, readSequence, readWhole, reduce, signEveryone } from '@/pages/BitcoinScript/model';
+import { PREVIOUS_ID, buildModel, payTo, readAmount, readSequence, readWhole, reduce } from '@/pages/BitcoinScript/model';
 import { ageText, formatAmount, itemLabel, labelOf, lockName, narrate, problemText, sequenceMeaning } from '@/pages/BitcoinScript/narration';
 
 
@@ -88,8 +97,8 @@ describe('the scenes', () => {
   });
 
 
-  it.each(EXAMPLES)('leaves "$label" locked once its unlocking script is emptied', ({ state }) => {
-    const model = buildModel(after(state, { type: 'unlock', text: '' }));
+  it.each(EXAMPLES.filter((example) => !['anyone', 'p2a'].includes(example.id)))('leaves "$label" locked once its unlocking script and its witness are emptied', ({ state }) => {
+    const model = buildModel(after(state, { type: 'unlock', text: '' }, { type: 'witness', text: '' }));
 
     expect(model.problems).toEqual([]);
     expect(model.verification).toMatchObject({ valid: false, failed: 'script' });
@@ -126,7 +135,7 @@ describe('the scenes', () => {
   it('brings only key pairs the scene uses, always the same ones under the same numbers', () => {
     for (const { state } of EXAMPLES) {
       const numbers = state.keys.map((key) => key.id);
-      const scripts = [state.unlock, state.redeem, ...state.outputs.map((output) => output.lock)].join(' ');
+      const scripts = [state.unlock, state.witness, state.redeem, state.witnessScript, ...state.leaves, ...state.outputs.map((output) => output.lock)].join(' ');
       const named = [...scripts.matchAll(/<\w+:(\d+)>/g)].map((match) => Number(match[1]));
       const used = [...named, ...state.payments.map((payment) => payment.to)];
 
@@ -154,13 +163,100 @@ describe('the scenes', () => {
   });
 
 
-  it('sorts the scenes into three groups, the locks first', () => {
-    expect(GROUPS.map((group) => group.title)).toEqual(['Užraktai', 'Lightning', 'Atominiai mainai']);
+  it('sorts the scenes into groups, the locks first', () => {
+    expect(GROUPS.map((group) => group.title)).toEqual(['Užraktai', 'Laikas', 'SegWit', 'Taproot', 'Lightning', 'Atominiai mainai']);
     expect(GROUPS.map((group) => EXAMPLES.filter((example) => example.group === group.key).map((example) => example.label))).toEqual([
-      ['Suma', 'Slaptažodis', 'P2PK', 'P2PKH', 'Multisig', 'P2SH', 'Laiko užraktas', 'Du keliai', 'Vagystė', 'OP_RETURN'],
+      ['OP_TRUE', 'Suma', 'Slaptažodis', 'Genesis galvosūkis', 'SHA-1 kolizija', 'P2PK', 'P2PKH', 'Multisig', 'P2SH', 'Du keliai', 'Vagystė', 'OP_RETURN'],
+      ['Laiko užraktas', 'Santykinis užraktas', 'Paveldėjimas'],
+      ['P2WPKH', 'P2WSH', 'P2SH-P2WPKH', 'P2SH-P2WSH'],
+      ['P2TR raktu', 'P2TR skriptu', 'CHECKSIGADD', 'Anchor (P2A)'],
       ['to_local', 'Bauda', 'HTLC siūlomas', 'HTLC gautas'],
       ['Mainas LTC', 'Mainas BTC', 'Grąžinimas', 'Submarine'],
     ]);
+    expect(EXAMPLES.every((example) => GROUPS.some((group) => group.key === example.group))).toBe(true);
+  });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// Locks without a key, and locks that wait
+// -----------------------------------------------------------
+
+describe('locks without a key, and locks that wait', () => {
+
+  const verdict = (id, ...actions) => buildModel(after(stateOf(id), ...actions)).verification;
+
+  it('opens the coin with no lock for anybody, with nothing in the unlocking script', () => {
+    expect(stateOf('anyone').unlock).toBe('');
+    expect(verdict('anyone').valid).toBe(true);
+    expect(verdict('anyone', { type: 'payment/to', index: 0, id: SIMONA }).valid).toBe(true);
+  });
+
+
+  it('locks the genesis puzzle to the hash of Bitcoin\'s first block, and opens it with that block\'s header alone', () => {
+    const model = buildModel(stateOf('genesis'));
+
+    expect(byteLength(GENESIS_HEADER)).toBe(80);
+    expect(reverseBytes(hash256(GENESIS_HEADER))).toBe('000000000019d6689c085ae165831e934ff763ae46a2a6c172b3f1b60a8ce26f');
+    expect(model.b.spends.script.words.map((word) => word.text)).toEqual(['OP_HASH256', '0x6fe28c0ab6f1b372c1a6a246ae63f74f931e8365e15a089c68d6190000000000', 'OP_EQUAL']);
+    expect(model.verification.valid).toBe(true);
+    expect(verdict('genesis', { type: 'unlock', text: `0x${GENESIS_HEADER.replace(/7c$/, '7d')}` })).toMatchObject({ valid: false, error: { code: 'false-on-top' } });
+  });
+
+
+  it('calls the header and its hash by what they are', () => {
+    const model = buildModel(stateOf('genesis'));
+
+    expect(labelOf(GENESIS_HEADER, model.lexicon)).toMatchObject({ kind: 'bytes', text: 'bloko Nr. 0 antraštė (80 B)' });
+    expect(labelOf(hash256(GENESIS_HEADER), model.lexicon)).toMatchObject({ kind: 'hash', text: 'HASH256 maiša (bloko Nr. 0 antraštė)' });
+  });
+
+
+  it('holds the very script of the SHA-1 bounty, and opens it with the two pieces that took it', () => {
+    const model = buildModel(stateOf('collision'));
+    const address = hexOf(bs58.decode('37k7toV1Nv4DfmQbmZ8KuZDQCYK9x5KpzP'));
+
+    expect(SHA1_COLLISION.map(byteLength)).toEqual([320, 320]);
+    expect(SHA1_COLLISION[0]).not.toBe(SHA1_COLLISION[1]);
+    expect(sha1Hex(SHA1_COLLISION[0])).toBe(sha1Hex(SHA1_COLLISION[1]));
+    expect(address.slice(0, 42)).toBe(`05${hash160(model.b.redeem.hex)}`);
+    expect(model.verification.valid).toBe(true);
+    expect(labelOf(SHA1_COLLISION[1], model.lexicon).text).toBe('antras PDF (320 B)');
+  });
+
+
+  it('keeps the bounty from one piece shown twice, and from two pieces whose hashes differ', () => {
+    const [first] = SHA1_COLLISION;
+
+    expect(verdict('collision', { type: 'unlock', text: `0x${first} 0x${first} <redeemScript>` })).toMatchObject({ valid: false, error: { code: 'verify-failed' } });
+    expect(verdict('collision', { type: 'unlock', text: `0x${first} "kas nors kita" <redeemScript>` })).toMatchObject({ valid: false, error: { code: 'false-on-top' } });
+  });
+
+
+  it('holds a coin for a number of blocks counted from its own block', () => {
+    expect(verdict('relative').valid).toBe(true);
+    expect(verdict('relative', { type: 'mined', text: '849900' })).toMatchObject({ valid: false, failed: 'finality', error: { code: 'sequence-too-early', wait: 144, confirmations: 101 } });
+    expect(verdict('relative', { type: 'sequence', text: '' })).toMatchObject({ valid: false, failed: 'script', error: { code: 'sequence', why: 'switched-off' } });
+  });
+
+
+  it('hands a coin to the heir once it has lain still for a year, and not a block sooner', () => {
+    expect(verdict('inheritance').valid).toBe(true);
+    expect(verdict('inheritance', { type: 'mined', text: '797441' }).valid).toBe(true);
+    expect(verdict('inheritance', { type: 'mined', text: '797442' })).toMatchObject({ valid: false, failed: 'finality', error: { code: 'sequence-too-early', wait: 52560, confirmations: 52559 } });
+  });
+
+
+  it('lets the owner of that coin spend it at any time, and nobody in his place', () => {
+    const owner = [{ type: 'unlock', text: `<sig:${JONAS}> 1` }, { type: 'sequence', text: '' }, { type: 'mined', text: '850000' }];
+
+    expect(verdict('inheritance', ...owner).valid).toBe(true);
+    expect(verdict('inheritance', ...owner, { type: 'unlock', text: `<sig:${GABIJA}> 1` })).toMatchObject({ valid: false, error: { code: 'false-on-top' } });
   });
 });
 
@@ -185,6 +281,10 @@ describe('the outputs of a Lightning commitment transaction', () => {
   const verdict = (id, ...actions) => buildModel(after(stateOf(id), ...actions)).verification;
   const timeOf = (verification) => verification.timeline.find((entry) => entry.stage === 'finality');
   const secret = '"lightning mokėjimo slaptažodis"';
+
+  // What opens an output, as its witness: the items, and the
+  // script itself after them
+  const carried = (items) => ({ type: 'witness', text: `${items} <witnessScript>` });
 
   it('lets the holder take his own share once the coin is 144 blocks old and his input says so', () => {
     const verification = verdict('ln-to-local');
@@ -219,13 +319,13 @@ describe('the outputs of a Lightning commitment transaction', () => {
 
     expect(verification.valid).toBe(true);
     expect(timeOf(verification)).toMatchObject({ age: 'none' });
-    expect(verdict('ln-penalty', { type: 'unlock', text: `<sig:${GABIJA}> 1` })).toMatchObject({ valid: false, error: { code: 'false-on-top' } });
-    expect(verdict('ln-penalty', { type: 'unlock', text: `<sig:${JONAS}> 1` })).toMatchObject({ valid: false, error: { code: 'false-on-top' } });
+    expect(verdict('ln-penalty', carried(`<sig:${GABIJA}> 1`))).toMatchObject({ valid: false, error: { code: 'false-on-top' } });
+    expect(verdict('ln-penalty', carried(`<sig:${JONAS}> 1`))).toMatchObject({ valid: false, error: { code: 'false-on-top' } });
   });
 
 
   it('keeps the holder waiting on a transaction that has only just been mined', () => {
-    const waiting = verdict('ln-penalty', { type: 'unlock', text: `<sig:${JONAS}> 0` }, { type: 'sequence', text: '144' });
+    const waiting = verdict('ln-penalty', carried(`<sig:${JONAS}> 0`), { type: 'sequence', text: '144' });
 
     expect(waiting).toMatchObject({ valid: false, failed: 'finality', error: { code: 'sequence-too-early', wait: 144, confirmations: 3 } });
   });
@@ -236,7 +336,7 @@ describe('the outputs of a Lightning commitment transaction', () => {
     ['the revocation key', `<sig:${REVOCATION}> <pubkey:${REVOCATION}>`],
     ['both signatures and nothing for a secret, as the timeout transaction carries them', `0 <sig:${GABIJA}> <sig:${JONAS}> 0`],
   ])('opens a payment the holder offers by %s', (_way, unlock) => {
-    expect(verdict('ln-htlc-offered', { type: 'unlock', text: unlock }).valid).toBe(true);
+    expect(verdict('ln-htlc-offered', carried(unlock)).valid).toBe(true);
   });
 
 
@@ -247,7 +347,7 @@ describe('the outputs of a Lightning commitment transaction', () => {
     ['one signature where the timeout takes two', `0 <sig:${JONAS}> 0`, 'stack-underflow'],
     ['somebody else\'s key in place of the revocation key', `<sig:${GABIJA}> <pubkey:${GABIJA}>`, 'stack-underflow'],
   ])('keeps a payment the holder offers shut to %s', (_way, unlock, code) => {
-    expect(verdict('ln-htlc-offered', { type: 'unlock', text: unlock })).toMatchObject({ valid: false, failed: 'script', error: { code } });
+    expect(verdict('ln-htlc-offered', carried(unlock))).toMatchObject({ valid: false, failed: 'script', error: { code } });
   });
 
 
@@ -256,7 +356,7 @@ describe('the outputs of a Lightning commitment transaction', () => {
     ['the revocation key', `<sig:${REVOCATION}> <pubkey:${REVOCATION}>`],
     ['both signatures with the secret, as the success transaction carries them', `0 <sig:${GABIJA}> <sig:${JONAS}> ${secret}`],
   ])('opens a payment the holder is offered by %s', (_way, unlock) => {
-    expect(verdict('ln-htlc-received', { type: 'unlock', text: unlock }).valid).toBe(true);
+    expect(verdict('ln-htlc-received', carried(unlock)).valid).toBe(true);
   });
 
 
@@ -264,6 +364,31 @@ describe('the outputs of a Lightning commitment transaction', () => {
     expect(verdict('ln-htlc-received', { type: 'lock-time', text: '850039' })).toMatchObject({ valid: false, failed: 'script', error: { code: 'locktime', why: 'too-early' } });
     expect(verdict('ln-htlc-received', { type: 'lock-time', text: '0' })).toMatchObject({ valid: false, failed: 'script', error: { code: 'locktime' } });
     expect(verdict('ln-htlc-received', { type: 'height', text: '850039' }, { type: 'mined', text: '850010' })).toMatchObject({ valid: false, failed: 'finality', error: { code: 'locktime-too-early' } });
+  });
+
+
+  it('writes every output as the network does: a script behind its hash, the other side\'s share to a witness key hash', () => {
+    const kinds = (id) => buildModel(stateOf(id)).a.outputs.map((output) => output.lock.kind);
+    const toLocal = buildModel(stateOf('ln-to-local'));
+    const payment = buildModel(stateOf('ln-htlc-offered'));
+
+    expect(kinds('ln-to-local')).toEqual(['p2wpkh', 'p2wsh']);
+    expect(kinds('ln-penalty')).toEqual(['p2wpkh', 'p2wsh']);
+    expect(kinds('ln-htlc-offered')).toEqual(['p2wsh', 'p2wpkh', 'p2wsh']);
+    expect(kinds('ln-htlc-received')).toEqual(['p2wsh', 'p2wpkh', 'p2wsh']);
+    expect(toLocal.b.spends.lock.hash).toBe(sha256Hex(toLocal.b.witnessScript.hex));
+    expect(payment.a.outputs[2].lock.hash).toBe(toLocal.b.spends.lock.hash);
+    expect(payment.a.outputs[1].lock.hash).toBe(payment.keys.find((key) => key.id === GABIJA).publicKeyHash);
+    expect(toLocal.b.unlock.hex).toBe('');
+    expect(toLocal.b.witness.stack.at(-1)).toBe(toLocal.b.witnessScript.hex);
+  });
+
+
+  it('lets the other side take her own share with her signature and key alone, from the same transaction', () => {
+    const hers = [{ type: 'spend', index: 0 }, { type: 'payment/amount', index: 0, text: '0.0199' }];
+
+    expect(verdict('ln-to-local', ...hers, { type: 'witness', text: `<sig:${GABIJA}> <pubkey:${GABIJA}>` }, { type: 'sequence', text: '' }).valid).toBe(true);
+    expect(verdict('ln-to-local', ...hers)).toMatchObject({ valid: false, failed: 'script', error: { code: 'witness-key-mismatch', count: 3 } });
   });
 
 
@@ -382,6 +507,368 @@ describe('swaps between chains', () => {
 
 
 // -----------------------------------------------------------
+// Witness programs
+// -----------------------------------------------------------
+
+describe('locks that are witness programs', () => {
+
+  const built = (id, ...actions) => buildModel(after(stateOf(id), ...actions));
+  const verdict = (id, ...actions) => built(id, ...actions).verification;
+  const flavours = (model) => model.verification.timeline.filter((entry) => entry.kind === 'witness').map((entry) => entry.flavour);
+
+  it('keeps the unlocking script of a coin paid to a witness key hash empty: what opens it rides in the witness', () => {
+    const model = built('p2wpkh');
+    const jonas = model.keys.find((key) => key.id === JONAS);
+
+    expect(model.b.spends.lock).toEqual({ kind: 'p2wpkh', hash: jonas.publicKeyHash });
+    expect(model.b.program).toMatchObject({ kind: 'p2wpkh', version: 0, wrapped: false });
+    expect(model.b.unlock.hex).toBe('');
+    expect(model.b.witness.stack).toEqual([model.signing.signatures[0].signature, jonas.publicKey]);
+    expect(model.signing.covers).toBe('program');
+    expect(flavours(model)).toEqual(['p2wpkh']);
+    expect(model.verification.valid).toBe(true);
+  });
+
+
+  it('shows the script the node builds for it, word by word, as the everyday lock', () => {
+    const model = built('p2wpkh');
+
+    expect(model.b.implied.words.map((word) => itemLabel(word.item, model.lexicon).text)).toEqual(['OP_DUP', 'OP_HASH160', 'rakto maiša „Jonas“', 'OP_EQUALVERIFY', 'OP_CHECKSIG']);
+    expect(model.verification.timeline.filter((entry) => entry.phase === 'program')).toHaveLength(5);
+    expect(built('p2pkh').b.implied).toBeNull();
+  });
+
+
+  it('turns the spend down when the signature and the key are put into the unlocking script instead', () => {
+    const moved = verdict('p2wpkh', { type: 'witness', text: '' }, { type: 'unlock', text: `<sig:${JONAS}> <pubkey:${JONAS}>` });
+
+    expect(moved).toMatchObject({ valid: false, failed: 'script', error: { code: 'witness-with-unlock' } });
+    expect(verdict('p2wpkh', { type: 'witness', text: `<sig:${GABIJA}> <pubkey:${GABIJA}>` })).toMatchObject({ valid: false, error: { code: 'verify-failed' } });
+    expect(verdict('p2wpkh', { type: 'witness', text: `<sig:${JONAS}>` })).toMatchObject({ valid: false, error: { code: 'witness-key-mismatch', count: 1 } });
+  });
+
+
+  it('writes transaction B with its witness beside it, and names it by its bytes without the witness', () => {
+    const model = built('p2wpkh');
+    const bare = built('p2wpkh', { type: 'witness', text: '' });
+
+    expect(model.b.hex.slice(8, 12)).toBe('0001');
+    expect(model.b.hex).toContain(model.b.witness.stack[0]);
+    expect(model.b.witnessId).not.toBe(model.b.id);
+    expect(bare.b.id).toBe(model.b.id);
+    expect(bare.b.hex.slice(8, 12)).not.toBe('0001');
+    expect(built('p2pkh').b.witnessId).toBe(built('p2pkh').b.id);
+    expect(built('p2pkh', { type: 'unlock', text: '' }).b.id).not.toBe(built('p2pkh').b.id);
+  });
+
+
+  it('opens a coin paid to a witness script hash with the script last in the witness, and any two of its three keys', () => {
+    const model = built('p2wsh');
+
+    expect(model.b.spends.lock).toEqual({ kind: 'p2wsh', hash: sha256Hex(model.b.witnessScript.hex) });
+    expect(model.b.witness.stack.at(-1)).toBe(model.b.witnessScript.hex);
+    expect(model.b.witness.stack[0]).toBe('');
+    expect(model.signing.covers).toBe('witnessScript');
+    expect(flavours(model)).toEqual(['p2wsh']);
+    expect(verdict('p2wsh', { type: 'witness', text: `0 <sig:${GABIJA}> <sig:${ROKAS}> <witnessScript>` }).valid).toBe(true);
+    expect(verdict('p2wsh', { type: 'witness', text: `0 <sig:${ROKAS}> <sig:${JONAS}> <witnessScript>` })).toMatchObject({ valid: false, error: { code: 'false-on-top' } });
+    expect(verdict('p2wsh', { type: 'witness', text: `0 <sig:${JONAS}> <sig:${ROKAS}> 0x51` })).toMatchObject({ valid: false, error: { code: 'witness-script-mismatch' } });
+    expect(verdict('p2wsh', { type: 'witness', text: `7 0 <sig:${JONAS}> <sig:${ROKAS}> <witnessScript>` })).toMatchObject({ valid: false, error: { code: 'witness-unclean-stack', left: 2 } });
+  });
+
+
+  it('moves the lock with the witness script: another script, another hash, another transaction A', () => {
+    const before = built('p2wsh');
+    const model = built('p2wsh', { type: 'witness-script', text: `1 <pubkey:${JONAS}> 1 OP_CHECKMULTISIG` }, { type: 'witness', text: `0 <sig:${JONAS}> <witnessScript>` });
+
+    expect(model.b.spends.lock.hash).not.toBe(before.b.spends.lock.hash);
+    expect(model.a.id).not.toBe(before.a.id);
+    expect(model.verification.valid).toBe(true);
+  });
+
+
+  it('opens the wrapped forms layer by layer: the redeem script first, then the witness', () => {
+    const key = built('p2sh-p2wpkh');
+    const script = built('p2sh-p2wsh');
+
+    expect(key.b.program).toMatchObject({ kind: 'p2wpkh', wrapped: true });
+    expect(key.b.unlock.items.map((item) => item.hex)).toEqual([key.b.redeem.hex]);
+    expect(key.verification.timeline.filter((entry) => entry.kind !== 'item' && entry.stage === 'script').map((entry) => entry.kind)).toEqual(['handover', 'redeem', 'witness']);
+    expect(key.verification.valid).toBe(true);
+
+    expect(script.b.program).toMatchObject({ kind: 'p2wsh', wrapped: true });
+    expect(script.b.redeem.hex).toBe(`0020${sha256Hex(script.b.witnessScript.hex)}`);
+    expect(script.verification.valid).toBe(true);
+    expect(verdict('p2sh-p2wpkh', { type: 'unlock', text: '1 <redeemScript>' })).toMatchObject({ valid: false, error: { code: 'witness-with-unlock-p2sh' } });
+    expect(verdict('p2sh-p2wpkh', { type: 'witness', text: '' })).toMatchObject({ valid: false, error: { code: 'witness-key-mismatch', count: 0 } });
+  });
+
+
+  it('turns down a witness nobody asked for', () => {
+    expect(verdict('p2pkh', { type: 'witness', text: '1' })).toMatchObject({ valid: false, failed: 'script', error: { code: 'witness-unexpected' } });
+  });
+
+
+  it('takes the small-number tiles in a witness for the values they stand for, and no other opcode', () => {
+    const model = built('p2pkh', { type: 'witness', text: '0 1 16 -1 "labas" OP_DUP' });
+
+    expect(model.b.witness.stack).toEqual(['', '01', '10', '81', textToHex('labas')]);
+    expect(model.problems).toMatchObject([{ where: 'witness', code: 'witness-opcode', text: 'OP_DUP' }]);
+    expect(model.b.witness.words.at(-1).problem).toMatchObject({ code: 'witness-opcode' });
+    expect(model.verification).toBeNull();
+  });
+
+
+  it('names a witness script and its hash wherever their bytes turn up, and says when there is none', () => {
+    const model = built('p2wsh');
+    const none = built('p2wsh', { type: 'witness-script', text: '' });
+
+    expect(labelOf(model.b.witnessScript.hex, model.lexicon)).toMatchObject({ kind: 'witnessScript', text: 'witness script' });
+    expect(labelOf(model.b.spends.lock.hash, model.lexicon)).toMatchObject({ kind: 'witnessHash', text: 'witness script maiša' });
+    expect(none.problems.map((problem) => [problem.where, problem.code])).toEqual([['lock', 'no-witness-script'], ['witness', 'no-witness-script']]);
+  });
+
+
+  it.each([
+    ['p2wpkh', 'SegWit adresas „Jonas“ (P2WPKH)'],
+    ['p2wsh', 'witness script maiša (P2WSH)'],
+    ['p2tr-key', 'Taproot output key „Jonas“ (P2TR)'],
+    ['p2tr-counted', 'Taproot output key „Simona“ (P2TR)'],
+    ['p2a', 'anchor, išleidžia bet kas (P2A)'],
+  ])('calls the lock of %s "%s"', (id, name) => {
+    const model = built(id);
+
+    expect(lockName(model.b.spends.lock, model.lexicon)).toBe(name);
+  });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// Taproot
+// -----------------------------------------------------------
+
+describe('a coin locked to a Taproot key', () => {
+
+  const built = (id, ...actions) => buildModel(after(stateOf(id), ...actions));
+  const verdict = (id, ...actions) => built(id, ...actions).verification;
+  const turn = (model) => model.verification.timeline.find((entry) => entry.kind === 'witness');
+
+  it('opens with one Schnorr signature for the key, and runs no script', () => {
+    const model = built('p2tr-key');
+
+    expect(model.b.program).toMatchObject({ kind: 'p2tr', version: 1, wrapped: false });
+    expect(model.b.witness.stack).toHaveLength(1);
+    expect(byteLength(model.b.witness.stack[0])).toBe(64);
+    expect(model.signing.covers).toBe('key');
+    expect(turn(model)).toMatchObject({ flavour: 'keypath', ok: true });
+    expect(model.verification.timeline.filter((entry) => entry.kind === 'item').map((entry) => entry.phase)).toEqual(['lock', 'lock']);
+    expect(model.verification.valid).toBe(true);
+  });
+
+
+  it('locks the coin to the owner\'s key tweaked — not to the key itself', () => {
+    const model = built('p2tr-key');
+    const jonas = model.keys.find((key) => key.id === JONAS);
+
+    expect(jonas.xOnlyKey).toBe(jonas.publicKey.slice(2));
+    expect(model.b.spends.lock.key).not.toBe(jonas.xOnlyKey);
+    expect(labelOf(model.b.spends.lock.key, model.lexicon)).toMatchObject({ kind: 'tapkey', short: 'outputKey', name: 'Jonas', text: 'output key „Jonas“' });
+    expect(labelOf(jonas.xOnlyKey, model.lexicon)).toMatchObject({ kind: 'xonly', short: 'xOnlyKey', text: 'x-only raktas „Jonas“' });
+  });
+
+
+  it('turns down anybody else\'s signature for the key, at the witness', () => {
+    const model = built('p2tr-key', { type: 'witness', text: `<sig:${GABIJA}>` });
+
+    expect(model.verification).toMatchObject({ valid: false, failed: 'script', error: { code: 'schnorr-signature' } });
+    expect(turn(model)).toMatchObject({ flavour: 'keypath', ok: false });
+    expect(narrate(model.verification.timeline.at(-1), model).lines[0]).toBe('Mazgas sustojo tikrindamas witness.');
+    expect(verdict('p2tr-key', { type: 'witness', text: '' })).toMatchObject({ valid: false, error: { code: 'witness-empty' } });
+  });
+
+
+  it('hides two scripts in one key, and opens with the one the witness shows', () => {
+    const model = built('p2tr-script');
+
+    expect(model.b.leaves.map((leaf) => leaf.written)).toEqual([true, true]);
+    expect(model.b.shown).toBe(1);
+    expect(model.signing.covers).toBe('leaf');
+    expect(turn(model)).toMatchObject({ flavour: 'tapscript', hex: model.b.leaves[1].hex, proof: { committed: true, path: [expect.any(String)] } });
+    expect(model.verification.timeline.filter((entry) => entry.phase === 'leaf').map((entry) => itemLabel(entry.item, model.lexicon).text)).toEqual([
+      'OP_SHA256', 'SHA-256 maiša („taproot“)', 'OP_EQUALVERIFY', 'x-only raktas „Rokas“', 'OP_CHECKSIG',
+    ]);
+    expect(model.verification.valid).toBe(true);
+  });
+
+
+  it('opens the same coin three ways: by the key, by either script — and by no other', () => {
+    const byGabija = built('p2tr-script', { type: 'witness', text: `<sig:${GABIJA}> <leafA> <controlA>` });
+
+    expect(verdict('p2tr-script', { type: 'witness', text: `<sig:${JONAS}>` }).valid).toBe(true);
+    expect(byGabija.verification.valid).toBe(true);
+    expect(byGabija.b.shown).toBe(0);
+    expect(verdict('p2tr-script', { type: 'witness', text: `<sig:${GABIJA}> <leafA> <controlB>` })).toMatchObject({ valid: false, error: { code: 'taproot-mismatch' } });
+    expect(verdict('p2tr-script', { type: 'witness', text: `<sig:${ROKAS}> "taproots" <leafB> <controlB>` })).toMatchObject({ valid: false, error: { code: 'verify-failed' } });
+    expect(verdict('p2tr-script', { type: 'witness', text: `<sig:${JONAS}> "taproot" <leafB> <controlB>` })).toMatchObject({ valid: false, error: { code: 'schnorr-signature' } });
+    expect(verdict('p2tr-script', { type: 'witness', text: `<sig:${GABIJA}>` })).toMatchObject({ valid: false, error: { code: 'schnorr-signature' } });
+  });
+
+
+  it('makes another key of the same key pair when a hidden script changes', () => {
+    const before = built('p2tr-script');
+    const changed = built('p2tr-script', { type: 'leaf', index: 0, text: `<xonly:${ROKAS}> OP_CHECKSIG` });
+    const alone = built('p2tr-script', { type: 'leaf', index: 0, text: '' }, { type: 'leaf', index: 1, text: '' }, { type: 'witness', text: `<sig:${JONAS}>` });
+
+    expect(changed.b.spends.lock.key).not.toBe(before.b.spends.lock.key);
+    expect(changed.a.id).not.toBe(before.a.id);
+    expect(changed.verification.valid).toBe(true);
+    expect(alone.b.spends.lock.key).toBe(built('p2tr-key').b.spends.lock.key);
+    expect(alone.verification.valid).toBe(true);
+  });
+
+
+  it('names the hidden scripts and their proofs, and says what a proof still lacks', () => {
+    const model = built('p2tr-script');
+    const [, , script, proof] = model.b.witness.stack;
+
+    expect(labelOf(script, model.lexicon)).toMatchObject({ kind: 'leafB', text: 'tapscript B' });
+    expect(labelOf(proof, model.lexicon)).toMatchObject({ kind: 'controlB', text: 'control block B' });
+    expect(byteLength(proof)).toBe(65);
+    expect(built('p2tr-script', { type: 'leaf', index: 1, text: '' }).problems.map((problem) => [problem.where, problem.code])).toEqual([['witness', 'no-leaf'], ['witness', 'no-control-block']]);
+    expect(built('p2pkh', { type: 'leaf', index: 0, text: '1' }, { type: 'witness', text: '<controlA>' }).problems).toMatchObject([{ where: 'witness', code: 'no-control-block' }]);
+  });
+
+
+  it('counts two signatures out of three with OP_CHECKSIGADD, an empty place for the key that does not sign', () => {
+    const model = built('p2tr-counted');
+    const counted = model.verification.timeline.filter((entry) => entry.effect?.type === 'signature').map((entry) => entry.effect.counted);
+
+    expect(model.b.witness.stack[1]).toBe('');
+    expect(counted).toEqual([undefined, 1, 2]);
+    expect(model.verification.valid).toBe(true);
+    expect(verdict('p2tr-counted', { type: 'witness', text: `0 <sig:${GABIJA}> <sig:${JONAS}> <leafA> <controlA>` }).valid).toBe(true);
+    expect(verdict('p2tr-counted', { type: 'witness', text: `<sig:${ROKAS}> <sig:${GABIJA}> <sig:${JONAS}> <leafA> <controlA>` })).toMatchObject({ valid: false, error: { code: 'false-on-top' } });
+    expect(verdict('p2tr-counted', { type: 'witness', text: `0 0 <sig:${JONAS}> <leafA> <controlA>` })).toMatchObject({ valid: false, error: { code: 'false-on-top' } });
+    expect(verdict('p2tr-counted', { type: 'witness', text: `<sig:${JONAS}> 0 <sig:${ROKAS}> <leafA> <controlA>` })).toMatchObject({ valid: false, error: { code: 'schnorr-signature' } });
+  });
+
+
+  it('lets the owner of the key spend the shared coin alone, without showing the script', () => {
+    const model = built('p2tr-counted', { type: 'witness', text: `<sig:${SIMONA}>` });
+
+    expect(model.verification.valid).toBe(true);
+    expect(model.b.shown).toBeNull();
+    expect(turn(model).flavour).toBe('keypath');
+  });
+
+
+  it('lets anybody spend the anchor, with nothing at all', () => {
+    const model = built('p2a');
+
+    expect(model.b.spends.lock).toEqual({ kind: 'anchor' });
+    expect(model.b.program).toMatchObject({ kind: 'unknown', version: 1 });
+    expect(model.b.unlock.hex).toBe('');
+    expect(model.b.witness.stack).toEqual([]);
+    expect(turn(model)).toMatchObject({ flavour: 'unknown', program: '4e73' });
+    expect(narrate(turn(model), model).heading).toBe('Witness program: anchor (P2A)');
+    expect(model.verification.valid).toBe(true);
+    expect(verdict('p2a', { type: 'unlock', text: '1' })).toMatchObject({ valid: false, error: { code: 'witness-with-unlock' } });
+  });
+
+
+  it.each(['p2wpkh', 'p2wsh', 'p2sh-p2wpkh', 'p2sh-p2wsh', 'p2tr-key', 'p2tr-script', 'p2tr-counted'])('lets the signatures of %s go stale once the moment of signing is frozen and B changes', (id) => {
+    const start = stateOf(id);
+    const frozen = after(start, { type: 'freeze', signed: buildModel(start).signing.now });
+    const changed = buildModel(after(frozen, { type: 'payment/amount', index: 0, text: '0.4' }));
+
+    expect(buildModel(frozen)).toMatchObject({ signing: { frozen: true, stale: [] }, verification: { valid: true } });
+    expect(changed.signing.stale).toEqual(changed.signing.signers);
+    expect(changed.verification).toMatchObject({ valid: false, failed: 'script' });
+    expect(buildModel(after(frozen, { type: 'payment/amount', index: 0, text: '0.4' }, { type: 'thaw' })).verification.valid).toBe(true);
+  });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// What a signature signs
+// -----------------------------------------------------------
+
+describe('what each signature signs', () => {
+
+  const built = (id, ...actions) => buildModel(after(stateOf(id), ...actions));
+
+  it('signs every signature for the place it stands at: the same key twice, against two different scripts', () => {
+    const lock = `<pubkey:${JONAS}> OP_CHECKSIGVERIFY OP_CODESEPARATOR <pubkey:${JONAS}> OP_CHECKSIG`;
+    const model = built('p2pk', { type: 'output/lock', index: 0, text: lock }, { type: 'unlock', text: `<sig:${JONAS}> <sig:${JONAS}>` });
+    const [late, early] = model.signing.signatures;
+
+    expect(model.verification.valid).toBe(true);
+    expect(late.digest).not.toBe(early.digest);
+    expect(late.signature).not.toBe(early.signature);
+    expect(model.signing.signers).toEqual([String(JONAS)]);
+  });
+
+
+  it('finds the right message through a branch, a script hash and a shared account alike', () => {
+    for (const id of ['two-ways', 'p2sh', 'multisig', 'inheritance', 'swap-btc', 'ln-penalty']) {
+      const model = built(id);
+
+      expect(model.verification.valid).toBe(true);
+      expect(model.signing.signatures.every((signed) => !signed.stale)).toBe(true);
+    }
+  });
+
+
+  it('says what the first signature\'s message covers', () => {
+    expect(Object.fromEntries(['p2pkh', 'p2sh', 'p2wpkh', 'p2wsh', 'p2sh-p2wsh', 'p2tr-key', 'p2tr-script'].map((id) => [id, built(id).signing.covers]))).toEqual({
+      p2pkh: 'lock',
+      p2sh: 'redeem',
+      p2wpkh: 'program',
+      p2wsh: 'witnessScript',
+      'p2sh-p2wsh': 'witnessScript',
+      'p2tr-key': 'key',
+      'p2tr-script': 'leaf',
+    });
+  });
+
+
+  it('still signs a signature the node never comes to, as the usual spend of that lock would', () => {
+    const model = built('p2pkh', { type: 'unlock', text: `<sig:${JONAS}> <pubkey:${GABIJA}>` });
+    const usual = built('p2pkh');
+
+    expect(model.verification).toMatchObject({ valid: false, error: { code: 'verify-failed' } });
+    expect(model.signing.signatures[0].signature).toBe(usual.signing.signatures[0].signature);
+  });
+
+
+  it('checks bytes somebody wrote in a signature\'s place for real', () => {
+    const { signature } = built('p2wpkh').signing.signatures[0];
+    const written = built('p2wpkh', { type: 'witness', text: `0x${signature} <pubkey:${JONAS}>` });
+    const spoiled = built('p2wpkh', { type: 'witness', text: `0x${signature} <pubkey:${JONAS}>` }, { type: 'payment/amount', index: 0, text: '0.4' });
+
+    expect(written.signing.signers).toEqual([]);
+    expect(written.verification.valid).toBe(true);
+    expect(spoiled.verification).toMatchObject({ valid: false, error: { code: 'false-on-top' } });
+  });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // The bytes
 // -----------------------------------------------------------
 
@@ -403,9 +890,24 @@ describe('the bytes', () => {
 
     for (const [name, signature] of Object.entries(signatures)) {
       const { publicKey } = model.keys.find((key) => key.name === name);
-      expect(signature.endsWith('01')).toBe(true);
-      expect(verifyDigest(signature.slice(0, -2), model.signing.digest, publicKey)).toBe(true);
+
+      if (expected.schnorr_keys) {
+        expect(byteLength(signature)).toBe(64);
+        expect(verifySchnorr(signature, model.signing.digest, expected.schnorr_keys[name])).toBe(true);
+      } else {
+        expect(signature.endsWith('01')).toBe(true);
+        expect(verifyDigest(signature.slice(0, -2), model.signing.digest, publicKey)).toBe(true);
+      }
     }
+  });
+
+
+  it.each(Object.entries(reference.cases).filter(([, expected]) => expected.schnorr_keys))('makes for %s the Taproot key and the hidden scripts the reference library makes', (id, expected) => {
+    const model = buildModel(stateOf(id));
+
+    expect(model.b.spends.lock.key).toBe(expected.output_key);
+    expect(model.b.leaves.filter((leaf) => leaf.written).map((leaf) => leaf.hex)).toEqual(expected.leaves ?? []);
+    expect(model.signing.signatures.map((signed) => byteLength(signed.signature))).toEqual(model.signing.signatures.map(() => 64));
   });
 
 
@@ -413,18 +915,29 @@ describe('the bytes', () => {
   // a wallet may sign again until a signature comes out a byte
   // shorter, and both are signatures of the same message. So
   // the whole of transaction B is compared with the library's
-  // signatures carried in place of the playground's own
+  // signatures written out in the places of the playground's
+  // own
   it.each(Object.entries(reference.cases))('builds transaction B of %s to the last byte once it carries the reference library\'s signatures, and accepts it', (id, expected) => {
     const start = stateOf(id);
     const { keys, signing } = buildModel(start);
     const byName = expected.signatures ?? { [keys.find((key) => String(key.id) === signing.signers[0]).name]: expected.signature };
-    const signatures = Object.fromEntries(Object.entries(byName).map(([name, signature]) => [keys.find((key) => key.name === name).id, signature]));
-    const model = buildModel(after(start, { type: 'freeze', signatures }));
+    const written = (text) => text.replace(/<sig:(\d+)>/g, (_word, number) => `0x${byName[keys.find((key) => String(key.id) === number).name]}`);
+    const model = buildModel(after(start, { type: 'unlock', text: written(start.unlock) }, { type: 'witness', text: written(start.witness) }));
 
     expect(model.b.unlock.hex).toBe(expected.script_sig);
+    expect(model.b.witness.stack).toEqual(expected.witness ?? []);
     expect(model.b.hex).toBe(expected.raw);
     expect(model.b.id).toBe(expected.txid);
+    expect(model.b.witnessId).toBe(expected.wtxid ?? expected.txid);
     expect(model.verification.valid).toBe(true);
+  });
+
+
+  it.each(Object.entries(reference.cases).filter(([, expected]) => expected.witness_script))('puts the witness script of %s behind the hash the reference library puts it behind', (id, expected) => {
+    const model = buildModel(stateOf(id));
+
+    expect(model.b.witnessScript.hex).toBe(expected.witness_script);
+    expect(model.b.redeem.hex).toBe(expected.redeem ?? null);
   });
 
 
@@ -779,7 +1292,7 @@ describe('signatures kept, and what cannot be read', () => {
 
   it('lets signatures kept as they were go stale when the transaction changes, and signs anew when thawed', () => {
     const first = buildModel(start);
-    const frozen = after(start, { type: 'freeze', signatures: signEveryone(first.keys, first.signing.digest) });
+    const frozen = after(start, { type: 'freeze', signed: first.signing.now });
     expect(buildModel(frozen)).toMatchObject({ signing: { frozen: true, stale: [] }, verification: { valid: true } });
 
     const changed = after(frozen, { type: 'payment/amount', index: 0, text: '0.4' });

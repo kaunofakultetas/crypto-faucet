@@ -2,11 +2,15 @@
 //  [*] BitcoinScript — ScriptLine
 //
 //  The scripts, as the line of tiles they are built in. On a
-//  wide screen it really is one line: the unlocking script of
-//  transaction B first, then the lock of the coin picked on
-//  transaction A — the order a node runs them in, on one
-//  stack. Under them, once there is a use for it, stands the
-//  redeem script.
+//  wide screen it really is one line: what the input of
+//  transaction B brings — its unlocking script, its witness,
+//  or both, one under the other — then the lock of the coin
+//  picked on transaction A: the order a node goes through
+//  them. Under them, each once there is a use for it, stand
+//  the scripts a lock only holds a trace of: the redeem
+//  script, the witness script, the two scripts of a Taproot
+//  key — and the script a node builds itself for a coin paid
+//  to a witness key hash, which can be read but not changed.
 //
 //  Everything is done to the tiles themselves:
 //
@@ -29,10 +33,12 @@
 //  Split into (root component last):
 //
 //    CARET        — the bar that marks a landing place
-//    OWN_WORDS    — the redeem script's own two pieces
+//    OWN_WORDS    — the two pieces a script is used by
+//    RowHeading   — a row's name and where it comes from
 //    ScriptTile   — one word of a script
 //    ScriptRow    — one script
-//    RedeemPieces — the redeem script, as pieces for the others
+//    FixedRow     — a script that is only read
+//    OwnPieces    — a script, as pieces for the other rows
 //    ScriptLine   — the scripts (default export)
 // -----------------------------------------------------------
 
@@ -42,6 +48,7 @@ import BackspaceOutlinedIcon from '@mui/icons-material/BackspaceOutlined';
 import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
 
 import { PHASES, looseLabel } from '../narration';
+import { phaseOf, stopAt } from '../playback';
 import { withWordMoved, withoutWord } from '../tiles';
 import Tile, { PaletteTile, TileCross } from './Tile';
 
@@ -50,9 +57,48 @@ import Tile, { PaletteTile, TileCross } from './Tile';
 // little taller than the tiles it stands between
 const CARET = 'w-1 rounded-full bg-[var(--color-primary)]';
 
-// The two words that stand for the redeem script in the other
-// scripts: the script itself, and its hash
-const OWN_WORDS = ['<redeemScript>', '<scriptHash>'];
+// The two words that stand for a script in the other rows, by
+// the script's row: the script itself, which the input hands
+// over, and what the lock holds of it — its hash, or, for a
+// Taproot script, the proof that the lock's key hides it
+const OWN_WORDS = {
+  redeem: ['<redeemScript>', '<scriptHash>'],
+  witnessScript: ['<witnessScript>', '<witnessHash>'],
+  leafA: ['<leafA>', '<controlA>'],
+  leafB: ['<leafB>', '<controlB>'],
+};
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// RowHeading
+// -----------------------------------------------------------
+//
+// The top of a row: its name — with the name Bitcoin texts
+// know it by for a tooltip, where the row goes by a Lithuanian
+// one — where it comes from, and whatever the row puts beside
+// them.
+//
+// Used by:
+//   - ScriptRow, FixedRow (below)
+// -----------------------------------------------------------
+
+function RowHeading({ name, children }) {
+  const { known } = PHASES[name];
+  const title = <h2 className="text-sm font-bold text-slate-900">{PHASES[name].name}</h2>;
+
+  return (
+    <div className="flex min-h-8 flex-wrap items-center gap-x-2 gap-y-1">
+      {known === null ? title : <Tooltip describeChild title={`Bitcoin tekstuose šis skriptas vadinamas ${known}.`} arrow placement="top-start">{title}</Tooltip>}
+      <span className="text-xs text-slate-600">{PHASES[name].from}</span>
+      {children}
+    </div>
+  );
+}
 
 
 
@@ -116,13 +162,13 @@ function ScriptTile({ tile, carried, crossShown, onLift, onDragEnd, onJump, onRe
 // ScriptRow
 // -----------------------------------------------------------
 //
-// One script: its name — with the name Bitcoin texts know it
-// by for a tooltip — where it lives, a button that empties
-// it, and its words as tiles in a wrapping row. The whole of
-// it takes a carried tile — the bar shows the gap it would
-// land in — and a press on any of it makes it the script in
-// use, which shows the bar at its end. An empty script says
-// what to do with it.
+// One script — or the witness, which is built the same way:
+// its heading, a button that empties it, and its words as
+// tiles in a wrapping row. The whole of it takes a carried
+// tile — the bar shows the gap it would land in — and a press
+// on any of it makes it the row in use, which shows the bar
+// at its end. An empty row says what to do with it. `stopOf`
+// says which stop of the check a word belongs to.
 //
 // After a tile is moved or taken out with the keys the
 // keyboard stays where it was: on the moved tile, or on the
@@ -132,7 +178,7 @@ function ScriptTile({ tile, carried, crossShown, onLift, onDragEnd, onJump, onRe
 //   - ScriptLine (below)
 // -----------------------------------------------------------
 
-function ScriptRow({ name, tiles, row, inUse, drag, stepper, stops, onAim, className = '', children }) {
+function ScriptRow({ name, tiles, row, inUse, drag, stepper, stopOf, onAim, className = '', children }) {
 
   // The row's tiles, and the place the keyboard should be at
   // after the next change
@@ -149,8 +195,6 @@ function ScriptRow({ name, tiles, row, inUse, drag, stepper, stops, onAim, class
 
   const over = drag.over?.row === name;
   const caret = drag.held ? (over ? drag.over.gap : null) : inUse ? tiles.length : null;
-  const stopOf = (index) => stops?.findIndex((entry) => entry.kind === 'item' && entry.phase === name && entry.index === index) ?? -1;
-
   const jump = (index) => () => {
     const stop = stopOf(index);
     if (stop >= 0) stepper.jump(stop);
@@ -184,20 +228,16 @@ function ScriptRow({ name, tiles, row, inUse, drag, stepper, stops, onAim, class
       }}
       className={`flex min-w-0 flex-col gap-2 rounded-lg border-2 bg-slate-50 px-3 pb-3 pt-2 transition-colors ${over ? 'border-[var(--color-primary)] bg-white' : 'border-slate-300'} ${className}`}
     >
-      <div className="flex min-h-8 flex-wrap items-center gap-x-2 gap-y-1">
-        <Tooltip describeChild title={`Bitcoin tekstuose šis skriptas vadinamas ${PHASES[name].known}.`} arrow placement="top-start">
-          <h2 className="text-sm font-bold text-slate-900">{PHASES[name].name}</h2>
-        </Tooltip>
-        <span className="text-xs text-slate-600">{PHASES[name].from}</span>
+      <RowHeading name={name}>
         {children}
         {tiles.length > 0 && (
-          <Tooltip title="Išvalyti skriptą" arrow>
+          <Tooltip title={name === 'witness' ? 'Išvalyti witness' : 'Išvalyti skriptą'} arrow>
             <IconButton size="small" aria-label={`Išvalyti: ${PHASES[name].name}`} onClick={() => row.set('')} sx={{ ml: children ? 0 : 'auto' }}>
               <BackspaceOutlinedIcon fontSize="small" />
             </IconButton>
           </Tooltip>
         )}
-      </div>
+      </RowHeading>
 
       <ol ref={list} aria-label={PHASES[name].name} className="flex min-h-9 flex-wrap items-center gap-x-2 gap-y-3">
         {tiles.map((tile, index) => (
@@ -230,32 +270,82 @@ function ScriptRow({ name, tiles, row, inUse, drag, stepper, stops, onAim, class
 
 
 // -----------------------------------------------------------
-// RedeemPieces
+// FixedRow
 // -----------------------------------------------------------
 //
-// The redeem script as the two pieces the other scripts use
-// it by: the script itself, which the unlocking script hands
-// over, and its hash, which the lock holds. They are on offer
-// right at the script they stand for. A press on one sends it
-// to the script in use, without making the redeem script that
-// one — neither the press nor the keyboard arriving on a piece
-// is passed on to the script around them.
+// A script nobody builds: the node makes it itself, so its
+// words can be pressed — the cursor goes to that word — but
+// not carried, moved or taken out. Its frame is dashed to
+// say so.
 //
 // Used by:
-//   - ScriptLine (below) — beside the redeem script's name
+//   - ScriptLine (below) — the script behind a witness key
+//     hash
 // -----------------------------------------------------------
 
-function RedeemPieces({ lexicon, drag, onPick }) {
+function FixedRow({ name, tiles, stepper, stopOf }) {
+  const jump = (index) => () => {
+    const stop = stopOf(index);
+    if (stop >= 0) stepper.jump(stop);
+  };
+
+  return (
+    <div data-row={name} className="flex min-w-0 flex-col gap-2 rounded-lg border-2 border-dashed border-slate-300 bg-slate-50 px-3 pb-3 pt-2">
+      <RowHeading name={name} />
+      <ol aria-label={PHASES[name].name} className="flex min-h-9 flex-wrap items-center gap-x-2 gap-y-3">
+        {tiles.map((tile, index) => (
+          <li key={tile.key} className="flex max-w-full">
+            <button
+              type="button"
+              data-tile
+              aria-label={tile.label.text}
+              aria-current={['current', 'skipping', 'failed'].includes(tile.step) ? 'step' : undefined}
+              onClick={jump(index)}
+              className="flex max-w-full cursor-pointer rounded-md focus-visible:outline-2 focus-visible:outline-offset-[5px] focus-visible:outline-[var(--color-primary)]"
+            >
+              <Tile label={tile.label} step={tile.step} />
+            </button>
+          </li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// OwnPieces
+// -----------------------------------------------------------
+//
+// A script as the two pieces the other rows use it by: the
+// script itself, which the input hands over, and what the
+// lock holds of it. They are on offer right at the script
+// they stand for. A press on one sends it to the row in use,
+// without making this script that one — neither the press nor
+// the keyboard arriving on a piece is passed on to the row
+// around them.
+//
+// Used by:
+//   - ScriptLine (below) — beside the name of a script that
+//     stands behind a hash or a Taproot key
+// -----------------------------------------------------------
+
+function OwnPieces({ name, lexicon, drag, onPick }) {
   return (
     <span
       role="group"
-      aria-label="Išpirkimo skriptas kaip detalės"
+      aria-label={`${PHASES[name].name} kaip detalės`}
       className="ml-auto flex flex-wrap items-center gap-1.5"
       onClick={(event) => event.stopPropagation()}
       onFocus={(event) => event.stopPropagation()}
     >
       <span className="text-xs text-slate-600">Šis skriptas kaip detalės</span>
-      {OWN_WORDS.map((word) => <PaletteTile key={word} word={word} label={looseLabel(word, lexicon)} drag={drag} onPick={onPick} />)}
+      {OWN_WORDS[name].map((word) => <PaletteTile key={word} word={word} label={looseLabel(word, lexicon)} drag={drag} onPick={onPick} />)}
     </span>
   );
 }
@@ -270,10 +360,11 @@ function RedeemPieces({ lexicon, drag, onPick }) {
 // ScriptLine (default export)
 // -----------------------------------------------------------
 //
-// The unlocking script and the lock side by side — one under
-// the other on a narrow screen — with an arrow from the one a
-// node runs first to the one it runs next, and under them the
-// redeem script while it is shown. The tiles come ready
+// What B's input brings and the lock side by side — one under
+// the other on a narrow screen — with an arrow from what a
+// node takes first to what it goes to next, and under them
+// the scripts behind a hash or a key, each while it is shown,
+// in the order a node gets to them. The tiles come ready
 // (playback.js): each word with its name and the node's place
 // at it.
 //
@@ -281,22 +372,40 @@ function RedeemPieces({ lexicon, drag, onPick }) {
 //   - Page.jsx — the top of the stage
 // -----------------------------------------------------------
 
-export default function ScriptLine({ tapes, rows, stepper, stops, lexicon }) {
-  const shared = { drag: rows.drag, stepper, stops, onAim: rows.aimAt };
+export default function ScriptLine({ tapes, rows, stepper, stops, model }) {
+  const { shown } = rows;
+  const stopOf = (name) => (index) => stopAt(stops, phaseOf(name, model.b.shown), index);
+  const row = (name) => ({
+    name,
+    tiles: tapes[name],
+    row: rows.rows[name],
+    inUse: rows.target === name,
+    drag: rows.drag,
+    stepper,
+    stopOf: stopOf(name),
+    onAim: rows.aimAt,
+  });
+  const behind = (name) => (
+    <ScriptRow {...row(name)}>
+      <OwnPieces name={name} lexicon={model.lexicon} drag={rows.drag} onPick={rows.pick} />
+    </ScriptRow>
+  );
 
   return (
     <section aria-label="Skriptai" className="flex flex-col gap-3">
       <div className="flex flex-col gap-3 xl:flex-row xl:items-stretch">
-        <ScriptRow name="unlock" tiles={tapes.unlock} row={rows.rows.unlock} inUse={rows.target === 'unlock'} className="xl:min-w-[260px] xl:max-w-[55%] xl:shrink-0" {...shared} />
+        <div className="flex min-w-0 flex-col gap-3 xl:min-w-[260px] xl:max-w-[55%] xl:shrink-0">
+          {shown.unlock && <ScriptRow {...row('unlock')} className="xl:flex-1" />}
+          {shown.witness && <ScriptRow {...row('witness')} className="xl:flex-1" />}
+        </div>
         <ArrowForwardIcon aria-hidden="true" className="!hidden self-center text-slate-400 xl:!block" />
-        <ScriptRow name="lock" tiles={tapes.lock} row={rows.rows.lock} inUse={rows.target === 'lock'} className="xl:flex-1" {...shared} />
+        <ScriptRow {...row('lock')} className="xl:flex-1" />
       </div>
-
-      {rows.redeemShown && (
-        <ScriptRow name="redeem" tiles={tapes.redeem} row={rows.rows.redeem} inUse={rows.target === 'redeem'} {...shared}>
-          <RedeemPieces lexicon={lexicon} drag={rows.drag} onPick={rows.pick} />
-        </ScriptRow>
-      )}
+      {shown.redeem && behind('redeem')}
+      {shown.program && <FixedRow name="program" tiles={tapes.program} stepper={stepper} stopOf={stopOf('program')} />}
+      {shown.witnessScript && behind('witnessScript')}
+      {shown.leaves && behind('leafA')}
+      {shown.leaves && behind('leafB')}
     </section>
   );
 }

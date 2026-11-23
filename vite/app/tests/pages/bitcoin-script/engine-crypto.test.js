@@ -12,6 +12,10 @@
 //      playground starts with
 //    - the generator point's multiples and the RFC 6979
 //      signature every secp256k1 library is checked with
+//    - bip340-vectors.csv beside the support files — the
+//      test vectors of the proposal for Schnorr signatures
+//      (BIP 340), unchanged: keys, messages and signatures,
+//      and the forgeries a check must turn away
 //
 //  A signature is checked both ways: the reference library's
 //  signatures pass the playground's check, and what the
@@ -20,11 +24,14 @@
 // -----------------------------------------------------------
 
 import { describe, it, expect } from 'vitest';
+import schnorrVectors from '../../support/bitcoin-script/bip340-vectors.csv?raw';
 import reference from '../../support/bitcoin-script/reference.json';
 import { textToHex } from '@/pages/BitcoinScript/engine/bytes';
-import { hash160, hash256, hmacSha256Hex, ripemd160Hex, sha1Hex, sha256Hex } from '@/pages/BitcoinScript/engine/hashes';
+import { hash160, hash256, hmacSha256Hex, ripemd160Hex, sha1Hex, sha256Hex, taggedHash } from '@/pages/BitcoinScript/engine/hashes';
 import { addressOf, freshKey, keyFrom, seedKey, signWith } from '@/pages/BitcoinScript/engine/keys';
-import { isPrivateKey, isPublicKey, isStrictDer, publicKeyOf, signDigest, verifyDigest } from '@/pages/BitcoinScript/engine/secp256k1';
+import {
+  isPrivateKey, isPublicKey, isStrictDer, isXOnlyKey, publicKeyOf, signDigest, signSchnorr, tweakPrivateKey, tweakPublicKey, verifyDigest, verifySchnorr, xOnlyOf,
+} from '@/pages/BitcoinScript/engine/secp256k1';
 
 
 // The number of points on the curve, and half of it
@@ -213,5 +220,85 @@ describe('signatures', () => {
     expect(isStrictDer('3006030101020101')).toBe(false);
     expect(isStrictDer('3005020001020101'.slice(0, 14))).toBe(false);
     expect(isStrictDer(`${good}00`)).toBe(false);
+  });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// Schnorr signatures
+// -----------------------------------------------------------
+
+describe('Schnorr signatures', () => {
+
+  // The rows of the proposal's file, the heading left out
+  const ROWS = schnorrVectors.trim().split('\n').slice(1).map((line) => {
+    const [index, secret, publicKey, auxiliary, message, signature, result, comment = ''] = line.split(',');
+    return { index: Number(index), secret: secret.toLowerCase(), publicKey: publicKey.toLowerCase(), auxiliary: auxiliary.toLowerCase(), message: message.toLowerCase(), signature: signature.toLowerCase(), valid: result === 'TRUE', comment };
+  });
+
+  it('holds all nineteen vectors of BIP 340', () => {
+    expect(ROWS.map((row) => row.index)).toEqual(Array.from({ length: 19 }, (_, index) => index));
+    expect(ROWS.filter((row) => row.valid)).toHaveLength(9);
+  });
+
+
+  it.each(ROWS.map((row) => [row.index, row.valid ? 'accepts' : 'turns away', row]))('vector %i: %s the signature', (_index, _verb, row) => {
+    expect(verifySchnorr(row.signature, row.message, row.publicKey)).toBe(row.valid);
+  });
+
+
+  it.each(ROWS.filter((row) => row.secret).map((row) => [row.index, row]))('vector %i: signs the very signature the proposal gives', (_index, row) => {
+    expect(xOnlyOf(row.secret)).toBe(row.publicKey);
+    expect(signSchnorr(row.secret, row.message, row.auxiliary)).toBe(row.signature);
+  });
+
+
+  it('signs the same bytes every time, and other bytes with other randomness', () => {
+    const secret = seedKey('Jonas');
+    const message = sha256Hex(textToHex('žinutė'));
+
+    expect(signSchnorr(secret, message)).toBe(signSchnorr(secret, message));
+    expect(signSchnorr(secret, message)).toBe(signSchnorr(secret, message, '00'.repeat(32)));
+    expect(signSchnorr(secret, message, '01'.repeat(32))).not.toBe(signSchnorr(secret, message));
+    expect(verifySchnorr(signSchnorr(secret, message, '01'.repeat(32)), message, xOnlyOf(secret))).toBe(true);
+  });
+
+
+  it('takes as a 32-byte key only the first coordinate of a point', () => {
+    expect(isXOnlyKey(xOnlyOf(seedKey('Jonas')))).toBe(true);
+    expect(isXOnlyKey('00'.repeat(32))).toBe(false);
+    expect(isXOnlyKey('ff'.repeat(32))).toBe(false);
+    expect(isXOnlyKey(xOnlyOf(seedKey('Jonas')).slice(2))).toBe(false);
+  });
+
+
+  it('hashes under a name: the name\'s own hash twice in front of the bytes', () => {
+    const name = sha256Hex(textToHex('TapLeaf'));
+
+    expect(taggedHash('TapLeaf', 'c001ac')).toBe(sha256Hex(`${name}${name}c001ac`));
+    expect(taggedHash('TapLeaf', 'c001ac')).not.toBe(taggedHash('TapBranch', 'c001ac'));
+  });
+
+
+  it.each(['Jonas', 'Gabija', 'Rokas', 'Simona', 'Atšaukimas'])('tweaks the private key of %s to the key its tweaked public key belongs to', (name) => {
+    const secret = seedKey(name);
+    const tweak = sha256Hex(textToHex(`pakeitimas ${name}`));
+    const made = tweakPublicKey(xOnlyOf(secret), tweak);
+    const message = '11'.repeat(32);
+
+    expect(xOnlyOf(tweakPrivateKey(secret, tweak))).toBe(made.key);
+    expect(verifySchnorr(signSchnorr(tweakPrivateKey(secret, tweak), message), message, made.key)).toBe(true);
+    expect(verifySchnorr(signSchnorr(secret, message), message, made.key)).toBe(false);
+  });
+
+
+  it('makes no key from a tweak the curve has no number for', () => {
+    expect(tweakPublicKey(xOnlyOf(seedKey('Jonas')), 'ff'.repeat(32))).toBeNull();
+    expect(tweakPublicKey('00'.repeat(32), '01'.repeat(32))).toBeNull();
   });
 });

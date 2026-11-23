@@ -7,15 +7,18 @@
 //  — held against the reference library's — the words a
 //  script is written in, the items they are read as, what
 //  could not be read and why, the bytes a transaction
-//  carries, those bytes read back, and the well-known locks
-//  told apart.
+//  carries, those bytes read back — whole, and with the
+//  parts cut out that a signature does not sign — and the
+//  well-known locks told apart, the witness programs among
+//  them.
 // -----------------------------------------------------------
 
 import { describe, it, expect } from 'vitest';
 import reference from '../../support/bitcoin-script/reference.json';
 import { OPCODES, opcodeAt, opcodeNamed } from '@/pages/BitcoinScript/engine/opcodes';
 import {
-  NUMBER_LIMIT, describeLock, isPushOnly, isTrue, numberHex, numberOf, parseScript, pushOf, readScript, resolveScript, serializeScript, wordsOf,
+  NUMBER_LIMIT, describeLock, isPushOnly, isTrue, numberHex, numberOf, parseScript, pushOf, readScript, resolveScript, serializeScript, withoutPush, withoutSeparators,
+  witnessProgramOf, wordsOf,
 } from '@/pages/BitcoinScript/engine/script';
 
 
@@ -152,6 +155,37 @@ describe('reading a script', () => {
     expect(filled.items.map((item) => item.hex)).toEqual([null, '02aa', null]);
     expect(filled.problems.map((problem) => problem.code)).toEqual(['signature-outside-unlock', 'no-redeem-script']);
   });
+
+
+  it('reads the references of SegWit and Taproot: a pair\'s two Taproot keys by its number, the scripts behind a hash or a key by what they are', () => {
+    const { items, problems } = parseScript('<xonly:1> <tapkey:1> <witnessScript> <witnessHash> <leafA> <leafB> <controlA> <controlB>', ['1']);
+
+    expect(problems).toEqual([]);
+    expect(told(items)).toEqual(['<xonly:1>', '<tapkey:1>', '<witnessScript>', '<witnessHash>', '<leafA>', '<leafB>', '<controlA>', '<controlB>']);
+    expect(parseScript('<xonly> <tapkey:7>', ['1']).problems.map((problem) => problem.code)).toEqual(['reference-needs-name', 'unknown-person']);
+  });
+
+
+  it('fills them in from what the page knows, and says of each what is missing', () => {
+    const { items } = parseScript('<xonly:1> <tapkey:1> <witnessScript> <witnessHash> <leafA> <leafB> <controlA> <controlB>', ['1']);
+    const values = { xOnlyKeys: { 1: 'a1' }, outputKeys: { 1: 'b1' }, witnessScript: '51', witnessHash: 'c1', leaves: ['d1', null], controls: [null, 'e1'] };
+
+    expect(resolveScript(items, values).items.map((item) => item.hex)).toEqual(['a1', 'b1', '51', 'c1', 'd1', null, null, 'e1']);
+    expect(resolveScript(items, values).problems.map((problem) => problem.code)).toEqual(['no-leaf', 'no-control-block']);
+    expect(resolveScript(items, {}).problems.map((problem) => problem.code)).toEqual([
+      'no-taproot-key', 'no-taproot-key', 'no-witness-script', 'no-witness-script', 'no-leaf', 'no-leaf', 'no-control-block', 'no-control-block',
+    ]);
+  });
+
+
+  it('gives a signature the bytes of its own place: the same pair\'s two signatures in one script may differ', () => {
+    const { items } = parseScript('<sig:1> 5 <sig:1>', ['1']);
+    const filled = resolveScript(items, { signatures: { 0: 'aa', 10: 'bb' } });
+
+    expect(items.map((item) => item.start)).toEqual([0, 8, 10]);
+    expect(filled.items.filter((item) => item.ref).map((item) => item.hex)).toEqual(['aa', 'bb']);
+    expect(resolveScript(items, { signatures: { 0: 'aa' } }).problems.map((problem) => [problem.code, problem.start])).toEqual([['signature-outside-unlock', 10]]);
+  });
 });
 
 
@@ -215,6 +249,36 @@ describe('a script as bytes', () => {
     expect(isPushOnly(parseScript('0 OP_DUP').items)).toBe(false);
     expect(isPushOnly([])).toBe(true);
   });
+
+
+  it('remembers the byte every item it reads ends at', () => {
+    expect(readScript(bytesOf('2 0xa1b2 OP_DUP "labas" OP_CHECKSIG')).items.map((item) => item.until)).toEqual([1, 4, 5, 11, 12]);
+    expect(readScript(`4c02a1b2ac`).items.map((item) => item.until)).toEqual([4, 5]);
+  });
+
+
+  it('cuts every push of some bytes out of a script — where an item begins, and nowhere else', () => {
+    expect(withoutPush('01aa7601aaac', 'aa')).toBe('76ac');
+    expect(withoutPush('01aa01aa01aa', 'aa')).toBe('');
+    expect(withoutPush('0201aa76', 'aa')).toBe('0201aa76');
+    expect(withoutPush('76ac', 'aa')).toBe('76ac');
+    expect(withoutPush('4c01aa01aa', 'aa')).toBe('4c01aa');
+    expect(withoutPush('007600ac', '')).toBe('76ac');
+  });
+
+
+  it('keeps the tail of a script it cannot read to the end, pushes cut out in front of it', () => {
+    expect(withoutPush('01aa7605abcd', 'aa')).toBe('7605abcd');
+    expect(withoutPush('05abcd', 'aa')).toBe('05abcd');
+  });
+
+
+  it('cuts every OP_CODESEPARATOR out of a script, and no byte of data that only looks like one', () => {
+    expect(withoutSeparators('ab76abacab')).toBe('76ac');
+    expect(withoutSeparators('01ab76ab')).toBe('01ab76');
+    expect(withoutSeparators('76ac')).toBe('76ac');
+    expect(withoutSeparators('ab05abcd')).toBe('05abcd');
+  });
 });
 
 
@@ -242,7 +306,26 @@ describe('telling locks apart', () => {
     [`5221${publicKey}21${other}52ae`, { kind: 'multisig', required: 2, total: 2, publicKeys: [publicKey, other] }],
     ['935587', { kind: 'custom' }],
     [`5321${publicKey}21${other}52ae`, { kind: 'custom' }],
+    [`0014${keyHash}`, { kind: 'p2wpkh', hash: keyHash }],
+    [`0020${'ab'.repeat(32)}`, { kind: 'p2wsh', hash: 'ab'.repeat(32) }],
+    [`5120${'ab'.repeat(32)}`, { kind: 'p2tr', key: 'ab'.repeat(32) }],
+    ['51024e73', { kind: 'anchor' }],
+    [`5220${'ab'.repeat(32)}`, { kind: 'witness', version: 2, program: 'ab'.repeat(32) }],
+    [`0015${'ab'.repeat(21)}`, { kind: 'witness', version: 0, program: 'ab'.repeat(21) }],
   ])('names the lock %s', (hex, expected) => {
     expect(describeLock(hex)).toEqual(expected);
+  });
+
+
+  it('takes for a witness program a version and one push of two to forty bytes, and nothing else', () => {
+    expect(witnessProgramOf(`0014${keyHash}`)).toEqual({ version: 0, program: keyHash });
+    expect(witnessProgramOf(`6028${'ab'.repeat(40)}`)).toEqual({ version: 16, program: 'ab'.repeat(40) });
+    expect(witnessProgramOf('51024e73')).toEqual({ version: 1, program: '4e73' });
+    expect(witnessProgramOf('5101ab')).toBeNull();
+    expect(witnessProgramOf(`5129${'ab'.repeat(41)}`)).toBeNull();
+    expect(witnessProgramOf(`0014${keyHash}61`)).toBeNull();
+    expect(witnessProgramOf(`4f14${keyHash}`)).toBeNull();
+    expect(witnessProgramOf(`004c14${keyHash}`)).toBeNull();
+    expect(witnessProgramOf('')).toBeNull();
   });
 });

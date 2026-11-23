@@ -4,9 +4,11 @@
 //  A place to build Bitcoin's locks and open them, and to
 //  watch a full node decide. Two transactions stand on top:
 //  A makes coins, each under a lock, and B spends one of
-//  them. Under them is the one thing the page is about — the
-//  two scripts in a line, in the order a node runs them, and
-//  the stack they leave behind.
+//  them. Under them is the one thing the page is about — what
+//  B brings and the lock it has to open, in a line, in the
+//  order a node goes through them, with any script that
+//  stands behind a hash or a Taproot key under them, and the
+//  stack they leave behind.
 //
 //  Nothing is typed as a script and nothing has to be run.
 //  A script is built from tiles taken from the tray at the
@@ -43,7 +45,7 @@ import { useMemo } from 'react';
 import usePlayground from './hooks/usePlayground';
 import useScriptRows from './hooks/useScriptRows';
 import useStepper from './hooks/useStepper';
-import { stopsOf, tapeOf, verdictOf } from './playback';
+import { stopsOf, tapesOf, verdictOf } from './playback';
 import More from './components/More';
 import PieceTray from './components/PieceTray';
 import Player from './components/Player';
@@ -78,14 +80,10 @@ export default function BitcoinScriptPage() {
   const timeline = model.verification?.timeline ?? null;
   const stops = useMemo(() => (timeline ? stopsOf(timeline) : null), [timeline]);
   const stepper = useStepper(stops);
-  const rows = useScriptRows(state, model, change, visit);
+  const rows = useScriptRows(state, model, change, visit, example);
 
   const verdict = verdictOf(model.verification, stepper);
-  const tapes = {
-    unlock: tapeOf('unlock', model.b.unlock, model.lexicon, timeline, stepper.entry),
-    lock: tapeOf('lock', model.b.spends.script, model.lexicon, timeline, stepper.entry),
-    redeem: tapeOf('redeem', model.b.redeem, model.lexicon, timeline, stepper.entry),
-  };
+  const tapes = tapesOf(model, timeline, stepper.entry);
 
   return (
     <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-4 p-4">
@@ -102,7 +100,7 @@ export default function BitcoinScriptPage() {
 
         <div className="order-1 flex min-w-0 flex-1 flex-col gap-3 lg:order-2">
           <div className="card-surface flex flex-col gap-5 p-3.5 sm:p-4">
-            <ScriptLine tapes={tapes} rows={rows} stepper={stepper} stops={stops} lexicon={model.lexicon} />
+            <ScriptLine tapes={tapes} rows={rows} stepper={stepper} stops={stops} model={model} />
 
             <div className="grid gap-5 md:grid-cols-2">
               <StackView model={model} stepper={stepper} />

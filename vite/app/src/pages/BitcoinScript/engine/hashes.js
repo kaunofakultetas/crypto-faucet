@@ -12,16 +12,23 @@
 //  and the message with it, so signing the same thing twice
 //  gives the same signature.
 //
+//  Taproot hashes with SHA-256 too, but never bare: every
+//  hash it takes starts with the name of what is being hashed
+//  (taggedHash), so that a hash made for one purpose can
+//  never be passed off as a hash made for another.
+//
 //  The work is crypto-js's, one module per function — the
 //  same library the block simulator hashes with — because
 //  everything on this page is computed while the student
 //  types, and the browser's own hashing only answers later.
 //
 //  Used by:
-//    - secp256k1.js — the deterministic signing nonce
+//    - secp256k1.js — the deterministic signing nonce, the
+//      hashes inside a Schnorr signature
 //    - transaction.js — ids and signature hashes
 //    - interpreter.js — the hashing opcodes
 //    - script.js — a script's hash, a key's hash
+//    - taproot.js — the hashes of a tree of scripts
 // -----------------------------------------------------------
 
 import sha1 from 'crypto-js/sha1';
@@ -150,3 +157,29 @@ export const hash256 = (hex) => sha256Hex(sha256Hex(hex));
 // -----------------------------------------------------------
 
 export const hmacSha256Hex = (keyHex, hex) => hmacSha256(Hex.parse(hex), Hex.parse(keyHex)).toString(Hex);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// taggedHash
+// -----------------------------------------------------------
+//
+// A SHA-256 that says what it is a hash of: the bytes are
+// hashed behind the SHA-256 of a tag — a short name, written
+// twice. Taproot and Schnorr signatures take every hash this
+// way, each under its own name.
+//
+// Used by:
+//   - secp256k1.js — the three hashes of a Schnorr signature
+//   - taproot.js — a leaf, a branch, a tweak
+//   - transaction.js — the message a Taproot signature signs
+// -----------------------------------------------------------
+
+export function taggedHash(tag, hex) {
+  const name = sha256(tag).toString(Hex);
+  return sha256Hex(`${name}${name}${hex}`);
+}

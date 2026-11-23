@@ -17,18 +17,20 @@
 //      confirmations the coin has
 //    - the coin — whether another transaction has spent it
 //      already, which makes B a double spend
-//    - the signatures — frozen as they are now, instead of
-//      made anew after every change: change B afterwards and
-//      it carries signatures of a transaction that no longer
-//      exists
-//    - the redeem script — a third script, for a lock that
-//      holds only a script's hash
+//    - the signatures — the moment of signing frozen, instead
+//      of every key signing anew after every change: change B
+//      afterwards and it carries signatures of a transaction
+//      that no longer exists
+//    - the rows of the script line a scene has no use for,
+//      and so does not show: the witness, a redeem script, a
+//      witness script, the scripts of a Taproot key
 //
 //  A scene that is about one of these opens the drawer by
 //  itself.
 //
 //  Split into (root component last):
 //
+//    EXTRA_ROWS   — the rows that can be asked for
 //    NumberField  — a field for a number, with what it means
 //    More         — the button and the drawer (default export)
 // -----------------------------------------------------------
@@ -40,6 +42,18 @@ import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import AddIcon from '@mui/icons-material/Add';
 
 import { ageText, problemText, sequenceMeaning } from '../narration';
+
+
+// The rows of the script line that can be asked for, by the
+// name hooks/useScriptRows.js knows each by, with what the
+// button that brings it says
+const EXTRA_ROWS = [
+  ['unlock', 'Pridėti atrakinimo skriptą'],
+  ['witness', 'Pridėti witness'],
+  ['redeem', 'Pridėti išpirkimo skriptą'],
+  ['witnessScript', 'Pridėti witness script'],
+  ['leaves', 'Pridėti tapscript A ir B'],
+];
 
 
 
@@ -88,8 +102,10 @@ function NumberField({ label, text, read, hint = null, placeholder, onChange }) 
 // -----------------------------------------------------------
 //
 // The button that opens the drawer, and the drawer: the four
-// numbers of time, the two switches, and — while the redeem
-// script is not on the page yet — the button that brings it.
+// numbers of time, the two switches, and a button for every
+// row of the script line that is not on the page yet — the
+// witness, the scripts that stand behind a hash, the Taproot
+// scripts — which brings that row.
 // An empty sequence number is the one the transaction needs
 // by itself, shown faintly in its field. With the signatures
 // frozen the drawer says what that means, and once any of
@@ -152,12 +168,16 @@ export default function More({ state, model, rows, change, freeze, thaw, startOp
               label="Užšaldyti parašus"
             />
 
-            {!rows.redeemShown && (
-              <Button variant="outlined" startIcon={<AddIcon />} onClick={rows.openRedeem} sx={{ textTransform: 'none' }}>
-                Pridėti išpirkimo skriptą
-              </Button>
-            )}
           </div>
+          {EXTRA_ROWS.some(([name]) => !rows.shown[name]) && (
+            <div className="flex flex-wrap items-center gap-2">
+              {EXTRA_ROWS.filter(([name]) => !rows.shown[name]).map(([name, label]) => (
+                <Button key={name} variant="outlined" size="small" startIcon={<AddIcon />} onClick={() => rows.open(name)} sx={{ textTransform: 'none' }}>
+                  {label}
+                </Button>
+              ))}
+            </div>
+          )}
 
           {frozen && (
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-slate-700">

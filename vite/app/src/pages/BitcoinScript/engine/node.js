@@ -18,8 +18,9 @@
 //                     a block the chain must have reached,
 //                     or the relative one, an age the coin
 //                     must have reached
-//    4. the script  — does the input's unlocking script open
-//                     the coin's lock (interpreter.js)
+//    4. the script  — does the input — its unlocking script
+//                     and its witness — open the coin's lock
+//                     (interpreter.js)
 //
 //  The answer is a timeline: one entry per question asked,
 //  every step of the script run in between, and a verdict at
@@ -38,6 +39,15 @@
 //  times off; and a relative lock time in a script is
 //  compared with the sequence number of the very input that
 //  spends the coin, again of the same kind.
+//
+//  What a signature signs depends on the lock it opens. The
+//  original locks, the witness programs of version 0 and
+//  Taproot each have a message of their own (transaction.js),
+//  and the two newer ones cover what the node knows about the
+//  coins being spent — their amounts, and for Taproot their
+//  locks as well — so the checker is told those too. Taproot's
+//  signatures are Schnorr signatures: sixty-four bytes, or
+//  sixty-five with a type at the end.
 //
 //  A relative lock time works in two layers. The script only
 //  demands that the input's sequence number promises a wait
@@ -63,9 +73,11 @@
 //    verifySpend  — the four questions, as a timeline
 // -----------------------------------------------------------
 
+import { byteLength } from './bytes';
 import { evaluateSpend } from './interpreter';
-import { isPublicKey, isStrictDer, verifyDigest } from './secp256k1';
-import { SIGHASH_ALL, signatureHash } from './transaction';
+import { withoutSeparators } from './script';
+import { isPublicKey, isStrictDer, verifyDigest, verifySchnorr } from './secp256k1';
+import { SIGHASH_DEFAULT, signatureHash, taprootSignatureHash, witnessSignatureHash } from './transaction';
 
 
 
@@ -184,16 +196,30 @@ export const hasBit = (value, bit) => Math.floor(value / bit) % 2 === 1;
 // checkerFor
 // -----------------------------------------------------------
 //
-// The three answers the script machine needs from the
-// spending transaction, for one of its inputs.
+// The answers the script machine needs from the spending
+// transaction, for one of its inputs. `spent` is what the
+// node knows of every coin the transaction spends, in the
+// order of its inputs — amount and lock each; the original
+// locks never ask for it.
 //
 // A signature check says whether the signature is valid and,
 // when it is not, why: empty, a public key that is no key,
 // or simply not this key's signature of this transaction. It
 // also hands back the message that was checked, for the page
-// to show. Bytes that are no DER signature, and a signature
-// of a type other than "all", are not a no but a fault — the
-// script stops there.
+// to show. Bytes that are no DER signature are not a no but a
+// fault — the script stops there. The signature's last byte
+// is its type, and the rules the script is run by say which
+// message a signature of that type has to sign; under the
+// original rules the script goes into the message without its
+// OP_CODESEPARATORs.
+//
+// A Schnorr signature check knows no plain no: a signature of
+// the wrong size, of a type Taproot does not know, or one
+// that does not fit the key is each a fault. It is told
+// whether the coin is opened by a script — then by which
+// leaf, and where the last OP_CODESEPARATOR was run — and
+// whether the witness carried an annex, because the message
+// covers all of that.
 //
 // A lock time check hands back the transaction's lock time
 // and, when the script's demand is not met, why not.
@@ -210,21 +236,33 @@ export const hasBit = (value, bit) => Math.floor(value / bit) % 2 === 1;
 //   - verifySpend (below)
 // -----------------------------------------------------------
 
-export function checkerFor(transaction, inputIndex) {
+export function checkerFor(transaction, inputIndex, spent = []) {
   return {
-    checkSignature(signature, publicKey, scriptCode) {
+    checkSignature(signature, publicKey, scriptCode, rules = 'legacy') {
       if (signature === '') return { valid: false, why: 'empty-signature' };
 
       const type = parseInt(signature.slice(-2), 16);
       const der = signature.slice(0, -2);
       if (!isStrictDer(der)) return { fault: { code: 'signature-encoding' } };
-      if (type !== SIGHASH_ALL) return { fault: { code: 'signature-type', type } };
 
-      const digest = signatureHash(transaction, inputIndex, scriptCode);
+      const digest = rules === 'witness0'
+        ? witnessSignatureHash(transaction, inputIndex, scriptCode, spent[inputIndex].value, type)
+        : signatureHash(transaction, inputIndex, withoutSeparators(scriptCode), type);
       if (!isPublicKey(publicKey)) return { valid: false, digest, why: 'bad-public-key' };
 
       const valid = verifyDigest(der, digest, publicKey);
       return { valid, digest, why: valid ? null : 'wrong-signature' };
+    },
+
+    checkSchnorr(signature, key, { leaf = null, annex = null, separator = 0xffffffff } = {}) {
+      const size = byteLength(signature);
+      if (size !== 64 && size !== 65) return { fault: { code: 'schnorr-size', size } };
+
+      const type = size === 65 ? parseInt(signature.slice(128), 16) : SIGHASH_DEFAULT;
+      const digest = size === 65 && type === SIGHASH_DEFAULT ? null : taprootSignatureHash(transaction, inputIndex, spent, { hashType: type, annex, leaf, separator });
+      if (digest === null) return { fault: { code: 'schnorr-type', type } };
+
+      return verifySchnorr(signature.slice(0, 128), digest, key) ? { valid: true, digest, why: null } : { fault: { code: 'schnorr-signature', digest } };
     },
 
     checkLockTime(required) {
@@ -268,8 +306,8 @@ export function checkerFor(transaction, inputIndex) {
 // knows: the coin the input names — whether it is in the set
 // of unspent outputs, its amount, its lock and the height of
 // the block that holds it — the unlocking script as items and
-// bytes, how high the chain stands, and the most money there
-// can be on this chain. A coin that is not there has no
+// bytes, the input's witness as its items, how high the chain
+// stands, and the most money there can be on this chain. A coin that is not there has no
 // amount and no lock; the timeline ends at the first
 // question.
 //
@@ -285,7 +323,7 @@ export function checkerFor(transaction, inputIndex) {
 //   - model.js — the verification the page plays back
 // -----------------------------------------------------------
 
-export function verifySpend({ transaction, inputIndex = 0, coin, unlock, height, maxMoney = MAX_MONEY }) {
+export function verifySpend({ transaction, inputIndex = 0, coin, unlock, witness = [], height, maxMoney = MAX_MONEY }) {
   const timeline = [];
   const outpoint = { txid: transaction.inputs[inputIndex].txid, vout: transaction.inputs[inputIndex].vout };
 
@@ -330,7 +368,8 @@ export function verifySpend({ transaction, inputIndex = 0, coin, unlock, height,
   if (finalityError) return reject('finality', finalityError);
 
   // 4. The script
-  const run = evaluateSpend({ unlock, lock: coin.lock, checker: checkerFor(transaction, inputIndex) });
+  const coins = transaction.inputs.map((_, index) => (index === inputIndex ? { value: coin.value, script: coin.lock.hex } : null));
+  const run = evaluateSpend({ unlock, lock: coin.lock, witness, checker: checkerFor(transaction, inputIndex, coins) });
   for (const step of run.steps.slice(0, -1)) timeline.push({ stage: 'script', ...step });
   if (!run.ok) return reject('script', run.error, run.steps.at(-1).stack);
 

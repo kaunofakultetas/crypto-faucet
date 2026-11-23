@@ -344,13 +344,19 @@ export function makeHash(algorithm, typed) {
 //
 // The three words that stand for what is a key pair's: a
 // signature of the spending transaction, the public key, and
-// that key's hash. A key pair is named by its number.
+// that key's hash. Where the page is about Taproot the last
+// two give way to what Taproot uses in their place: the key
+// in its 32-byte form, and the Taproot key that key gives
+// with the tree of scripts behind it. A key pair is named by
+// its number.
 //
 // Used by:
 //   - components/PieceTray.jsx — a key pair's tiles
 // -----------------------------------------------------------
 
-export const keyWords = (id) => [`<sig:${id}>`, `<pubkey:${id}>`, `<pubkeyhash:${id}>`];
+export const keyWords = (id, taproot = false) => (taproot
+  ? [`<sig:${id}>`, `<xonly:${id}>`, `<tapkey:${id}>`]
+  : [`<sig:${id}>`, `<pubkey:${id}>`, `<pubkeyhash:${id}>`]);
 
 
 

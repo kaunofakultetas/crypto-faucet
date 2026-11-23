@@ -22,7 +22,7 @@ import { sha256Hex } from '@/pages/BitcoinScript/engine/hashes';
 import { OPCODES, opcodeNamed } from '@/pages/BitcoinScript/engine/opcodes';
 import { EXAMPLES } from '@/pages/BitcoinScript/examples';
 import { buildModel, reduce } from '@/pages/BitcoinScript/model';
-import { checksOf, stackAt, stackChange, stopsOf, tapeOf, verdictOf } from '@/pages/BitcoinScript/playback';
+import { checksOf, phaseOf, stackAt, stackChange, stopAt, stopsOf, tapeOf, tapesOf, verdictOf } from '@/pages/BitcoinScript/playback';
 import { COMMON_WORDS, DRAWERS, HASHES, SMALL_NUMBERS, drawersWith, keyWords, makeHash, makeWord, withWord, withWordMoved, withoutWord } from '@/pages/BitcoinScript/tiles';
 
 
@@ -92,6 +92,12 @@ describe('a script as a row of tiles', () => {
 
   it('names the three things of a key pair by the pair\'s number', () => {
     expect(keyWords(3)).toEqual(['<sig:3>', '<pubkey:3>', '<pubkeyhash:3>']);
+  });
+
+
+  it('names a key pair\'s Taproot keys in their place where the page is about Taproot', () => {
+    expect(keyWords(3, true)).toEqual(['<sig:3>', '<xonly:3>', '<tapkey:3>']);
+    expect(keyWords(3, false)).toEqual(keyWords(3));
   });
 });
 
@@ -230,7 +236,7 @@ describe('the opcodes the tray offers', () => {
   it('narrows the families by any part of a name, whatever the letter case, with or without OP_', () => {
     expect(drawersWith('')).toEqual(DRAWERS);
     expect(drawersWith('  OP_  ')).toEqual(DRAWERS);
-    expect(drawersWith('checksig').flatMap((drawer) => drawer.words)).toEqual(['OP_CHECKSIG', 'OP_CHECKSIGVERIFY']);
+    expect(drawersWith('checksig').flatMap((drawer) => drawer.words)).toEqual(['OP_CHECKSIG', 'OP_CHECKSIGVERIFY', 'OP_CHECKSIGADD']);
     expect(drawersWith('op_dup').flatMap((drawer) => drawer.words)).toEqual(expect.arrayContaining(['OP_DUP', 'OP_2DUP', 'OP_IFDUP']));
     expect(drawersWith('16').map((drawer) => [drawer.key, drawer.words])).toEqual(expect.arrayContaining([['constants', ['16']]]));
   });
@@ -262,6 +268,64 @@ describe('a check, as far as the cursor has got', () => {
   it('stops at every word of the scripts and at the verdict, and nowhere else', () => {
     expect(stops.map((entry) => entry.phase ?? entry.stage)).toEqual(['unlock', 'unlock', 'lock', 'lock', 'lock', 'lock', 'lock', 'verdict']);
     expect(stops.at(-1)).toBe(timeline.at(-1));
+  });
+
+
+  it('stops where the node turns to the witness, between the lock and the script the witness brings', () => {
+    const kinds = (id) => stopsOf(modelOf(id).verification.timeline).map((entry) => entry.phase ?? entry.kind ?? entry.stage);
+
+    expect(kinds('p2wpkh')).toEqual(['lock', 'lock', 'witness', 'program', 'program', 'program', 'program', 'program', 'verdict']);
+    expect(kinds('p2tr-key')).toEqual(['lock', 'lock', 'witness', 'verdict']);
+    expect(kinds('p2sh-p2wpkh').filter((kind) => !['unlock', 'lock', 'program'].includes(kind))).toEqual(['redeem', 'redeem', 'redeem', 'witness', 'verdict']);
+  });
+
+
+  it('knows every row by what the node calls its script — and of the two Taproot scripts only the one the witness shows', () => {
+    expect(['unlock', 'witness', 'lock', 'redeem', 'witnessScript', 'program'].map((row) => phaseOf(row, null))).toEqual(['unlock', 'witness', 'lock', 'redeem', 'witnessScript', 'program']);
+    expect([phaseOf('leafA', 0), phaseOf('leafB', 0)]).toEqual(['leaf', null]);
+    expect([phaseOf('leafA', 1), phaseOf('leafB', 1)]).toEqual([null, 'leaf']);
+    expect([phaseOf('leafA', null), phaseOf('leafB', null)]).toEqual([null, null]);
+  });
+
+
+  it('finds the stop a word belongs to: its own step, or — for a word of the witness — the turn to the witness', () => {
+    const shown = modelOf('p2tr-script');
+    const steps = stopsOf(shown.verification.timeline);
+
+    expect(steps[stopAt(steps, 'lock', 1)]).toMatchObject({ kind: 'item', phase: 'lock', index: 1 });
+    expect(steps[stopAt(steps, 'witness', 0)]).toMatchObject({ kind: 'witness', flavour: 'tapscript' });
+    expect(stopAt(steps, 'witness', 3)).toBe(stopAt(steps, 'witness', 0));
+    expect(steps[stopAt(steps, 'leaf', 2)]).toMatchObject({ kind: 'item', phase: 'leaf', index: 2 });
+    expect(stopAt(steps, null, 0)).toBe(-1);
+    expect(stopAt(steps, 'redeem', 0)).toBe(-1);
+    expect(stopAt(null, 'lock', 0)).toBe(-1);
+  });
+
+
+  it('lays every row out as tiles, and marks the node\'s place only in the Taproot script it runs', () => {
+    const shown = modelOf('p2tr-script');
+    const { timeline: steps } = shown.verification;
+    const inLeaf = steps.find((entry) => entry.phase === 'leaf' && entry.index === 2);
+    const tapes = tapesOf(shown, steps, inLeaf);
+
+    expect(Object.keys(tapes)).toEqual(['unlock', 'witness', 'lock', 'redeem', 'witnessScript', 'program', 'leafA', 'leafB']);
+    expect(marksOf(tapes.leafB)).toEqual(['done', 'done', 'current', 'todo', 'todo']);
+    expect(marksOf(tapes.leafA)).toEqual(['todo', 'todo']);
+    expect(marksOf(tapes.witness)).toEqual(['todo', 'todo', 'todo', 'todo']);
+    expect(marksOf(tapes.lock)).toEqual(['done', 'done']);
+    expect(tapes.program).toEqual([]);
+    expect(tapes.unlock).toEqual([]);
+  });
+
+
+  it('lays the script the node builds itself out as a row of its own', () => {
+    const paid = modelOf('p2wpkh');
+    const { timeline: steps } = paid.verification;
+    const tapes = tapesOf(paid, steps, steps.find((entry) => entry.phase === 'program' && entry.index === 1));
+
+    expect(tapes.program.map((tile) => tile.label.text)).toEqual(['OP_DUP', 'OP_HASH160', 'rakto maiša „Jonas“', 'OP_EQUALVERIFY', 'OP_CHECKSIG']);
+    expect(marksOf(tapes.program)).toEqual(['done', 'current', 'todo', 'todo', 'todo']);
+    expect(tapesOf(modelOf('p2pkh'), null, null).program).toEqual([]);
   });
 
 

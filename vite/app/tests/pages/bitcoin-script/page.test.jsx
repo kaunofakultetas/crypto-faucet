@@ -2,9 +2,10 @@
 //  [*] Tests — Bitcoin script playground (route /bitcoin-script)
 //
 //  The page as a student uses it: two transactions on top,
-//  the two scripts in a line with the stack under them, one
-//  tray of pieces at the side, and a node whose check is
-//  always done and can be walked through.
+//  what the spending input brings and the lock in a line with
+//  the stack under them, one tray of pieces at the side, and
+//  a node whose check is always done and can be walked
+//  through.
 //
 //    - what is on the page when it opens — and how little
 //    - the node's check: playing by itself, a step either
@@ -24,6 +25,10 @@
 //    - the scenes and their groups
 //    - Lightning and the swaps: a coin held back by its own
 //      age, a secret thirty-two bytes long, a second chain
+//    - SegWit and Taproot: the rows that come and go with the
+//      lock — the witness, a witness script, the script a
+//      node builds itself, the scripts a key hides — and the
+//      pieces the tray offers for them
 //    - the page inside the real app: its route, its tab's
 //      title, its place in the tools menu, and that it works
 //      with the backend down
@@ -44,10 +49,15 @@ import { EXAMPLES, GROUPS } from '@/pages/BitcoinScript/examples';
 import BitcoinScriptPage from '@/pages/BitcoinScript/Page';
 
 
-// The names of the three scripts, and of their lists of tiles
+// The names of the rows, and of their lists of tiles
 const UNLOCK = 'Atrakinimo skriptas';
 const LOCK = 'Užrakto skriptas';
 const REDEEM = 'Išpirkimo skriptas';
+const WITNESS = 'Witness';
+const WITNESS_SCRIPT = 'Witness script';
+const IMPLIED = 'scriptCode';
+const LEAF_A = 'Tapscript A';
+const LEAF_B = 'Tapscript B';
 
 // The everyday lock, word by word, as its tiles are named
 const P2PKH_LOCK = ['OP_DUP', 'OP_HASH160', 'rakto maiša „Jonas“', 'OP_EQUALVERIFY', 'OP_CHECKSIG'];
@@ -153,12 +163,12 @@ describe('the page as it opens', () => {
     open();
 
     expect(screen.getByRole('heading', { level: 1, name: 'Bitcoin skriptų žaidimų aikštelė' })).toBeInTheDocument();
-    expect(within(screen.getByRole('group', { name: 'Scenų grupės' })).getAllByRole('button').map((button) => [button.textContent, button.getAttribute('aria-pressed')])).toEqual([
-      ['Užraktai', 'true'], ['Lightning', 'false'], ['Atominiai mainai', 'false'],
-    ]);
+    expect(within(screen.getByRole('group', { name: 'Scenų grupės' })).getAllByRole('button').map((button) => [button.textContent, button.getAttribute('aria-pressed')])).toEqual(
+      GROUPS.map((group) => [group.title, group.key === 'locks' ? 'true' : 'false']),
+    );
     expect(within(screen.getByRole('group', { name: 'Scenos' })).getAllByRole('button').map((button) => [button.textContent, button.getAttribute('aria-pressed')])).toEqual([
-      ['Suma', 'false'], ['Slaptažodis', 'false'], ['P2PK', 'false'], ['P2PKH', 'true'], ['Multisig', 'false'],
-      ['P2SH', 'false'], ['Laiko užraktas', 'false'], ['Du keliai', 'false'], ['Vagystė', 'false'], ['OP_RETURN', 'false'],
+      ['OP_TRUE', 'false'], ['Suma', 'false'], ['Slaptažodis', 'false'], ['Genesis galvosūkis', 'false'], ['SHA-1 kolizija', 'false'], ['P2PK', 'false'],
+      ['P2PKH', 'true'], ['Multisig', 'false'], ['P2SH', 'false'], ['Du keliai', 'false'], ['Vagystė', 'false'], ['OP_RETURN', 'false'],
     ]);
     expect(screen.getByText('Įprasčiausias užraktas: viešojo rakto maiša, tai yra adresas. Atrakina viešasis raktas, atitinkantis maišą, ir jo parašas.')).toBeInTheDocument();
   });
@@ -240,12 +250,12 @@ describe('the page as it opens', () => {
   });
 
 
-  it('keeps the further settings and the redeem script out of sight', () => {
+  it('keeps the further settings and every row this lock has no use for out of sight', () => {
     open();
 
     expect(press('Daugiau nustatymų')).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByLabelText('Grandinės aukštis')).not.toBeInTheDocument();
-    expect(screen.queryByRole('list', { name: REDEEM })).not.toBeInTheDocument();
+    for (const row of [REDEEM, WITNESS, WITNESS_SCRIPT, IMPLIED, LEAF_A, LEAF_B]) expect(screen.queryByRole('list', { name: row })).not.toBeInTheDocument();
   });
 });
 
@@ -1004,7 +1014,7 @@ describe('further settings', () => {
 
   it('is open from the start in the scene that is about time', async () => {
     const { user } = open();
-    await user.click(sceneButton('Laiko užraktas'));
+    await loadScene(user, 'Laiko užraktas');
 
     expect(screen.getByLabelText('Transakcijos B nLockTime')).toHaveValue('840000');
     expect(said()).toContain('Transakcija B priimta');
@@ -1013,7 +1023,7 @@ describe('further settings', () => {
 
   it('holds a transaction back while the chain has not reached its lock time', async () => {
     const { user } = open();
-    await user.click(sceneButton('Laiko užraktas'));
+    await loadScene(user, 'Laiko užraktas');
     await retype(user, screen.getByLabelText('Grandinės aukštis'), '839999');
 
     expect(said()).toContain('Mazgas sustojo ties klausimu „Ar transakcijai jau laikas?“');
@@ -1024,7 +1034,7 @@ describe('further settings', () => {
 
   it('lets the script itself refuse a transaction whose lock time is lower than the lock demands', async () => {
     const { user } = open();
-    await user.click(sceneButton('Laiko užraktas'));
+    await loadScene(user, 'Laiko užraktas');
     await retype(user, screen.getByLabelText('Transakcijos B nLockTime'), '839999');
 
     expect(said()).toContain('Mazgas sustojo užrakto skripte, ties žodžiu OP_CHECKLOCKTIMEVERIFY.');
@@ -1221,15 +1231,17 @@ describe('Lightning and the swaps', () => {
     const { user } = open();
     await loadScene(user, 'to_local');
 
-    expect(wordsOf(LOCK)).toEqual(['OP_IF', 'viešasis raktas „Atšaukimas“', 'OP_ELSE', '144', 'OP_CHECKSEQUENCEVERIFY', 'OP_DROP', 'viešasis raktas „Jonas“', 'OP_ENDIF', 'OP_CHECKSIG']);
-    expect(wordsOf(UNLOCK)).toEqual(['parašas „Jonas“', '0']);
+    expect(wordsOf(WITNESS_SCRIPT)).toEqual(['OP_IF', 'viešasis raktas „Atšaukimas“', 'OP_ELSE', '144', 'OP_CHECKSEQUENCEVERIFY', 'OP_DROP', 'viešasis raktas „Jonas“', 'OP_ENDIF', 'OP_CHECKSIG']);
+    expect(wordsOf(LOCK)).toEqual(['0', 'witness script maiša']);
+    expect(wordsOf(WITNESS)).toEqual(['parašas „Jonas“', '0', 'witness script']);
+    expect(screen.queryByRole('list', { name: UNLOCK })).not.toBeInTheDocument();
     expect(said()).toContain('Transakcija B priimta');
     expect(screen.getByLabelText('Įvesties nSequence')).toHaveValue('144');
     expect(screen.getByLabelText('Įvesties nSequence')).toHaveAccessibleDescription('moneta turi būti 144 blokų senumo');
     expect(screen.getByLabelText('Transakcijos A blokas')).toHaveAccessibleDescription('moneta turi 201 patvirtinimą');
     expect(within(cardOf('A')).getAllByRole('radio').map((coin) => [coin.getAttribute('aria-label'), coin.checked])).toEqual([
-      ['Išvestis #0: 0.02 BTC, adresas „Gabija“ (P2PKH)', false],
-      ['Išvestis #1: 0.03 BTC, savas skriptas', true],
+      ['Išvestis #0: 0.02 BTC, SegWit adresas „Gabija“ (P2WPKH)', false],
+      ['Išvestis #1: 0.03 BTC, witness script maiša (P2WSH)', true],
     ]);
   });
 
@@ -1237,7 +1249,7 @@ describe('Lightning and the swaps', () => {
   it('says what the sequence opcode held the input to when its word is pressed', async () => {
     const { user } = open();
     await loadScene(user, 'to_local');
-    await user.click(tileOf(LOCK, 'OP_CHECKSEQUENCEVERIFY'));
+    await user.click(tileOf(WITNESS_SCRIPT, 'OP_CHECKSEQUENCEVERIFY'));
 
     expect(said()).toContain('Skriptas reikalauja, kad įvesties nSequence būtų bent 144; transakcijos B įvesties nSequence — 144. Tinka.');
     expect(stack()).toEqual(['sig Jonas', '144']);
@@ -1261,7 +1273,7 @@ describe('Lightning and the swaps', () => {
     await loadScene(user, 'to_local');
     await retype(user, screen.getByLabelText('Įvesties nSequence'), '100');
 
-    expect(said()).toContain('Mazgas sustojo užrakto skripte, ties žodžiu OP_CHECKSEQUENCEVERIFY.');
+    expect(said()).toContain('Mazgas sustojo witness script viduje, ties žodžiu OP_CHECKSEQUENCEVERIFY.');
     expect(said()).toContain('Įvesties nSequence mažesnis, nei reikalauja skriptas — transakcija B nepažadėjo laukti tiek, kiek reikia.');
 
     await user.clear(screen.getByLabelText('Įvesties nSequence'));
@@ -1283,7 +1295,7 @@ describe('Lightning and the swaps', () => {
     const { user } = open();
     await loadScene(user, 'Bauda');
 
-    expect(wordsOf(UNLOCK)).toEqual(['parašas „Atšaukimas“', '1']);
+    expect(wordsOf(WITNESS)).toEqual(['parašas „Atšaukimas“', '1', 'witness script']);
     expect(said()).toContain('Transakcija B priimta');
     expect(within(tray()).getAllByRole('button', { name: /^Raktų pora „/ }).map((button) => button.getAttribute('aria-label'))).toEqual(['Raktų pora „Jonas“', 'Raktų pora „Gabija“', 'Raktų pora „Atšaukimas“']);
   });
@@ -1293,9 +1305,14 @@ describe('Lightning and the swaps', () => {
     const { user } = open();
     await loadScene(user, 'HTLC siūlomas');
 
-    expect(wordsOf(UNLOCK)).toEqual(['parašas „Gabija“', '„lightning mo…žodis“ (32 B)']);
-    expect(wordsOf(LOCK)).toContain('HASH160 maiša („lightning mo…žodis“)');
-    expect(wordsOf(LOCK)).toHaveLength(26);
+    expect(wordsOf(WITNESS)).toEqual(['parašas „Gabija“', '„lightning mo…žodis“ (32 B)', 'witness script']);
+    expect(wordsOf(WITNESS_SCRIPT)).toContain('HASH160 maiša („lightning mo…žodis“)');
+    expect(wordsOf(WITNESS_SCRIPT)).toHaveLength(26);
+    expect(within(cardOf('A')).getAllByRole('radio').map((coin) => coin.getAttribute('aria-label'))).toEqual([
+      'Išvestis #0: 0.001 BTC, witness script maiša (P2WSH)',
+      'Išvestis #1: 0.02 BTC, SegWit adresas „Gabija“ (P2WPKH)',
+      'Išvestis #2: 0.029 BTC, witness script maiša (P2WSH)',
+    ]);
     expect(said()).toContain('Transakcija B priimta');
   });
 
@@ -1304,7 +1321,7 @@ describe('Lightning and the swaps', () => {
     const { user } = open();
     await loadScene(user, 'HTLC gautas');
 
-    expect(wordsOf(UNLOCK)).toEqual(['parašas „Gabija“', '0']);
+    expect(wordsOf(WITNESS)).toEqual(['parašas „Gabija“', '0', 'witness script']);
     expect(screen.getByLabelText('Transakcijos B nLockTime')).toHaveValue('850040');
     expect(said()).toContain('Transakcija B priimta');
   });
@@ -1355,6 +1372,299 @@ describe('Lightning and the swaps', () => {
     expect(wordsOf(UNLOCK)).toEqual(['parašas „Simona“', '„lightning mo…žodis“ (32 B)', 'išpirkimo skriptas']);
     expect(wordsOf(REDEEM)).toEqual(['OP_HASH160', 'HASH160 maiša („lightning mo…žodis“)', 'OP_EQUAL', 'OP_IF', 'viešasis raktas „Simona“', 'OP_ELSE', '850144', 'OP_CHECKLOCKTIMEVERIFY', 'OP_DROP', 'viešasis raktas „Jonas“', 'OP_ENDIF', 'OP_CHECKSIG']);
     expect(said()).toContain('Transakcija B priimta');
+  });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// SegWit and Taproot
+// -----------------------------------------------------------
+
+describe('SegWit and Taproot', () => {
+
+  const headings = () => within(screen.getByRole('region', { name: 'Skriptai' })).getAllByRole('heading', { level: 2 }).map((heading) => heading.textContent);
+  const piecesOf = (row) => within(screen.getByRole('group', { name: `${row} kaip detalės` })).getAllByRole('button').map((piece) => piece.getAttribute('aria-label'));
+  const keyPieces = () => within(tray()).getAllByRole('button', { name: /^Įdėti: .*„Jonas“$/ }).map((piece) => piece.getAttribute('aria-label'));
+
+  it('shows a coin paid to a witness key hash as a witness, a lock, and the script the node builds itself — with no unlocking script', async () => {
+    const { user } = open();
+    await loadScene(user, 'P2WPKH');
+
+    expect(headings()).toEqual([WITNESS, LOCK, IMPLIED]);
+    expect(wordsOf(WITNESS)).toEqual(P2PKH_UNLOCK);
+    expect(wordsOf(LOCK)).toEqual(['0', 'rakto maiša „Jonas“']);
+    expect(wordsOf(IMPLIED)).toEqual(P2PKH_LOCK);
+    expect(screen.getByText('transakcijos B įvestis, šalia skripto')).toBeInTheDocument();
+    expect(screen.getByText('P2PKH skriptas, kurį mazgas sudaro pats iš rakto maišos')).toBeInTheDocument();
+    expect(within(cardOf('A')).getAllByRole('radio')[0]).toHaveAccessibleName('Išvestis #0: 0.5 BTC, SegWit adresas „Jonas“ (P2WPKH)');
+    expect(said()).toContain('Transakcija B priimta');
+  });
+
+
+  it('sends pressed pieces to the witness where there is no unlocking script, and lets its tiles be taken out', async () => {
+    const { user } = open();
+    await loadScene(user, 'P2WPKH');
+    await user.click(offered('1'));
+    expect(wordsOf(WITNESS)).toEqual([...P2PKH_UNLOCK, '1']);
+    expect(said()).toContain('P2WPKH monetai atrakinti witness turi turėti lygiai du elementus — parašą ir viešąjį raktą, o jų yra 3.');
+
+    await user.click(crossOf(WITNESS, '1'));
+    expect(said()).toContain('Transakcija B priimta');
+  });
+
+
+  it('lays the witness out as the stack when one of its tiles is pressed, and walks the script the node built', async () => {
+    const { user } = open();
+    await loadScene(user, 'P2WPKH');
+
+    await user.click(tileOf(WITNESS, 'parašas „Jonas“'));
+    expect(said()).toContain('Witness program: rakto maiša (P2WPKH)');
+    expect(stack()).toEqual(['sig Jonas', 'pubKey Jonas']);
+
+    await user.click(tileOf(IMPLIED, 'OP_HASH160'));
+    expect(said()).toContain('scriptCode: OP_HASH160');
+    expect(tileOf(IMPLIED, 'OP_HASH160')).toHaveAttribute('aria-current', 'step');
+    expect(stack()).toEqual(['sig Jonas', 'pubKey Jonas', 'pubKeyHash Jonas']);
+  });
+
+
+  it('lets nobody change the script the node builds itself', async () => {
+    const { user } = open();
+    await loadScene(user, 'P2WPKH');
+
+    expect(within(rowOf(IMPLIED)).queryByRole('button', { name: /^Išimti: / })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: `Išvalyti: ${IMPLIED}` })).not.toBeInTheDocument();
+    expect(tileOf(IMPLIED, 'OP_DUP')).not.toHaveAttribute('draggable');
+  });
+
+
+  it('says a witness holds data only when an opcode is put into it', async () => {
+    const { user } = open();
+    await loadScene(user, 'P2WPKH');
+    await user.click(offered('OP_DUP'));
+
+    expect(said()).toContain('Transakcija dar nebaigta');
+    expect(said()).toContain('Witness. „OP_DUP“ čia netinka: witness nevykdomas, jame gali būti tik duomenys.');
+  });
+
+
+  it('brings the unlocking script back on a press, and turns down a witness program spent with anything in it', async () => {
+    const { user } = open();
+    await loadScene(user, 'P2WPKH');
+    await user.click(press('Daugiau nustatymų'));
+    await user.click(press('Pridėti atrakinimo skriptą'));
+
+    expect(headings()).toEqual([UNLOCK, WITNESS, LOCK, IMPLIED]);
+    expect(screen.queryByRole('button', { name: 'Pridėti atrakinimo skriptą' })).not.toBeInTheDocument();
+
+    await user.click(offered('1'));
+    expect(wordsOf(UNLOCK)).toEqual(['1']);
+    expect(said()).toContain('Monetai, užrakintai witness program, atrakinimo skriptas turi likti tuščias: viskas, kas ją atrakina, dedama į witness.');
+  });
+
+
+  it('shows a coin paid to a witness script hash with its script under the line, on offer as itself and as its hash', async () => {
+    const { user } = open();
+    await loadScene(user, 'P2WSH');
+
+    expect(headings()).toEqual([WITNESS, LOCK, WITNESS_SCRIPT]);
+    expect(wordsOf(WITNESS)).toEqual(['0', 'parašas „Jonas“', 'parašas „Rokas“', 'witness script']);
+    expect(wordsOf(LOCK)).toEqual(['0', 'witness script maiša']);
+    expect(wordsOf(WITNESS_SCRIPT)).toEqual(['2', 'viešasis raktas „Jonas“', 'viešasis raktas „Gabija“', 'viešasis raktas „Rokas“', '3', 'OP_CHECKMULTISIG']);
+    expect(piecesOf(WITNESS_SCRIPT)).toEqual(['Įdėti: witness script', 'Įdėti: witness script maiša']);
+    expect(screen.getByText('jo maiša užrakinta P2WSH moneta')).toBeInTheDocument();
+  });
+
+
+  it('follows the node from the witness into the witness script', async () => {
+    const { user } = open();
+    await loadScene(user, 'P2WSH');
+
+    await user.click(tileOf(WITNESS, 'witness script'));
+    expect(said()).toContain('Witness program: skripto maiša (P2WSH)');
+    expect(said()).toContain('Paskutinis witness elementas yra pats skriptas (witness script), ir jo maiša sutapo.');
+    expect(stack()).toEqual(['0 (FALSE)', 'sig Jonas', 'sig Rokas']);
+
+    await user.click(press('Žingsnis pirmyn'));
+    expect(said()).toContain('Witness script: 2');
+    expect(tileOf(WITNESS_SCRIPT, '2')).toHaveAttribute('aria-current', 'step');
+  });
+
+
+  it('stacks the unlocking script and the witness of a wrapped program, and opens its layers one by one', async () => {
+    const { user } = open();
+    await loadScene(user, 'P2SH-P2WPKH');
+
+    expect(headings()).toEqual([UNLOCK, WITNESS, LOCK, REDEEM, IMPLIED]);
+    expect(wordsOf(UNLOCK)).toEqual(['išpirkimo skriptas']);
+    expect(wordsOf(REDEEM)).toEqual(['0', 'rakto maiša „Jonas“']);
+    expect(said()).toContain('Transakcija B priimta');
+
+    await loadScene(user, 'P2SH-P2WSH');
+    expect(headings()).toEqual([UNLOCK, WITNESS, LOCK, REDEEM, WITNESS_SCRIPT]);
+    expect(wordsOf(REDEEM)).toEqual(['0', 'witness script maiša']);
+    expect(said()).toContain('Transakcija B priimta');
+  });
+
+
+  it('shows a Taproot coin opened by its key as one signature and one key, and nothing else', async () => {
+    const { user } = open();
+    await loadScene(user, 'P2TR raktu');
+
+    expect(headings()).toEqual([WITNESS, LOCK]);
+    expect(wordsOf(WITNESS)).toEqual(['parašas „Jonas“']);
+    expect(wordsOf(LOCK)).toEqual(['1', 'output key „Jonas“']);
+    expect(within(cardOf('A')).getAllByRole('radio')[0]).toHaveAccessibleName('Išvestis #0: 0.5 BTC, Taproot output key „Jonas“ (P2TR)');
+
+    await user.click(tileOf(WITNESS, 'parašas „Jonas“'));
+    expect(said()).toContain('Taproot: atrakinama raktu');
+    expect(said()).toContain('Witness turi vieną elementą, vadinasi, tai parašas pačiam raktui, ir joks skriptas nevykdomas.');
+  });
+
+
+  it('offers a key pair\'s Taproot pieces in a Taproot scene, and the everyday ones elsewhere', async () => {
+    const { user } = open();
+    expect(keyPieces()).toEqual(['Įdėti: parašas „Jonas“', 'Įdėti: viešasis raktas „Jonas“', 'Įdėti: rakto maiša „Jonas“']);
+
+    await loadScene(user, 'P2TR raktu');
+    expect(keyPieces()).toEqual(['Įdėti: parašas „Jonas“', 'Įdėti: x-only raktas „Jonas“', 'Įdėti: output key „Jonas“']);
+
+    await user.click(press(`Išvalyti: ${LOCK}`));
+    expect(keyPieces()).toEqual(['Įdėti: parašas „Jonas“', 'Įdėti: x-only raktas „Jonas“', 'Įdėti: output key „Jonas“']);
+  });
+
+
+  it('rebuilds the Taproot lock from the tray, and refuses the wrong owner\'s signature at the witness', async () => {
+    const { user } = open();
+    await loadScene(user, 'P2TR raktu');
+    await user.click(press(`Išvalyti: ${LOCK}`));
+    await user.click(rowOf(LOCK));
+    await user.click(offered('1'));
+    await user.click(offered('output key „Gabija“'));
+
+    expect(wordsOf(LOCK)).toEqual(['1', 'output key „Gabija“']);
+    expect(said()).toContain('Mazgas sustojo tikrindamas witness.');
+    expect(said()).toContain('Schnorr parašas netinka: pasirašyta kitu raktu arba kita transakcija.');
+  });
+
+
+  it('shows the two scripts a Taproot key hides under the line, each on offer as itself and as its proof', async () => {
+    const { user } = open();
+    await loadScene(user, 'P2TR skriptu');
+
+    expect(headings()).toEqual([WITNESS, LOCK, LEAF_A, LEAF_B]);
+    expect(wordsOf(WITNESS)).toEqual(['parašas „Rokas“', '„taproot“', 'tapscript B', 'control block B']);
+    expect(wordsOf(LEAF_A)).toEqual(['x-only raktas „Gabija“', 'OP_CHECKSIG']);
+    expect(wordsOf(LEAF_B)).toEqual(['OP_SHA256', 'SHA-256 maiša („taproot“)', 'OP_EQUALVERIFY', 'x-only raktas „Rokas“', 'OP_CHECKSIG']);
+    expect(piecesOf(LEAF_A)).toEqual(['Įdėti: tapscript A', 'Įdėti: control block A']);
+    expect(piecesOf(LEAF_B)).toEqual(['Įdėti: tapscript B', 'Įdėti: control block B']);
+    expect(screen.getAllByText('paslėptas output key viduje')).toHaveLength(2);
+  });
+
+
+  it('walks only the script the witness shows, and names it', async () => {
+    const { user } = open();
+    await loadScene(user, 'P2TR skriptu');
+
+    await user.click(tileOf(WITNESS, 'tapscript B'));
+    expect(said()).toContain('Taproot: atrakinama skriptu');
+    expect(said()).toContain('Kitų medžio skriptų niekas nepamato — control block turi tik jų maišą.');
+    expect(stack()).toEqual(['sig Rokas', '„taproot“']);
+
+    await user.click(tileOf(LEAF_B, 'OP_EQUALVERIFY'));
+    expect(said()).toContain('Tapscript B: OP_EQUALVERIFY');
+
+    await user.click(tileOf(LEAF_A, 'OP_CHECKSIG'));
+    expect(said()).toContain('Tapscript B: OP_EQUALVERIFY');
+  });
+
+
+  it('opens the same coin without any script, as the scene\'s sentence suggests', async () => {
+    const { user } = open();
+    await loadScene(user, 'P2TR skriptu');
+    await user.click(press(`Išvalyti: ${WITNESS}`));
+    expect(said()).toContain('Witness tuščias, o šiai monetai atrakinti jo reikia.');
+
+    await user.click(offered('parašas „Jonas“'));
+    expect(wordsOf(WITNESS)).toEqual(['parašas „Jonas“']);
+    expect(said()).toContain('Transakcija B priimta');
+  });
+
+
+  it('opens it by the other hidden script too: that script, its proof, and its owner\'s signature', async () => {
+    const { user } = open();
+    await loadScene(user, 'P2TR skriptu');
+    await user.click(press(`Išvalyti: ${WITNESS}`));
+    await user.click(offered('parašas „Gabija“'));
+    await user.click(offered('tapscript A'));
+    await user.click(offered('control block B'));
+    expect(said()).toContain('Control block neveda prie užrakto output key: šis skriptas jame nepaslėptas, arba control block — ne šio skripto.');
+
+    await user.click(crossOf(WITNESS, 'control block B'));
+    await user.click(offered('control block A'));
+    expect(said()).toContain('Transakcija B priimta');
+  });
+
+
+  it('counts signatures the Taproot way, and says how far the count has got', async () => {
+    const { user } = open();
+    await loadScene(user, 'CHECKSIGADD');
+
+    expect(wordsOf(WITNESS)).toEqual(['parašas „Rokas“', '0', 'parašas „Jonas“', 'tapscript A', 'control block A']);
+    expect(within(rowOf(LEAF_B)).getByText('Tempk detales čia')).toBeInTheDocument();
+
+    await user.click(within(rowOf(LEAF_A)).getAllByRole('button', { name: 'OP_CHECKSIGADD' })[0]);
+    expect(said()).toContain('Parašo vietoje — tuščia reikšmė; ji nieko nepasirašo.');
+    expect(said()).toContain('Tinkamų parašų iki šiol: 1.');
+  });
+
+
+  it('lets anybody spend the anchor with an empty witness', async () => {
+    const { user } = open();
+    await loadScene(user, 'Anchor (P2A)');
+
+    expect(headings()).toEqual([WITNESS, LOCK]);
+    expect(within(rowOf(WITNESS)).getByText('Tempk detales čia')).toBeInTheDocument();
+    expect(wordsOf(LOCK)).toEqual(['1', '0x4e73']);
+    expect(within(cardOf('A')).getAllByRole('radio')[0]).toHaveAccessibleName('Išvestis #0: 0.0000024 BTC, anchor, išleidžia bet kas (P2A)');
+    expect(said()).toContain('Transakcija B priimta');
+
+    await user.click(press('Žingsnis atgal'));
+    expect(said()).toContain('Witness program: anchor (P2A)');
+  });
+
+
+  it('brings the witness, a witness script and the Taproot scripts on a press each, and the Taproot pieces with the last', async () => {
+    const { user } = open();
+    await user.click(press('Daugiau nustatymų'));
+    await user.click(press('Pridėti witness'));
+    await user.click(press('Pridėti witness script'));
+    await user.click(press('Pridėti tapscript A ir B'));
+
+    expect(headings()).toEqual([UNLOCK, WITNESS, LOCK, WITNESS_SCRIPT, LEAF_A, LEAF_B]);
+    expect(screen.queryByRole('button', { name: /^Pridėti (witness|witness script|tapscript A ir B)$/ })).not.toBeInTheDocument();
+    expect(press('Pridėti išpirkimo skriptą')).toBeInTheDocument();
+    expect(keyPieces()).toEqual(['Įdėti: parašas „Jonas“', 'Įdėti: x-only raktas „Jonas“', 'Įdėti: output key „Jonas“']);
+
+    await user.click(offered('x-only raktas „Jonas“'));
+    expect(wordsOf(LEAF_A)).toEqual(['x-only raktas „Jonas“']);
+    expect(wordsOf(UNLOCK)).toEqual(P2PKH_UNLOCK);
+  });
+
+
+  it('turns down a witness the lock never asked for', async () => {
+    const { user } = open();
+    await user.click(press('Daugiau nustatymų'));
+    await user.click(press('Pridėti witness'));
+    await user.click(offered('1'));
+
+    expect(wordsOf(WITNESS)).toEqual(['1']);
+    expect(said()).toContain('Transakcija atnešė witness, kurio šis užraktas neprašo — tokia transakcija negalioja.');
   });
 });
 

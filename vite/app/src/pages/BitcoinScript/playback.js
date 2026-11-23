@@ -23,10 +23,13 @@
 //  Split into:
 //
 //    stopsOf      — the steps of the check worth stopping at
+//    stopAt       — the stop a row's word belongs to
 //    verdictOf    — the state of transaction B
 //    checksOf     — the node's questions, each with its answer
 //    stepOf       — the node's place at one word of a script
+//    phaseOf      — what the node calls a row's script
 //    tapeOf       — a script as tiles that show that place
+//    tapesOf      — every row of the page as such tiles
 //    stackAt      — the two stacks at the cursor
 //    stackChange  — a step's doing, as kept, taken and put
 // -----------------------------------------------------------
@@ -45,18 +48,46 @@ import { STAGES, wordLabel } from './narration';
 //
 // The entries of the node's timeline the page stops at, in
 // order: every word of a script, the moment a redeem script
-// is taken off the stack, and the verdict. The node's first
-// three questions — the coin, the amounts, the time — are no
-// stops: nothing is seen to happen at them, and when one of
-// them is where the node says no, the verdict says so. The
-// hand-over from the unlocking script to the lock is no stop
-// either; the stack does not change there.
+// is taken off the stack, the moment the node turns to the
+// witness, and the verdict. The node's first three questions
+// — the coin, the amounts, the time — are no stops: nothing
+// is seen to happen at them, and when one of them is where
+// the node says no, the verdict says so. The hand-over from
+// the unlocking script to the lock is no stop either; the
+// stack does not change there.
 //
 // Used by:
 //   - Page.jsx — the steps the cursor moves along
 // -----------------------------------------------------------
 
-export const stopsOf = (timeline) => timeline.filter((entry) => entry.kind === 'item' || entry.kind === 'redeem' || entry.stage === 'verdict');
+export const stopsOf = (timeline) => timeline.filter((entry) => entry.kind === 'item' || entry.kind === 'redeem' || entry.kind === 'witness' || entry.stage === 'verdict');
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// stopAt
+// -----------------------------------------------------------
+//
+// The number of the stop a word of a row belongs to, given
+// what the node calls that row (phaseOf): the step that ran
+// the word — or, for a word of the witness, which is never
+// run, the step where the node turns to the witness and lays
+// its items out as the stack. None for a word the node never
+// came to.
+//
+// Used by:
+//   - components/ScriptLine.jsx — a press on a word
+// -----------------------------------------------------------
+
+export function stopAt(stops, phase, index) {
+  if (!stops || phase === null) return -1;
+  if (phase === 'witness') return stops.findIndex((entry) => entry.kind === 'witness');
+  return stops.findIndex((entry) => entry.kind === 'item' && entry.phase === phase && entry.index === index);
+}
 
 
 
@@ -150,6 +181,34 @@ export function stepOf(timeline, cursor, phase, index) {
 
 
 // -----------------------------------------------------------
+// phaseOf
+// -----------------------------------------------------------
+//
+// What the node calls the script of one of the page's rows.
+// Most rows go by the node's own name for them. The two
+// Taproot scripts are the exception: the node runs "the
+// leaf", and that is the row whose script the witness shows
+// — the other row is not run at all, and has no name.
+//
+// Used by:
+//   - tapesOf (below)
+//   - components/ScriptLine.jsx — where a press on a word
+//     takes the cursor
+// -----------------------------------------------------------
+
+export function phaseOf(row, shown) {
+  if (row === 'leafA') return shown === 0 ? 'leaf' : null;
+  if (row === 'leafB') return shown === 1 ? 'leaf' : null;
+  return row;
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // tapeOf
 // -----------------------------------------------------------
 //
@@ -168,7 +227,7 @@ export function stepOf(timeline, cursor, phase, index) {
 // and what it skipped stay marked.
 //
 // Used by:
-//   - Page.jsx — the scripts in the rows they are built in
+//   - tapesOf (below)
 // -----------------------------------------------------------
 
 export function tapeOf(phase, script, lexicon, timeline, entry) {
@@ -185,6 +244,41 @@ export function tapeOf(phase, script, lexicon, timeline, entry) {
     label: wordLabel(word, lexicon),
     step: mark(index),
   }));
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// tapesOf
+// -----------------------------------------------------------
+//
+// Every row of the page as tiles, by the row's name: the
+// unlocking script and the witness of B's input, the lock,
+// the scripts that stand behind a hash or a Taproot key, and
+// the script the node builds itself for a coin paid to a
+// witness key hash — an empty row while there is none.
+//
+// Used by:
+//   - Page.jsx — the rows as the script line shows them
+// -----------------------------------------------------------
+
+export function tapesOf(model, timeline, entry) {
+  const { b } = model;
+  const scripts = {
+    unlock: b.unlock,
+    witness: b.witness,
+    lock: b.spends.script,
+    redeem: b.redeem,
+    witnessScript: b.witnessScript,
+    program: b.implied,
+    leafA: b.leaves[0],
+    leafB: b.leaves[1],
+  };
+  return Object.fromEntries(Object.entries(scripts).map(([row, script]) => [row, script ? tapeOf(phaseOf(row, b.shown), script, model.lexicon, timeline, entry) : []]));
 }
 
 

@@ -9,12 +9,14 @@
 //
 //  Not every word works. Some were switched off in 2010 and a
 //  script that contains one fails wherever it stands; some
-//  were never given a meaning and fail when they are reached;
-//  and one the playground itself does not run — it changes
-//  what a signature signs in a way the playground does not
-//  model — and says so. All of them are listed anyway, with
-//  their state: a student who types OP_CAT should learn why
-//  it does not work, not that the word is unknown.
+//  were never given a meaning and fail when they are reached.
+//  All of them are listed anyway, with their state: a student
+//  who types OP_CAT should learn why it does not work, not
+//  that the word is unknown.
+//
+//  One word works in one place only: OP_CHECKSIGADD came with
+//  Taproot and means something inside a Taproot script alone;
+//  everywhere else a script that reaches it fails.
 //
 //  Split into:
 //
@@ -32,9 +34,6 @@ const DISABLED = 'disabled';
 // The state of an opcode nobody gave a meaning: a script
 // fails when it reaches it
 const RESERVED = 'reserved';
-
-// The state of an opcode the playground itself does not run
-const UNSUPPORTED = 'unsupported';
 
 // The sentence every switched-off opcode shares
 const SWITCHED_OFF = 'Išjungtas dar 2010 m. — skriptas, kuriame jis yra, žlunga, net jei iki jo neprieinama.';
@@ -170,6 +169,8 @@ export const OPCODES = [
   { name: 'OP_CHECKSIGVERIFY', code: 0xad, group: 'crypto', about: 'Nuima viešąjį raktą ir parašą; jei parašas netinka, skriptas iškart žlunga.' },
   { name: 'OP_CHECKMULTISIG', code: 0xae, group: 'crypto', about: 'Nuima n viešųjų raktų ir m parašų; padeda TRUE, jei kiekvienas parašas tinka kuriam nors raktui, ta pačia eile. Dėl senos klaidos nuima dar vieną, nenaudojamą elementą.' },
   { name: 'OP_CHECKMULTISIGVERIFY', code: 0xaf, group: 'crypto', about: 'Kaip OP_CHECKMULTISIG, bet netikę parašai iškart žlugdo skriptą.' },
+  { name: 'OP_CODESEPARATOR', code: 0xab, group: 'crypto', about: 'Pažymi vietą skripte: vėliau tikrinami parašai turi būti pasirašę tik tą skripto dalį, kuri eina po šio žodžio. Beveik nenaudojamas.' },
+  { name: 'OP_CHECKSIGADD', code: 0xba, group: 'crypto', only: 'tapscript', about: 'Veikia tik tapscript viduje: nuima viešąjį raktą, skaičių ir parašą. Jei parašas tinka, padeda skaičių, padidintą vienetu; jei parašo vietoje tuščia — tą patį skaičių. Taip suskaičiuojami parašai užraktuose „k iš n“.' },
 
   { name: 'OP_CHECKLOCKTIMEVERIFY', code: 0xb1, group: 'time', about: 'Žlugdo skriptą, jei transakcijos nLockTime mažesnis už skaičių steko viršuje — moneta lieka užšaldyta iki to bloko. Steko nekeičia.' },
   { name: 'OP_CHECKSEQUENCEVERIFY', code: 0xb2, group: 'time', about: 'Žlugdo skriptą, jei monetą išleidžiančios įvesties nSequence mažesnis už skaičių steko viršuje — moneta lieka užšaldyta tiek blokų nuo patekimo į grandinę. Steko nekeičia.' },
@@ -196,7 +197,6 @@ export const OPCODES = [
   { name: 'OP_VERNOTIF', code: 0x66, group: 'reserved', state: DISABLED, about: 'Rezervuotas žodis — skriptas, kuriame jis yra, žlunga, net jei iki jo neprieinama.' },
   { name: 'OP_RESERVED1', code: 0x89, group: 'reserved', state: RESERVED, about: NO_MEANING },
   { name: 'OP_RESERVED2', code: 0x8a, group: 'reserved', state: RESERVED, about: NO_MEANING },
-  { name: 'OP_CODESEPARATOR', code: 0xab, group: 'reserved', state: UNSUPPORTED, about: 'Pažymi vietą, nuo kurios skriptas įeina į parašo pranešimą. Beveik nenaudojamas — ši aikštelė jo nevykdo.' },
   { name: 'OP_NOP1', code: 0xb0, group: 'reserved', about: SPARE },
   ...[4, 5, 6, 7, 8, 9, 10].map((number) => ({ name: `OP_NOP${number}`, code: 0xb3 + number - 4, group: 'reserved', about: SPARE })),
 ];

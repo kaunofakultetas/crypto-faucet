@@ -18,8 +18,9 @@
 //  Colour is kept for one thing only: whose a piece of data
 //  is. What comes from a key pair carries that pair's colour,
 //  a small picture — a pen for a signature, a key for a
-//  public key, a fingerprint for a key's hash — the short
-//  word Bitcoin texts use for the thing, and the pair's name.
+//  public key, a fingerprint for a key's hash, a tree for the
+//  Taproot key that hides one — the short word Bitcoin texts
+//  use for the thing, and the pair's name.
 //  A word that does not work is pale and struck through, and
 //  one the page cannot read is red.
 //
@@ -46,6 +47,8 @@ import KeyIcon from '@mui/icons-material/VpnKey';
 import FingerprintIcon from '@mui/icons-material/Fingerprint';
 import DescriptionIcon from '@mui/icons-material/DescriptionOutlined';
 import TagIcon from '@mui/icons-material/Tag';
+import AccountTreeIcon from '@mui/icons-material/AccountTreeOutlined';
+import RouteIcon from '@mui/icons-material/RouteOutlined';
 import CloseIcon from '@mui/icons-material/Close';
 
 import { COLORS } from '../constants';
@@ -89,8 +92,16 @@ const ICONS = {
   sig: DrawIcon,
   pubkey: KeyIcon,
   pubkeyhash: FingerprintIcon,
+  xonly: KeyIcon,
+  tapkey: AccountTreeIcon,
   redeemScript: DescriptionIcon,
   scriptHash: FingerprintIcon,
+  witnessScript: DescriptionIcon,
+  witnessHash: FingerprintIcon,
+  leafA: DescriptionIcon,
+  leafB: DescriptionIcon,
+  controlA: RouteIcon,
+  controlB: RouteIcon,
   hash: TagIcon,
 };
 

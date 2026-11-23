@@ -31,7 +31,7 @@ import { useEffect, useMemo, useReducer } from 'react';
 
 import { freshKey } from '../engine/keys';
 import { EXAMPLES, FIRST_EXAMPLE } from '../examples';
-import { buildModel, reduce, signEveryone } from '../model';
+import { buildModel, reduce } from '../model';
 
 
 // How many changes are remembered for taking back
@@ -101,8 +101,8 @@ function advance(session, action) {
 // private key at random and adds the key pair; `freeze` and
 // `thaw` switch between signatures kept as they are now and
 // signatures made anew after every change. Freezing puts
-// aside every key pair's signature of the transaction as it
-// stands at that moment.
+// aside transaction B as it stands at that moment — what the
+// keys go on signing, whatever B becomes afterwards.
 //
 // Used by:
 //   - Page.jsx
@@ -142,7 +142,7 @@ export default function usePlayground() {
     undo: () => dispatch({ type: 'undo' }),
     canUndo: session.past.length > 0,
     addKey: () => dispatch({ type: 'key/add', privateKey: freshKey() }),
-    freeze: () => dispatch({ type: 'freeze', signatures: signEveryone(model.keys, model.signing.digest) }),
+    freeze: () => dispatch({ type: 'freeze', signed: model.signing.now }),
     thaw: () => dispatch({ type: 'thaw' }),
   };
 }

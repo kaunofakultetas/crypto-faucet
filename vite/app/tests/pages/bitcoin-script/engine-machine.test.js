@@ -9,7 +9,13 @@
 //  shape is the machine's contract: a step per word, the
 //  stack after every step, a failed step that leaves the
 //  stack alone, the hand-over between the two scripts, the
-//  third act of a pay-to-script-hash coin, and the verdict.
+//  third act of a pay-to-script-hash coin, the turn to the
+//  witness of a witness program, and the verdict. The
+//  machine's questions go to a stand-in checker here, which
+//  also remembers what it was asked — which script a
+//  signature is checked against is the machine's own doing.
+//  Taproot needs real keys and has a file of its own
+//  (engine-taproot.test.js).
 //
 //  The second holds the machine against Bitcoin Core's own
 //  script vectors (support/bitcoin-script/core-vectors.js).
@@ -20,19 +26,26 @@
 //  that moves, is a change in what the machine accepts.
 // -----------------------------------------------------------
 
-import { describe, it, expect } from 'vitest';
+import { beforeEach, describe, it, expect } from 'vitest';
 import { VECTORS, runVector } from '../../support/bitcoin-script/core-vectors';
-import { hash160 } from '@/pages/BitcoinScript/engine/hashes';
+import { hash160, sha256Hex } from '@/pages/BitcoinScript/engine/hashes';
 import { evaluateSpend } from '@/pages/BitcoinScript/engine/interpreter';
-import { PAY_TO_SCRIPT_HASH, parseScript, serializeScript } from '@/pages/BitcoinScript/engine/script';
+import { PAY_TO_SCRIPT_HASH, parseScript, pushOf, serializeScript } from '@/pages/BitcoinScript/engine/script';
 
+
+// Every signature the stand-in checker was asked about since
+// the test began: the script it came with and the rules
+const asked = [];
 
 // A checker for scripts that ask nothing of a transaction:
 // "aa" signs for the key "02aa" and nothing else does; the
 // transaction's lock time is 100 and its input promises to
 // wait 10 blocks
 const checker = {
-  checkSignature: (signature, publicKey) => ({ valid: `02${signature}` === publicKey, digest: '00'.repeat(32), why: `02${signature}` === publicKey ? null : 'wrong-signature' }),
+  checkSignature: (signature, publicKey, code, rules) => {
+    asked.push({ signature, code, rules });
+    return { valid: `02${signature}` === publicKey, digest: '00'.repeat(32), why: `02${signature}` === publicKey ? null : 'wrong-signature' };
+  },
   checkLockTime: (required) => ({ lockTime: 100, why: required > 100 ? 'too-early' : null }),
   checkSequence: (required) => ({ sequence: 10, why: required > 10 ? 'too-early' : null }),
 };
@@ -44,7 +57,11 @@ const script = (text) => {
 };
 
 // A spend run to its end
-const spend = (unlock, lock) => evaluateSpend({ unlock: script(unlock), lock: script(lock), checker });
+const spend = (unlock, lock, witness = []) => evaluateSpend({ unlock: script(unlock), lock: script(lock), witness, checker });
+
+beforeEach(() => {
+  asked.length = 0;
+});
 
 // The steps of a run as short readable lines
 const told = (run) => run.steps.map((step) => (step.kind === 'item'
@@ -132,8 +149,11 @@ describe('the record of a run', () => {
   });
 
 
-  it('says by name what it does not run', () => {
-    expect(spend('1', 'OP_CODESEPARATOR').error).toEqual({ code: 'unsupported-opcode' });
+  it('runs OP_CODESEPARATOR as a word that leaves the stack alone', () => {
+    const run = spend('1', 'OP_CODESEPARATOR');
+
+    expect(run.ok).toBe(true);
+    expect(run.steps.at(-2)).toMatchObject({ effect: { type: 'separator' }, stack: ['01'] });
   });
 
 
@@ -278,15 +298,197 @@ describe('what the machine asks of a transaction', () => {
 
 
 // -----------------------------------------------------------
+// The script a signature is checked against
+// -----------------------------------------------------------
+
+describe('the script a signature is checked against', () => {
+
+  it('is the whole script the signature check stands in, not the unlocking script before it', () => {
+    spend('0xaa', '0x02aa OP_CHECKSIG');
+
+    expect(asked).toEqual([{ signature: 'aa', code: '0202aaac', rules: 'legacy' }]);
+  });
+
+
+  it('begins after the last OP_CODESEPARATOR that was run', () => {
+    spend('0xaa', 'OP_1 OP_CODESEPARATOR OP_DROP OP_CODESEPARATOR 0x02aa OP_CHECKSIG');
+    spend('0xaa', '0 OP_IF OP_CODESEPARATOR OP_ENDIF 0x02aa OP_CHECKSIG');
+    spend('0xaa', 'OP_CODESEPARATOR 0x02aa OP_CHECKSIGVERIFY OP_CODESEPARATOR 0xaa 0x02aa OP_CHECKSIG');
+
+    expect(asked.map((question) => question.code)).toEqual([
+      '0202aaac',
+      '0063ab680202aaac',
+      '0202aaadab0202aaac',
+      '0202aaac',
+    ]);
+  });
+
+
+  it('has every push of the signature itself taken out, and nothing that only looks like one', () => {
+    spend('', '0xaa 0xaa OP_DROP 0x02aa OP_CHECKSIG');
+    spend('0xaa', '0x01aa OP_DROP 0x02aa OP_CHECKSIG');
+
+    expect(asked.map((question) => question.code)).toEqual(['750202aaac', '0201aa750202aaac']);
+  });
+
+
+  it('has the signatures of a shared account all taken out before the first is checked', () => {
+    const run = spend('0', '0xaa 0xbb 2 0x02aa 0x02bb 2 OP_CHECKMULTISIG');
+
+    expect(run.ok).toBe(true);
+    expect(asked).toEqual([
+      { signature: 'bb', code: '520202aa0202bb52ae', rules: 'legacy' },
+      { signature: 'aa', code: '520202aa0202bb52ae', rules: 'legacy' },
+    ]);
+  });
+
+
+  it('keeps the signature where the script comes from a witness', () => {
+    const witnessScript = script('0xaa 0x02aa OP_CHECKSIG').hex;
+    const run = spend('', `0 0x${sha256Hex(witnessScript)}`, [witnessScript]);
+
+    expect(run.ok).toBe(true);
+    expect(asked).toEqual([{ signature: 'aa', code: witnessScript, rules: 'witness0' }]);
+  });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// Witness programs
+// -----------------------------------------------------------
+
+describe('a lock that is a witness program', () => {
+
+  const KEY_HASH = hash160('02aa');
+  const SUM = script('OP_ADD 5 OP_EQUAL').hex;
+  const flavours = (run) => run.steps.filter((step) => step.kind === 'witness').map((step) => step.flavour);
+
+  it('builds the pay-to-key-hash script itself for twenty bytes, and runs it on the two items of the witness', () => {
+    const run = spend('', `0 0x${KEY_HASH}`, ['aa', '02aa']);
+
+    expect(run.ok).toBe(true);
+    expect(told(run)).toEqual([
+      'handover []',
+      'lock OP_0 []',
+      `lock ${KEY_HASH} [ ${KEY_HASH}]`,
+      'witness [aa 02aa]',
+      'program OP_DUP [aa 02aa 02aa]',
+      `program OP_HASH160 [aa 02aa ${KEY_HASH}]`,
+      `program ${KEY_HASH} [aa 02aa ${KEY_HASH} ${KEY_HASH}]`,
+      'program OP_EQUALVERIFY [aa 02aa]',
+      'program OP_CHECKSIG [01]',
+      'verdict [01]',
+    ]);
+    expect(run.steps[3]).toMatchObject({ flavour: 'p2wpkh', version: 0, program: KEY_HASH, hex: `76a914${KEY_HASH}88ac` });
+    expect(asked).toEqual([{ signature: 'aa', code: `76a914${KEY_HASH}88ac`, rules: 'witness0' }]);
+  });
+
+
+  it('wants exactly a signature and a key for twenty bytes, and the key the hash was made of', () => {
+    expect(spend('', `0 0x${KEY_HASH}`, ['aa']).error).toEqual({ code: 'witness-key-mismatch', count: 1 });
+    expect(spend('', `0 0x${KEY_HASH}`, ['aa', '02aa', '02aa']).error).toEqual({ code: 'witness-key-mismatch', count: 3 });
+    expect(spend('', `0 0x${KEY_HASH}`, ['bb', '02bb']).error).toEqual({ code: 'verify-failed' });
+    expect(spend('', `0 0x${KEY_HASH}`, ['bb', '02aa']).error).toEqual({ code: 'false-on-top' });
+  });
+
+
+  it('takes the last item of the witness as the script for thirty-two bytes, and runs it on the rest', () => {
+    const run = spend('', `0 0x${sha256Hex(SUM)}`, ['02', '03', SUM]);
+
+    expect(run.ok).toBe(true);
+    expect(told(run).slice(3)).toEqual([
+      'witness [02 03]',
+      'witnessScript OP_ADD [05]',
+      'witnessScript OP_5 [05 05]',
+      'witnessScript OP_EQUAL [01]',
+      'verdict [01]',
+    ]);
+    expect(run.steps[3]).toMatchObject({ flavour: 'p2wsh', version: 0, hex: SUM });
+    expect(run.steps[3].items.map((item) => item.text)).toEqual(['OP_ADD', 'OP_5', 'OP_EQUAL']);
+  });
+
+
+  it('turns down a witness script that is not the one hashed, that ends on false, or that leaves more than its answer', () => {
+    const lock = `0 0x${sha256Hex(SUM)}`;
+
+    expect(spend('', lock, []).error).toEqual({ code: 'witness-empty' });
+    expect(spend('', lock, ['02', '03', `${SUM}61`]).error).toEqual({ code: 'witness-script-mismatch' });
+    expect(spend('', lock, ['02', '04', SUM]).error).toEqual({ code: 'false-on-top' });
+    expect(spend('', lock, ['07', '02', '03', SUM]).error).toEqual({ code: 'witness-unclean-stack', left: 2 });
+  });
+
+
+  it('turns down a witness script that cannot be read to its end, and an item too large to be pushed', () => {
+    const cut = '5102aa';
+    const drop = script('OP_DROP 1').hex;
+
+    expect(spend('', `0 0x${sha256Hex(cut)}`, [cut]).error).toEqual({ code: 'witness-script-broken' });
+    expect(spend('', `0 0x${sha256Hex(drop)}`, ['00'.repeat(521), drop]).error).toEqual({ code: 'push-too-large', size: 521, limit: 520 });
+    expect(spend('', `0 0x${sha256Hex(drop)}`, ['00'.repeat(520), drop]).ok).toBe(true);
+  });
+
+
+  it('lets nothing stand in the unlocking script of a witness program', () => {
+    expect(spend('1', `0 0x${KEY_HASH}`, ['aa', '02aa']).error).toEqual({ code: 'witness-with-unlock' });
+  });
+
+
+  it('reads a witness program behind a script hash the same way, once the hash has matched', () => {
+    const program = `0014${KEY_HASH}`;
+    const lock = `OP_HASH160 0x${hash160(program)} OP_EQUAL`;
+    const run = spend(`0x${program}`, lock, ['aa', '02aa']);
+
+    expect(run.ok).toBe(true);
+    expect(run.steps.filter((step) => step.kind !== 'item').map((step) => step.kind)).toEqual(['handover', 'redeem', 'witness', 'verdict']);
+    expect(flavours(run)).toEqual(['p2wpkh']);
+    expect(spend(`1 0x${program}`, lock, ['aa', '02aa']).error).toEqual({ code: 'witness-with-unlock-p2sh' });
+    expect(spend(`0x${pushOf(program)}`, `OP_HASH160 0x${hash160(pushOf(program))} OP_EQUAL`, []).ok).toBe(true);
+  });
+
+
+  it('refuses version 0 with any other length, and accepts every version nobody has given rules', () => {
+    expect(spend('', `0 0x${'aa'.repeat(21)}`, ['aa']).error).toEqual({ code: 'witness-wrong-length', size: 21 });
+    expect(flavours(spend('', `2 0x${'aa'.repeat(32)}`, ['whatever'].map(() => 'ff')))).toEqual(['unknown']);
+    expect(spend('', `2 0x${'aa'.repeat(32)}`, []).ok).toBe(true);
+    expect(spend('', `16 0x${'aa'.repeat(40)}`, []).ok).toBe(true);
+    expect(spend('', '1 0x4e73', [])).toMatchObject({ ok: true });
+    expect(spend('', '1 0x4e73', []).steps.at(-1).stack).toEqual(['01']);
+  });
+
+
+  it('does not take for a witness program what is one byte too short or too long, or has a word after it', () => {
+    expect(flavours(spend('', '1 0xaa', []))).toEqual([]);
+    expect(flavours(spend('', `1 0x${'aa'.repeat(41)}`, []))).toEqual([]);
+    expect(flavours(spend('', `1 0x${'aa'.repeat(32)} OP_NOP`, []))).toEqual([]);
+  });
+
+
+  it('fails a spend that brings a witness nobody asked for', () => {
+    expect(spend('2 3', 'OP_ADD 5 OP_EQUAL', ['aa']).error).toEqual({ code: 'witness-unexpected' });
+    expect(spend('2 3', 'OP_ADD 5 OP_EQUAL', []).ok).toBe(true);
+  });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // Bitcoin Core's vectors
 // -----------------------------------------------------------
 //
 // The machine's rules are fixed: pay-to-script-hash, strict
-// DER signatures, the empty extra item of OP_CHECKMULTISIG
-// and the two lock-time opcodes — OP_CHECKLOCKTIMEVERIFY and
-// OP_CHECKSEQUENCEVERIFY — are always on; only signatures of
-// the whole transaction are understood; OP_CODESEPARATOR is
-// not run; and the relay-only rules Core calls policy are not
+// DER signatures, the empty extra item of OP_CHECKMULTISIG,
+// the two lock-time opcodes — OP_CHECKLOCKTIMEVERIFY and
+// OP_CHECKSEQUENCEVERIFY — and witness programs are always
+// on, and the relay-only rules Core calls policy are not
 // applied.
 // `excuse` names the rule behind a difference, or nothing —
 // and nothing fails the test.
@@ -301,6 +503,10 @@ describe("Bitcoin Core's script vectors", () => {
     UNKNOWN_ERROR: 'MINIMALDATA',
     DISCOURAGE_UPGRADABLE_NOPS: 'DISCOURAGE_UPGRADABLE_NOPS',
     PUBKEYTYPE: 'STRICTENC',
+    SIG_HASHTYPE: 'STRICTENC',
+    WITNESS_PUBKEYTYPE: 'WITNESS_PUBKEYTYPE',
+    MINIMALIF: 'MINIMALIF',
+    DISCOURAGE_UPGRADABLE_WITNESS_PROGRAM: 'DISCOURAGE_UPGRADABLE_WITNESS_PROGRAM',
     NULLFAIL: 'NULLFAIL',
     CLEANSTACK: 'CLEANSTACK',
     SIG_HIGH_S: 'LOW_S',
@@ -315,8 +521,7 @@ describe("Bitcoin Core's script vectors", () => {
       const rule = NOT_APPLIED[vector.expected];
       return rule && has(rule) ? `not applied: ${rule}` : null;
     }
-    if (result.error === 'unsupported-opcode') return 'not run: CODESEPARATOR';
-    if (result.error === 'signature-type') return 'only signatures of the whole transaction';
+    if (vector.witness.length > 0 && !has('WITNESS')) return 'always on: WITNESS';
     if (result.error === 'signature-encoding' && !has('DERSIG') && !has('STRICTENC') && !has('LOW_S')) return 'always on: DERSIG';
     if (result.error === 'null-dummy' && !has('NULLDUMMY')) return 'always on: NULLDUMMY';
     if (!has('CHECKLOCKTIMEVERIFY') && /CHECKLOCKTIMEVERIFY|NOP2/.test(words)) return 'always on: CHECKLOCKTIMEVERIFY';
@@ -342,12 +547,15 @@ describe("Bitcoin Core's script vectors", () => {
     }
 
     expect(unexplained).toEqual([]);
-    expect(VECTORS).toHaveLength(1077);
-    expect(agreed).toBe(950);
+    expect(VECTORS).toHaveLength(1207);
+    expect(agreed).toBe(1059);
     expect(counts).toEqual({
       'not applied: MINIMALDATA': 75,
       'not applied: DISCOURAGE_UPGRADABLE_NOPS': 10,
-      'not applied: STRICTENC': 4,
+      'not applied: STRICTENC': 6,
+      'not applied: WITNESS_PUBKEYTYPE': 10,
+      'not applied: MINIMALIF': 6,
+      'not applied: DISCOURAGE_UPGRADABLE_WITNESS_PROGRAM': 1,
       'not applied: NULLFAIL': 3,
       'not applied: CLEANSTACK': 2,
       'not applied: LOW_S': 1,
@@ -357,8 +565,7 @@ describe("Bitcoin Core's script vectors", () => {
       'always on: CHECKLOCKTIMEVERIFY': 3,
       'always on: CHECKSEQUENCEVERIFY': 1,
       'always on: P2SH': 2,
-      'only signatures of the whole transaction': 3,
-      'not run: CODESEPARATOR': 1,
+      'always on: WITNESS': 6,
     });
   });
 });

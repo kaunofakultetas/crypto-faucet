@@ -1,5 +1,5 @@
 // -----------------------------------------------------------
-//  [*] BitcoinScript — keys and signatures (secp256k1, ECDSA)
+//  [*] BitcoinScript — keys and signatures (secp256k1)
 //
 //  The elliptic-curve arithmetic behind OP_CHECKSIG, written
 //  out with the browser's big integers: a public key from a
@@ -31,6 +31,18 @@
 //  — to a node a mangled signature is a broken script, not a
 //  wrong one.
 //
+//  All of that is ECDSA, the signature Bitcoin started with.
+//  Taproot signs with Schnorr signatures on the same curve
+//  (BIP 340), and they are here as well. A Schnorr key is
+//  written as one coordinate alone — thirty-two bytes, the
+//  point with the even second coordinate being the one meant
+//  — and a signature is sixty-four bytes: the first
+//  coordinate of the signer's secret point, and one number.
+//  The secret number again comes from the key and the message
+//  and not from chance. A Taproot output's key is a key with
+//  a hash added to it — "tweaked" — on both sides: the public
+//  key by anyone, the private key only by its owner.
+//
 //  Split into:
 //
 //    P, N, G, INFINITY — the curve: its field, its order,
@@ -51,10 +63,17 @@
 //    isStrictDer       — whether bytes are a DER signature
 //    signDigest        — a signature over a message
 //    verifyDigest      — a full node's check of one
+//    liftX             — a 32-byte key as a point
+//    isXOnlyKey        — whether 32 bytes are such a key
+//    xOnlyOf           — the 32-byte key of a private key
+//    signSchnorr       — a Schnorr signature over a message
+//    verifySchnorr     — a full node's check of one
+//    tweakPublicKey    — a 32-byte key with a hash added
+//    tweakPrivateKey   — the private key that goes with it
 // -----------------------------------------------------------
 
 import { bytesOf } from './bytes';
-import { hmacSha256Hex } from './hashes';
+import { hmacSha256Hex, taggedHash } from './hashes';
 
 
 // The prime the curve's coordinates are counted modulo
@@ -613,4 +632,208 @@ export function verifyDigest(derHex, digestHex, publicKeyHex) {
   const rebuilt = affine(add(fromMessage, fromKey));
 
   return rebuilt !== null && mod(rebuilt[0], N) === r;
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// liftX
+// -----------------------------------------------------------
+//
+// The point a 32-byte key stands for: the point of the curve
+// with that first coordinate and an EVEN second one — or
+// nothing, when no point has that first coordinate.
+//
+// Used by:
+//   - isXOnlyKey, verifySchnorr, tweakPublicKey (below)
+// -----------------------------------------------------------
+
+function liftX(keyHex) {
+  if (!/^[0-9a-f]{64}$/.test(keyHex)) return null;
+
+  const x = BigInt(`0x${keyHex}`);
+  if (x >= P) return null;
+
+  const ySquared = mod(x * x * x + 7n, P);
+  const root = power(ySquared, (P + 1n) / 4n, P);
+  if (mod(root * root, P) !== ySquared) return null;
+  return [x, root & 1n ? P - root : root];
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// isXOnlyKey
+// -----------------------------------------------------------
+//
+// Whether 32 bytes are a key a Schnorr signature can be
+// checked against — the first coordinate of a point of the
+// curve.
+//
+// Used by:
+//   - the engine's tests
+// -----------------------------------------------------------
+
+export const isXOnlyKey = (keyHex) => liftX(keyHex) !== null;
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// xOnlyOf
+// -----------------------------------------------------------
+//
+// The 32-byte public key of a private key: the first
+// coordinate of its point, and nothing about the second.
+//
+// Used by:
+//   - keys.js — a key pair's key for Taproot
+// -----------------------------------------------------------
+
+export const xOnlyOf = (privateKeyHex) => affine(multiply(BigInt(`0x${privateKeyHex}`), G))[0].toString(16).padStart(64, '0');
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// signSchnorr
+// -----------------------------------------------------------
+//
+// A Schnorr signature of a 32-byte message with a private key
+// (BIP 340), sixty-four bytes. The private key is first
+// turned to the one of its two forms whose public point has
+// an even second coordinate — the form a 32-byte key means —
+// and so is the secret number, whose point's first coordinate
+// is the signature's first half. The second half ties the
+// secret number, the key and a hash of all three public
+// things together. The secret number is derived from the key,
+// the message and thirty-two more bytes the caller may give;
+// left at zero, as here, the same message always gets the
+// same signature.
+//
+// Used by:
+//   - keys.js — a key pair signing a Taproot spend
+// -----------------------------------------------------------
+
+export function signSchnorr(privateKeyHex, messageHex, auxiliaryHex = '00'.repeat(32)) {
+  const bytes32 = (number) => number.toString(16).padStart(64, '0');
+
+  const [x, y] = affine(multiply(BigInt(`0x${privateKeyHex}`), G));
+  const key = y & 1n ? N - BigInt(`0x${privateKeyHex}`) : BigInt(`0x${privateKeyHex}`);
+
+  const masked = bytes32(key ^ BigInt(`0x${taggedHash('BIP0340/aux', auxiliaryHex)}`));
+  const secret = mod(BigInt(`0x${taggedHash('BIP0340/nonce', `${masked}${bytes32(x)}${messageHex}`)}`), N);
+  if (secret === 0n) return null;
+
+  const [rx, ry] = affine(multiply(secret, G));
+  const nonce = ry & 1n ? N - secret : secret;
+  const challenge = mod(BigInt(`0x${taggedHash('BIP0340/challenge', `${bytes32(rx)}${bytes32(x)}${messageHex}`)}`), N);
+
+  return `${bytes32(rx)}${bytes32(mod(nonce + challenge * key, N))}`;
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// verifySchnorr
+// -----------------------------------------------------------
+//
+// A full node's check of a Schnorr signature: from the
+// signature's number, the message and the public key it
+// rebuilds the signer's secret point, and says yes when that
+// point has an even second coordinate and the first
+// coordinate the signature names. Bytes of the wrong length,
+// numbers out of range and a key that is no point all answer
+// no.
+//
+// Used by:
+//   - node.js — every Schnorr signature a spend carries
+// -----------------------------------------------------------
+
+export function verifySchnorr(signatureHex, messageHex, keyHex) {
+  const point = liftX(keyHex);
+  if (!point || !/^[0-9a-f]{128}$/.test(signatureHex)) return false;
+
+  const r = BigInt(`0x${signatureHex.slice(0, 64)}`);
+  const s = BigInt(`0x${signatureHex.slice(64)}`);
+  if (r >= P || s >= N) return false;
+
+  const challenge = mod(BigInt(`0x${taggedHash('BIP0340/challenge', `${signatureHex.slice(0, 64)}${keyHex}${messageHex}`)}`), N);
+  const rebuilt = affine(add(multiply(s, G), multiply(N - challenge, [point[0], point[1], 1n])));
+
+  return rebuilt !== null && !(rebuilt[1] & 1n) && rebuilt[0] === r;
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// tweakPublicKey
+// -----------------------------------------------------------
+//
+// A 32-byte public key with a number added to it — the point
+// of the key plus that many times the starting point. Hands
+// back the new 32-byte key and whether its point's second
+// coordinate came out odd, which a Taproot spend has to say
+// when it shows how the key was made; or nothing, when the
+// key is no point or the number is too large to be one.
+//
+// Used by:
+//   - taproot.js — the key a Taproot output is locked to
+// -----------------------------------------------------------
+
+export function tweakPublicKey(keyHex, tweakHex) {
+  const point = liftX(keyHex);
+  const tweak = BigInt(`0x${tweakHex}`);
+  if (!point || tweak >= N) return null;
+
+  const tweaked = affine(add([point[0], point[1], 1n], multiply(tweak, G)));
+  return tweaked === null ? null : { key: tweaked[0].toString(16).padStart(64, '0'), odd: Boolean(tweaked[1] & 1n) };
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// tweakPrivateKey
+// -----------------------------------------------------------
+//
+// The private key that goes with a tweaked public key: the
+// private key — in the form whose point has an even second
+// coordinate — with the same number added. Whoever holds it
+// can sign for the Taproot output; nobody can make it without
+// the private key it started from.
+//
+// Used by:
+//   - keys.js — signing for a Taproot output by its key
+// -----------------------------------------------------------
+
+export function tweakPrivateKey(privateKeyHex, tweakHex) {
+  const y = affine(multiply(BigInt(`0x${privateKeyHex}`), G))[1];
+  const key = y & 1n ? N - BigInt(`0x${privateKeyHex}`) : BigInt(`0x${privateKeyHex}`);
+  return mod(key + BigInt(`0x${tweakHex}`), N).toString(16).padStart(64, '0');
 }
