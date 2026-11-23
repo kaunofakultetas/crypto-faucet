@@ -43,7 +43,7 @@ import { isHex, textToHex } from './engine/bytes';
 import { hash160, hash256, ripemd160Hex, sha1Hex, sha256Hex } from './engine/hashes';
 import { GROUPS, OPCODES } from './engine/opcodes';
 import { NUMBER_LIMIT, numberHex, wordsOf } from './engine/script';
-import { shortHex } from './narration';
+import { quote, shortHex } from './narration';
 
 
 
@@ -276,9 +276,9 @@ function readTyped(typed) {
   }
 
   const text = /^(["']).+\1$/s.test(value) ? value.slice(1, -1) : value;
-  const quote = !text.includes('"') ? '"' : !text.includes("'") ? "'" : null;
-  if (quote === null) return refuse('text-quotes');
-  return { word: `${quote}${text}${quote}`, hex: textToHex(text), shown: `„${text}“`, problem: null };
+  const mark = !text.includes('"') ? '"' : !text.includes("'") ? "'" : null;
+  if (mark === null) return refuse('text-quotes');
+  return { word: `${mark}${text}${mark}`, hex: textToHex(text), shown: quote(text), problem: null };
 }
 
 

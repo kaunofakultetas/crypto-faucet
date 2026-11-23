@@ -10,11 +10,11 @@
 //  Not every word works. Some were switched off in 2010 and a
 //  script that contains one fails wherever it stands; some
 //  were never given a meaning and fail when they are reached;
-//  and two the playground itself does not run — both need
-//  more of a transaction than it models — and says so. All of
-//  them are listed anyway, with their state: a student who
-//  types OP_CAT should learn why it does not work, not that
-//  the word is unknown.
+//  and one the playground itself does not run — it changes
+//  what a signature signs in a way the playground does not
+//  model — and says so. All of them are listed anyway, with
+//  their state: a student who types OP_CAT should learn why
+//  it does not work, not that the word is unknown.
 //
 //  Split into:
 //
@@ -172,7 +172,7 @@ export const OPCODES = [
   { name: 'OP_CHECKMULTISIGVERIFY', code: 0xaf, group: 'crypto', about: 'Kaip OP_CHECKMULTISIG, bet netikę parašai iškart žlugdo skriptą.' },
 
   { name: 'OP_CHECKLOCKTIMEVERIFY', code: 0xb1, group: 'time', about: 'Žlugdo skriptą, jei transakcijos nLockTime mažesnis už skaičių steko viršuje — moneta lieka užšaldyta iki to bloko. Steko nekeičia.' },
-  { name: 'OP_CHECKSEQUENCEVERIFY', code: 0xb2, group: 'time', state: UNSUPPORTED, about: 'Užšaldo monetą tam tikram blokų skaičiui nuo jos sukūrimo. Ši aikštelė monetos amžiaus neskaičiuoja, todėl šio žodžio nevykdo.' },
+  { name: 'OP_CHECKSEQUENCEVERIFY', code: 0xb2, group: 'time', about: 'Žlugdo skriptą, jei monetą išleidžiančios įvesties nSequence mažesnis už skaičių steko viršuje — moneta lieka užšaldyta tiek blokų nuo patekimo į grandinę. Steko nekeičia.' },
 
   { name: 'OP_CAT', code: 0x7e, group: 'disabled', state: DISABLED, about: SWITCHED_OFF },
   { name: 'OP_SUBSTR', code: 0x7f, group: 'disabled', state: DISABLED, about: SWITCHED_OFF },

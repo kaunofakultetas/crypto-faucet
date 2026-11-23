@@ -8,15 +8,23 @@
 //  question asked, every step of the scripts between them, a
 //  verdict at the end, and nothing after the first no.
 //
-//  Then the two things the script machine has to ask a
+//  Then the three things the script machine has to ask a
 //  transaction — is this a signature of it, is its lock time
-//  late enough — answered with real keys and the real bytes
-//  of a transaction.
+//  late enough, does its input promise a long enough wait —
+//  answered with real keys and the real bytes of a
+//  transaction.
+//
+//  Last, the two lock-time opcodes are held against the whole
+//  transactions Bitcoin Core tests them with
+//  (support/bitcoin-script/core-transactions.js): every one
+//  of them must fare here as it does there, but for the one
+//  that only passes without a rule the engine always applies.
 // -----------------------------------------------------------
 
 import { describe, it, expect } from 'vitest';
+import { INVALID, VALID, runTransaction } from '../../support/bitcoin-script/core-transactions';
 import { keyFrom, seedKey, signWith } from '@/pages/BitcoinScript/engine/keys';
-import { FINAL_SEQUENCE, LOCKTIME_THRESHOLD, MAX_MONEY, checkerFor, verifySpend } from '@/pages/BitcoinScript/engine/node';
+import { FINAL_SEQUENCE, LOCKTIME_THRESHOLD, MAX_MONEY, SEQUENCE, checkerFor, hasBit, verifySpend } from '@/pages/BitcoinScript/engine/node';
 import { parseScript, serializeScript } from '@/pages/BitcoinScript/engine/script';
 import { signatureHash } from '@/pages/BitcoinScript/engine/transaction';
 
@@ -33,8 +41,8 @@ const LOCK = script('OP_ADD 5 OP_EQUAL');
 const UNLOCK = script('2 3');
 
 // A transaction that spends the coin, with what a test changes
-const spending = ({ outputs = [4000], lockTime = 0, sequence = FINAL_SEQUENCE, unlock = UNLOCK } = {}) => ({
-  version: 2,
+const spending = ({ outputs = [4000], lockTime = 0, sequence = FINAL_SEQUENCE, unlock = UNLOCK, version = 2 } = {}) => ({
+  version,
   inputs: [{ txid: 'aa'.repeat(32), vout: 1, script: unlock.hex, sequence }],
   outputs: outputs.map((value) => ({ value, script: '51' })),
   lockTime,
@@ -165,6 +173,56 @@ describe('the time', () => {
 
     expect(result).toMatchObject({ valid: false, failed: 'finality', error: { code: 'locktime-a-date' } });
   });
+
+
+  it('asks nothing of a coin\'s age while the input has switched relative lock times off', () => {
+    expect(timeOf(check())).toMatchObject({ ok: true, age: 'none', wait: 0, confirmations: null });
+    expect(timeOf(check({ lockTime: 840000, sequence: FINAL_SEQUENCE - 1 }))).toMatchObject({ ok: true, age: 'none' });
+  });
+
+
+  it('lets a transaction in once the coin is as old as its input promises to wait', () => {
+    expect(timeOf(check({ sequence: 144, coin: { height: 849857 } }))).toMatchObject({ ok: true, age: 'reached', sequence: 144, wait: 144, confirmations: 144 });
+    expect(timeOf(check({ sequence: 144, coin: { height: 800000 } }))).toMatchObject({ ok: true, age: 'reached', confirmations: 50001 });
+  });
+
+
+  it('holds a transaction back while the coin is younger than that', () => {
+    const result = check({ sequence: 144, coin: { height: 849858 } });
+
+    expect(result).toMatchObject({ valid: false, failed: 'finality', error: { code: 'sequence-too-early', wait: 144, confirmations: 143 } });
+    expect(stagesOf(result)).toEqual(['coin', 'amounts', 'finality', 'verdict']);
+  });
+
+
+  it('counts the block that holds the coin as its first confirmation', () => {
+    expect(timeOf(check({ sequence: 1, coin: { height: 850000 } }))).toMatchObject({ ok: true, confirmations: 1 });
+    expect(timeOf(check({ sequence: 2, coin: { height: 850000 } }))).toMatchObject({ ok: false, confirmations: 1 });
+    expect(timeOf(check({ sequence: 0, coin: { height: 850000 } }))).toMatchObject({ ok: true, age: 'reached', wait: 0 });
+  });
+
+
+  it('reads the wait from the lowest sixteen bits of the sequence number', () => {
+    expect(timeOf(check({ sequence: 2 ** 16 + 5, coin: { height: 849996 } }))).toMatchObject({ ok: true, wait: 5, confirmations: 5 });
+    expect(timeOf(check({ sequence: 2 ** 16 + 5, coin: { height: 849997 } }))).toMatchObject({ ok: false, wait: 5, confirmations: 4 });
+  });
+
+
+  it('turns away a wait counted in seconds', () => {
+    expect(check({ sequence: SEQUENCE.SECONDS + 1, coin: { height: 800000 } })).toMatchObject({ valid: false, failed: 'finality', error: { code: 'sequence-seconds' } });
+  });
+
+
+  it('does not hold a transaction of the first version to its sequence number', () => {
+    expect(timeOf(check({ version: 1, sequence: 144, coin: { height: 850000 } }))).toMatchObject({ ok: true, age: 'none' });
+  });
+
+
+  it('asks about the transaction\'s own lock time before the coin\'s age', () => {
+    const result = check({ lockTime: 860000, sequence: 144, coin: { height: 850000 } });
+
+    expect(result.error).toEqual({ code: 'locktime-too-early' });
+  });
 });
 
 
@@ -226,5 +284,109 @@ describe('what the script machine asks of the transaction', () => {
     const final = checkerFor(spending({ lockTime: 840000 }), 0);
 
     expect(final.checkLockTime(840000)).toEqual({ lockTime: 840000, why: 'final-sequence' });
+  });
+
+
+  it('answers a demand for a wait from the sequence number of the input', () => {
+    const waiting = checkerFor(spending({ sequence: 144 }), 0);
+
+    expect(waiting.checkSequence(144)).toEqual({ sequence: 144, why: null });
+    expect(waiting.checkSequence(1)).toEqual({ sequence: 144, why: null });
+    expect(waiting.checkSequence(145)).toEqual({ sequence: 144, why: 'too-early' });
+    expect(waiting.checkSequence(-1)).toEqual({ sequence: 144, why: 'negative' });
+    expect(waiting.checkSequence(SEQUENCE.SECONDS + 1)).toEqual({ sequence: 144, why: 'different-kind' });
+  });
+
+
+  it('does not meet a demand for a wait in an input that promises none, or in a transaction of the first version', () => {
+    expect(checkerFor(spending(), 0).checkSequence(1)).toEqual({ sequence: FINAL_SEQUENCE, why: 'switched-off' });
+    expect(checkerFor(spending({ sequence: FINAL_SEQUENCE - 1 }), 0).checkSequence(0)).toEqual({ sequence: FINAL_SEQUENCE - 1, why: 'switched-off' });
+    expect(checkerFor(spending({ sequence: 144, version: 1 }), 0).checkSequence(144)).toEqual({ sequence: 144, why: 'old-version' });
+  });
+
+
+  it('stands idle for a demand that itself has the switched-off bit set', () => {
+    expect(checkerFor(spending(), 0).checkSequence(SEQUENCE.DISABLED)).toEqual({ sequence: FINAL_SEQUENCE, why: null, idle: true });
+    expect(checkerFor(spending({ version: 1 }), 0).checkSequence(SEQUENCE.DISABLED + 7)).toMatchObject({ why: null, idle: true });
+  });
+
+
+  it('tells the bits of a number longer than thirty-two bits apart', () => {
+    expect(hasBit(2 ** 31, SEQUENCE.DISABLED)).toBe(true);
+    expect(hasBit(2 ** 32, SEQUENCE.DISABLED)).toBe(false);
+    expect(hasBit(3 * 2 ** 31, SEQUENCE.DISABLED)).toBe(true);
+    expect(hasBit(2 ** 22 + 2 ** 35, SEQUENCE.SECONDS)).toBe(true);
+    expect(hasBit(2 ** 22 - 1, SEQUENCE.SECONDS)).toBe(false);
+  });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// Bitcoin Core's lock-time transactions
+// -----------------------------------------------------------
+//
+// The engine always applies pay-to-script-hash, strict DER
+// signatures, the empty extra item of OP_CHECKMULTISIG and
+// both lock-time opcodes. A transaction Core calls valid only
+// with one of those switched off is therefore refused here —
+// there is one, and it must be refused for that very rule.
+// -----------------------------------------------------------
+
+describe("Bitcoin Core's lock-time transactions", () => {
+
+  const ALWAYS_ON = ['P2SH', 'DERSIG', 'NULLDUMMY', 'CHECKLOCKTIMEVERIFY', 'CHECKSEQUENCEVERIFY'];
+  const breaksAFixedRule = (vector) => vector.flags.some((flag) => ALWAYS_ON.includes(flag));
+
+  it('holds all of them: 44 valid and 39 invalid', () => {
+    expect(VALID).toHaveLength(44);
+    expect(INVALID).toHaveLength(39);
+    expect(VALID.filter((vector) => /CHECKSEQUENCEVERIFY/.test(vector.comment) || vector.coins.some((coin) => coin[2].includes('CHECKSEQUENCEVERIFY'))).length).toBeGreaterThan(25);
+  });
+
+
+  it('accepts every valid transaction that breaks none of the rules it always applies', () => {
+    const refused = VALID.filter((vector) => !breaksAFixedRule(vector)).filter((vector) => !runTransaction(vector).ok);
+
+    expect(refused.map((vector) => `${vector.comment}: ${vector.coins[0][2]}`)).toEqual([]);
+    expect(VALID.filter((vector) => !breaksAFixedRule(vector))).toHaveLength(43);
+  });
+
+
+  it('refuses the one valid transaction that needs lax signatures, and for its signature', () => {
+    const excused = VALID.filter(breaksAFixedRule);
+
+    expect(excused.map((vector) => [vector.comment, vector.flags])).toEqual([['A transaction with a non-standard DER signature.', ['DERSIG', 'LOW_S', 'STRICTENC']]]);
+    expect(runTransaction(excused[0])).toMatchObject({ ok: false, error: 'signature-encoding' });
+  });
+
+
+  it('refuses every invalid transaction, each of them by a rule it applies', () => {
+    const accepted = INVALID.filter((vector) => runTransaction(vector).ok);
+
+    expect(accepted.map((vector) => `${vector.comment}: ${vector.coins[0][2]}`)).toEqual([]);
+    expect(INVALID.every((vector) => vector.flags.every((flag) => ALWAYS_ON.includes(flag)))).toBe(true);
+  });
+
+
+  it.each([
+    ['By-height locks, with argument just beyond txin.nSequence', 'sequence', 'too-early'],
+    ['Argument negative with by-blockheight txin.nSequence=0', 'sequence', 'negative'],
+    ['Argument/tx height/time mismatch, both versions', 'sequence', 'different-kind'],
+    ['Failure due to insufficient tx.nVersion (<2)', 'sequence', 'old-version'],
+    ['By-height locks, with argument just beyond tx nLockTime', 'locktime', 'too-early'],
+    ['Input locked', 'locktime', 'final-sequence'],
+  ])('refuses the transactions under "%s" for the reason Core gives', (comment, error, why) => {
+    const vectors = INVALID.filter((vector) => vector.comment === comment && vector.coins.some((coin) => /VERIFY/.test(coin[2])));
+
+    expect(vectors.length).toBeGreaterThan(0);
+    for (const vector of vectors) {
+      if (comment.startsWith('Argument/tx') && !vector.coins[0][2].includes(error === 'sequence' ? 'SEQUENCE' : 'LOCKTIME')) continue;
+      expect(runTransaction(vector)).toMatchObject({ ok: false, error, why });
+    }
   });
 });

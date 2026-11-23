@@ -29,10 +29,12 @@ import { PAY_TO_SCRIPT_HASH, parseScript, serializeScript } from '@/pages/Bitcoi
 
 // A checker for scripts that ask nothing of a transaction:
 // "aa" signs for the key "02aa" and nothing else does; the
-// transaction's lock time is 100
+// transaction's lock time is 100 and its input promises to
+// wait 10 blocks
 const checker = {
   checkSignature: (signature, publicKey) => ({ valid: `02${signature}` === publicKey, digest: '00'.repeat(32), why: `02${signature}` === publicKey ? null : 'wrong-signature' }),
   checkLockTime: (required) => ({ lockTime: 100, why: required > 100 ? 'too-early' : null }),
+  checkSequence: (required) => ({ sequence: 10, why: required > 10 ? 'too-early' : null }),
 };
 
 // A script from its words, as the machine takes it
@@ -131,7 +133,6 @@ describe('the record of a run', () => {
 
 
   it('says by name what it does not run', () => {
-    expect(spend('1', 'OP_CHECKSEQUENCEVERIFY').error).toEqual({ code: 'unsupported-opcode' });
     expect(spend('1', 'OP_CODESEPARATOR').error).toEqual({ code: 'unsupported-opcode' });
   });
 
@@ -226,6 +227,23 @@ describe('what the machine asks of a transaction', () => {
   });
 
 
+  it('holds a coin back until the input promises a long enough wait, and leaves the stack alone', () => {
+    const run = spend('1', '10 OP_CHECKSEQUENCEVERIFY OP_DROP');
+
+    expect(run.ok).toBe(true);
+    expect(run.steps[3].stack).toEqual(['01', '0a']);
+    expect(run.steps[3].effect).toEqual({ type: 'sequence', required: 10, sequence: 10, idle: false, why: null });
+    expect(spend('1', '11 OP_CHECKSEQUENCEVERIFY OP_DROP').error).toEqual({ code: 'sequence', why: 'too-early', required: 11, sequence: 10 });
+  });
+
+
+  it('needs a number for a wait, of no more than five bytes', () => {
+    expect(spend('', 'OP_CHECKSEQUENCEVERIFY').error).toMatchObject({ code: 'stack-underflow' });
+    expect(spend('0x000000000000', 'OP_CHECKSEQUENCEVERIFY').error).toMatchObject({ code: 'number-too-long', bytes: 6, limit: 5 });
+    expect(spend('0x0000000000', 'OP_CHECKSEQUENCEVERIFY 1').ok).toBe(true);
+  });
+
+
   it('runs the script behind a hash once the hash has matched', () => {
     const redeem = serializeScript(parseScript('OP_ADD 5 OP_EQUAL').items);
     const lock = `OP_HASH160 0x${hash160(redeem)} OP_EQUAL`;
@@ -265,10 +283,11 @@ describe('what the machine asks of a transaction', () => {
 //
 // The machine's rules are fixed: pay-to-script-hash, strict
 // DER signatures, the empty extra item of OP_CHECKMULTISIG
-// and OP_CHECKLOCKTIMEVERIFY are always on; only signatures
-// of the whole transaction are understood;
-// OP_CHECKSEQUENCEVERIFY and OP_CODESEPARATOR are not run;
-// and the relay-only rules Core calls policy are not applied.
+// and the two lock-time opcodes — OP_CHECKLOCKTIMEVERIFY and
+// OP_CHECKSEQUENCEVERIFY — are always on; only signatures of
+// the whole transaction are understood; OP_CODESEPARATOR is
+// not run; and the relay-only rules Core calls policy are not
+// applied.
 // `excuse` names the rule behind a difference, or nothing —
 // and nothing fails the test.
 // -----------------------------------------------------------
@@ -296,11 +315,12 @@ describe("Bitcoin Core's script vectors", () => {
       const rule = NOT_APPLIED[vector.expected];
       return rule && has(rule) ? `not applied: ${rule}` : null;
     }
-    if (result.error === 'unsupported-opcode') return 'not run: CHECKSEQUENCEVERIFY, CODESEPARATOR';
+    if (result.error === 'unsupported-opcode') return 'not run: CODESEPARATOR';
     if (result.error === 'signature-type') return 'only signatures of the whole transaction';
     if (result.error === 'signature-encoding' && !has('DERSIG') && !has('STRICTENC') && !has('LOW_S')) return 'always on: DERSIG';
     if (result.error === 'null-dummy' && !has('NULLDUMMY')) return 'always on: NULLDUMMY';
     if (!has('CHECKLOCKTIMEVERIFY') && /CHECKLOCKTIMEVERIFY|NOP2/.test(words)) return 'always on: CHECKLOCKTIMEVERIFY';
+    if (!has('CHECKSEQUENCEVERIFY') && /CHECKSEQUENCEVERIFY|NOP3/.test(words)) return 'always on: CHECKSEQUENCEVERIFY';
     if (!has('P2SH') && PAY_TO_SCRIPT_HASH.test(result.lockHex)) return 'always on: P2SH';
     return null;
   };
@@ -323,7 +343,7 @@ describe("Bitcoin Core's script vectors", () => {
 
     expect(unexplained).toEqual([]);
     expect(VECTORS).toHaveLength(1077);
-    expect(agreed).toBe(949);
+    expect(agreed).toBe(950);
     expect(counts).toEqual({
       'not applied: MINIMALDATA': 75,
       'not applied: DISCOURAGE_UPGRADABLE_NOPS': 10,
@@ -335,9 +355,10 @@ describe("Bitcoin Core's script vectors", () => {
       'always on: DERSIG': 17,
       'always on: NULLDUMMY': 4,
       'always on: CHECKLOCKTIMEVERIFY': 3,
+      'always on: CHECKSEQUENCEVERIFY': 1,
       'always on: P2SH': 2,
       'only signatures of the whole transaction': 3,
-      'not run: CHECKSEQUENCEVERIFY, CODESEPARATOR': 3,
+      'not run: CODESEPARATOR': 1,
     });
   });
 });

@@ -287,7 +287,7 @@ export default function ScriptLine({ tapes, rows, stepper, stops, lexicon }) {
   return (
     <section aria-label="Skriptai" className="flex flex-col gap-3">
       <div className="flex flex-col gap-3 xl:flex-row xl:items-stretch">
-        <ScriptRow name="unlock" tiles={tapes.unlock} row={rows.rows.unlock} inUse={rows.target === 'unlock'} className="xl:min-w-[260px] xl:max-w-[60%] xl:shrink-0" {...shared} />
+        <ScriptRow name="unlock" tiles={tapes.unlock} row={rows.rows.unlock} inUse={rows.target === 'unlock'} className="xl:min-w-[260px] xl:max-w-[55%] xl:shrink-0" {...shared} />
         <ArrowForwardIcon aria-hidden="true" className="!hidden self-center text-slate-400 xl:!block" />
         <ScriptRow name="lock" tiles={tapes.lock} row={rows.rows.lock} inUse={rows.target === 'lock'} className="xl:flex-1" {...shared} />
       </div>

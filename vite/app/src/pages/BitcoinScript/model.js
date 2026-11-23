@@ -7,8 +7,10 @@
 //  transaction A — an amount and a locking script each —
 //  which of them transaction B spends, B's unlocking script,
 //  an optional redeem script, B's own outputs as "this much
-//  to that key", B's lock time, how high the node's chain
-//  stands, and two switches.
+//  to that key", B's lock time and the sequence number of its
+//  input, how high the node's chain stands and which of its
+//  blocks holds transaction A, and two switches. A scene also
+//  says which chain all of it stands on.
 //
 //  Everything else is worked out from it here, in one pass and
 //  with nothing remembered between passes (buildModel): the
@@ -44,8 +46,9 @@
 //
 //    PREVIOUS_ID    — the coin A spends
 //    payTo          — the standard lock to a key pair, as text
-//    readAmount     — typed bitcoin as satoshis
+//    readAmount     — a typed amount as satoshis
 //    readWhole      — a typed whole number
+//    readSequence   — a typed sequence number
 //    signatureOf    — a signature, remembered
 //    signEveryone   — every key pair's signature at once
 //    fill           — a script's text to words, items, bytes
@@ -53,11 +56,11 @@
 //    reduce         — every change a student can make
 // -----------------------------------------------------------
 
-import { KEY_COLOURS, LIMITS, SATOSHIS, SPARE_NAMES } from './constants';
+import { CHAINS, KEY_COLOURS, LIMITS, SATOSHIS, SPARE_NAMES } from './constants';
 import { textToHex } from './engine/bytes';
 import { hash160, sha256Hex } from './engine/hashes';
 import { keyFrom, signWith } from './engine/keys';
-import { FINAL_SEQUENCE, LOCKTIME_THRESHOLD, MAX_MONEY, verifySpend } from './engine/node';
+import { FINAL_SEQUENCE, LOCKTIME_THRESHOLD, verifySpend } from './engine/node';
 import { PAY_TO_SCRIPT_HASH, describeLock, parseScript, resolveScript, serializeScript, wordsOf } from './engine/script';
 import { serializeTransaction, signatureHash, transactionId } from './engine/transaction';
 
@@ -121,18 +124,19 @@ export const payTo = (id) => `OP_DUP OP_HASH160 <pubkeyhash:${id}> OP_EQUALVERIF
 // readAmount
 // -----------------------------------------------------------
 //
-// A typed amount of bitcoin as satoshis — the whole number a
+// A typed amount of coins as satoshis — the whole number a
 // transaction holds — or the reason it is no amount: nothing
 // typed, not a number with at most eight decimals (a comma
-// is taken for the point), or more than all the bitcoin
-// there will ever be. The digits are read as text; an amount
-// never passes through a fraction that might round.
+// is taken for the point), or more than all the coins there
+// will ever be on the chain — Bitcoin's twenty-one million
+// unless told otherwise. The digits are read as text; an
+// amount never passes through a fraction that might round.
 //
 // Used by:
 //   - buildModel (below)
 // -----------------------------------------------------------
 
-export function readAmount(text) {
+export function readAmount(text, coins = CHAINS.btc.coins) {
   const typed = text.trim();
   if (typed === '') return { value: null, problem: 'amount-empty' };
 
@@ -140,7 +144,7 @@ export function readAmount(text) {
   if (!parts) return { value: null, problem: 'amount-unreadable' };
 
   const value = Number(parts[1]) * SATOSHIS + Number((parts[2] ?? '').padEnd(8, '0'));
-  return value > MAX_MONEY ? { value: null, problem: 'amount-too-large' } : { value, problem: null };
+  return value > coins * SATOSHIS ? { value: null, problem: 'amount-too-large' } : { value, problem: null };
 }
 
 
@@ -166,6 +170,34 @@ export function readWhole(text, limit) {
 
   const value = Number(typed);
   return value > limit ? { value: null, problem: 'whole-too-large' } : { value, problem: null };
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// readSequence
+// -----------------------------------------------------------
+//
+// A typed sequence number: nothing typed means "whatever the
+// transaction needs" and reads as no number at all; otherwise
+// a whole number up to the thirty-two bits the field holds,
+// written in decimal or, behind 0x, in hex — or the reason it
+// is none.
+//
+// Used by:
+//   - buildModel (below)
+// -----------------------------------------------------------
+
+export function readSequence(text) {
+  const typed = text.trim();
+  if (typed === '') return { value: null, problem: null };
+
+  const value = /^\d+$/.test(typed) ? Number(typed) : /^0x[0-9a-f]{1,8}$/i.test(typed) ? parseInt(typed, 16) : NaN;
+  return Number.isNaN(value) || value > FINAL_SEQUENCE ? { value: null, problem: 'sequence-unreadable' } : { value, problem: null };
 }
 
 
@@ -265,9 +297,11 @@ function fill(text, parsed, values) {
 // -----------------------------------------------------------
 //
 // Everything the page shows, from the state (see the file
-// header for the order and why). Hands back the key pairs
-// with all that follows from their private keys; both
-// transactions — their parts, bytes and ids; the message B's
+// header for the order and why). Hands back the chain; the
+// key pairs with all that follows from their private keys;
+// both transactions — their parts, bytes and ids; the block
+// that holds A and how many confirmations that makes; the
+// message B's
 // signatures sign and whether the signatures B carries still
 // sign it; a lexicon that names what is worth naming — a
 // key pair by its number, and a run of bytes by what it is:
@@ -277,11 +311,19 @@ function fill(text, parsed, values) {
 // cannot be read; and the node's verification, or none while
 // that list is not empty.
 //
+// The sequence number of B's input is the typed one. When
+// none is typed it is the number that switches every lock
+// time off — or, for a transaction with a lock time of its
+// own, the one just below it, which lets that lock time
+// count. A coin in a block the chain has not reached yet is
+// a coin the node does not know.
+//
 // Used by:
 //   - hooks/usePlayground.js — once per change of the state
 // -----------------------------------------------------------
 
 export function buildModel(state) {
+  const chain = CHAINS[state.chain];
   const keys = state.keys.map((key) => ({ ...key, ...keyFrom(key.privateKey) }));
   const numbers = keys.map((key) => String(key.id));
   const read = (text) => parseScript(text, numbers);
@@ -300,7 +342,7 @@ export function buildModel(state) {
   // Transaction A: its outputs, its bytes, its id
   const outputs = state.outputs.map((output, index) => {
     const script = fill(output.lock, read(output.lock), withRedeem);
-    return { id: output.id, index, amount: readAmount(output.amount), script, lock: describeLock(script.hex) };
+    return { id: output.id, index, amount: readAmount(output.amount, chain.coins), script, lock: describeLock(script.hex) };
   });
   const a = {
     version: 2,
@@ -314,6 +356,9 @@ export function buildModel(state) {
   // Transaction B without its unlocking script — what is signed
   const lockTime = readWhole(state.lockTime, LOCKTIME_THRESHOLD - 1);
   const height = readWhole(state.height, LOCKTIME_THRESHOLD - 1);
+  const mined = readWhole(state.mined, LOCKTIME_THRESHOLD - 1);
+  const typedSequence = readSequence(state.sequence);
+  const sequence = typedSequence.value ?? (lockTime.value > 0 ? FINAL_SEQUENCE - 1 : FINAL_SEQUENCE);
   const payments = state.payments.map((payment, index) => {
     const script = fill(payTo(payment.to), read(payTo(payment.to)), known);
     return {
@@ -321,14 +366,14 @@ export function buildModel(state) {
       index,
       to: payment.to,
       key: keys.find((key) => key.id === payment.to) ?? null,
-      amount: readAmount(payment.amount),
+      amount: readAmount(payment.amount, chain.coins),
       script,
       lock: describeLock(script.hex),
     };
   });
   const unsigned = {
     version: 2,
-    inputs: [{ txid: aId, vout: coin.index, script: '', sequence: lockTime.value > 0 ? FINAL_SEQUENCE - 1 : FINAL_SEQUENCE }],
+    inputs: [{ txid: aId, vout: coin.index, script: '', sequence }],
     outputs: payments.map((payment) => ({ value: payment.amount.value ?? 0, script: payment.script.hex })),
     lockTime: lockTime.value ?? 0,
   };
@@ -375,28 +420,32 @@ export function buildModel(state) {
 
   const problems = [
     ...outputs.flatMap((output) => [
-      ...(output.amount.problem ? [{ where: 'output-amount', index: output.index, code: output.amount.problem }] : []),
+      ...(output.amount.problem ? [{ where: 'output-amount', index: output.index, code: output.amount.problem, chain: chain.key }] : []),
       ...output.script.problems.map((problem) => ({ where: 'lock', index: output.index, ...problem })),
     ]),
     ...unlock.problems.map((problem) => ({ where: 'unlock', ...problem })),
     ...(redeemWritten ? redeem.problems.map((problem) => ({ where: 'redeem', ...problem })) : []),
     ...payments.flatMap((payment) => [
-      ...(payment.amount.problem ? [{ where: 'payment-amount', index: payment.index, code: payment.amount.problem }] : []),
+      ...(payment.amount.problem ? [{ where: 'payment-amount', index: payment.index, code: payment.amount.problem, chain: chain.key }] : []),
       ...(payment.key ? [] : [{ where: 'payment-key', index: payment.index, code: 'unknown-key' }]),
     ]),
     ...(lockTime.problem ? [{ where: 'lock-time', code: lockTime.problem }] : []),
+    ...(typedSequence.problem ? [{ where: 'sequence', code: typedSequence.problem }] : []),
     ...(height.problem ? [{ where: 'height', code: height.problem }] : []),
+    ...(mined.problem ? [{ where: 'mined', code: mined.problem }] : []),
   ];
 
   const paid = payments.reduce((sum, payment) => sum + (payment.amount.value ?? 0), 0);
   const verification = problems.length > 0 ? null : verifySpend({
     transaction: b,
-    coin: { found: true, spent: state.coinSpent, value: coin.amount.value, lock: { items: coin.script.items, hex: coin.script.hex } },
+    coin: { found: mined.value <= height.value, spent: state.coinSpent, value: coin.amount.value, height: mined.value, lock: { items: coin.script.items, hex: coin.script.hex } },
     unlock: { items: unlock.items, hex: unlock.hex },
     height: height.value,
+    maxMoney: chain.coins * SATOSHIS,
   });
 
   return {
+    chain,
     keys,
     a: { id: aId, hex: serializeTransaction(a), outputs },
     b: {
@@ -409,10 +458,13 @@ export function buildModel(state) {
       paid,
       fee: coin.amount.value === null ? null : coin.amount.value - paid,
       lockTime,
-      sequence: unsigned.inputs[0].sequence,
+      sequence,
+      typedSequence,
     },
     signing: { digest, covers: signsRedeem ? 'redeem' : 'lock', signers, stale, frozen: state.frozen !== null },
     height,
+    mined,
+    confirmations: height.value === null || mined.value === null ? null : height.value - mined.value + 1,
     lexicon,
     problems,
     verification,
@@ -517,8 +569,12 @@ export function reduce(state, action) {
 
     case 'lock-time':
       return { ...state, lockTime: action.text };
+    case 'sequence':
+      return { ...state, sequence: action.text };
     case 'height':
       return { ...state, height: action.text };
+    case 'mined':
+      return { ...state, mined: action.text };
     case 'freeze':
       return { ...state, frozen: action.signatures };
     case 'thaw':

@@ -5,8 +5,8 @@
 //  with an arrow between them — the whole of what a
 //  transaction is here, with nothing to read but amounts.
 //
-//  Transaction A makes coins: each of its outputs is an
-//  orange coin with its amount and a padlock. One of them is
+//  Transaction A makes coins: each of its outputs is a coin
+//  in its chain's colour with its amount and a padlock. One of them is
 //  the coin transaction B spends — picked with a press, and
 //  framed. Transaction B shows that coin going in and the
 //  coins it would make coming out, each with the key pair it
@@ -42,7 +42,7 @@ import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 
 import { COLORS, LIMITS } from '../constants';
 import { MOTION } from '../motion';
-import { formatBitcoin, lockName } from '../narration';
+import { formatAmount, lockName } from '../narration';
 import { Coin, KeyBadge } from './Pieces';
 
 
@@ -69,8 +69,8 @@ const SMALL = 'flex h-6 w-6 cursor-pointer items-center justify-center rounded-f
 // InlineAmount
 // -----------------------------------------------------------
 //
-// An amount of bitcoin that reads as plain text and is
-// changed by pressing it: the press turns it into a field
+// An amount, in the chain's unit, that reads as plain text
+// and is changed by pressing it: the press turns it into a field
 // holding what was typed, and Enter, Escape or a press
 // elsewhere turns it back. An amount that cannot be read is
 // shown in red, as typed.
@@ -79,7 +79,7 @@ const SMALL = 'flex h-6 w-6 cursor-pointer items-center justify-center rounded-f
 //   - CoinChip, TransactionB (below)
 // -----------------------------------------------------------
 
-function InlineAmount({ name, text, amount, onChange }) {
+function InlineAmount({ name, text, amount, unit, onChange }) {
 
   // Whether the amount is being typed
   const [editing, setEditing] = useState(false);
@@ -102,7 +102,7 @@ function InlineAmount({ name, text, amount, onChange }) {
     );
   }
 
-  const shown = amount.value === null ? `${text.trim() || '?'} BTC` : formatBitcoin(amount.value);
+  const shown = amount.value === null ? `${text.trim() || '?'} ${unit}` : formatAmount(amount.value, unit);
 
   return (
     <Tooltip title="Keisti sumą" arrow>
@@ -141,11 +141,11 @@ function InlineAmount({ name, text, amount, onChange }) {
 //   - TransactionA (below)
 // -----------------------------------------------------------
 
-function CoinChip({ output, text, picked, verdict, lexicon, removable, onPick, onAmount, onRemove }) {
+function CoinChip({ output, text, picked, verdict, chain, lexicon, removable, onPick, onAmount, onRemove }) {
   const opened = picked && verdict === 'valid';
   const held = picked && verdict === 'invalid';
   const Padlock = opened ? LockOpenIcon : LockIcon;
-  const amount = output.amount.value === null ? '— BTC' : formatBitcoin(output.amount.value);
+  const amount = output.amount.value === null ? `— ${chain.unit}` : formatAmount(output.amount.value, chain.unit);
   const lock = lockName(output.lock, lexicon);
 
   return (
@@ -159,11 +159,11 @@ function CoinChip({ output, text, picked, verdict, lexicon, removable, onPick, o
           onChange={onPick}
           aria-label={`Išvestis #${output.index}: ${amount}, ${lock}`}
         />
-        <Coin size={28} state={opened ? 'spent' : 'unspent'} />
+        <Coin size={28} state={opened ? 'spent' : 'unspent'} chain={chain} />
         {!picked && <span className="text-sm font-bold text-slate-700">{amount}</span>}
       </label>
 
-      {picked && <InlineAmount name={`Išvesties #${output.index} suma`} text={text} amount={output.amount} onChange={onAmount} />}
+      {picked && <InlineAmount name={`Išvesties #${output.index} suma`} text={text} amount={output.amount} unit={chain.unit} onChange={onAmount} />}
 
       <Tooltip title={`Užrakinta: ${lock}`} arrow>
         <Box
@@ -198,7 +198,9 @@ function CoinChip({ output, text, picked, verdict, lexicon, removable, onPick, o
 //
 // The card of the transaction that makes the coins: its
 // outputs as a group of radio buttons, one coin each, and —
-// while there is room — a plus for one more.
+// while there is room — a plus for one more. The coins stand
+// in the card's own row, so a transaction with many of them
+// wraps coin by coin.
 //
 // Used by:
 //   - Page.jsx — top left
@@ -209,7 +211,7 @@ export function TransactionA({ state, model, verdict, change }) {
     <section aria-label="Transakcija A" className="card-surface flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5">
       <h2 className="text-sm font-bold text-slate-900">Transakcija A</h2>
 
-      <div role="radiogroup" aria-label="Kurią transakcijos A išvestį išleidžia transakcija B" className="flex flex-wrap items-center gap-2">
+      <div role="radiogroup" aria-label="Kurią transakcijos A išvestį išleidžia transakcija B" className="contents">
         {model.a.outputs.map((output) => (
           <CoinChip
             key={output.id}
@@ -217,6 +219,7 @@ export function TransactionA({ state, model, verdict, change }) {
             text={state.outputs[output.index].amount}
             picked={output.index === model.b.spends.index}
             verdict={verdict}
+            chain={model.chain}
             lexicon={model.lexicon}
             removable={model.a.outputs.length > 1}
             onPick={() => change({ type: 'spend', index: output.index })}
@@ -294,6 +297,7 @@ export function Arrow({ verdict }) {
 
 export function TransactionB({ state, model, verdict, change }) {
   const { spends, payments, fee } = model.b;
+  const { chain } = model;
   const accepted = verdict === 'valid';
   const counted = fee !== null && payments.every((payment) => payment.amount.value !== null);
 
@@ -303,21 +307,22 @@ export function TransactionB({ state, model, verdict, change }) {
 
       <Tooltip title={`Įvestis: išleidžia transakcijos A išvestį #${spends.index}`} arrow>
         <span className="flex items-center gap-1.5 text-sm font-bold text-slate-500">
-          <Coin size={24} state={accepted ? 'spent' : 'unspent'} />
-          {spends.amount.value === null ? '— BTC' : formatBitcoin(spends.amount.value)}
+          <Coin size={24} state={accepted ? 'spent' : 'unspent'} chain={chain} />
+          {spends.amount.value === null ? `— ${chain.unit}` : formatAmount(spends.amount.value, chain.unit)}
         </span>
       </Tooltip>
 
       <ArrowForwardIcon aria-hidden="true" fontSize="small" className="text-slate-400" />
 
-      <ul aria-label="Transakcijos B išvestys" className="flex flex-wrap items-center gap-2">
+      <ul aria-label="Transakcijos B išvestys" className="contents">
         {payments.map((payment) => (
           <li key={payment.id} className="flex items-center gap-1 rounded-full border-2 border-slate-200 bg-white py-0.5 pl-1 pr-1.5">
-            <Coin size={28} state={accepted ? 'unspent' : 'future'} fresh={accepted} />
+            <Coin size={28} state={accepted ? 'unspent' : 'future'} fresh={accepted} chain={chain} />
             <InlineAmount
               name={`Transakcijos B išvesties #${payment.index} suma`}
               text={state.payments[payment.index].amount}
               amount={payment.amount}
+              unit={chain.unit}
               onChange={(text) => change({ type: 'payment/amount', index: payment.index, text })}
             />
             {payment.key && <KeyBadge name={payment.key.name} colour={payment.key.colour} size={20} />}
@@ -349,7 +354,7 @@ export function TransactionB({ state, model, verdict, change }) {
 
       {counted && (
         <p className={`ml-auto text-xs ${fee < 0 ? 'font-bold text-red-700' : 'text-slate-600'}`}>
-          {fee < 0 ? `trūksta ${formatBitcoin(-fee)}` : `kasėjui ${formatBitcoin(fee)}`}
+          {fee < 0 ? `trūksta ${formatAmount(-fee, chain.unit)}` : `kasėjui ${formatAmount(fee, chain.unit)}`}
         </p>
       )}
     </section>

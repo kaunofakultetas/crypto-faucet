@@ -20,7 +20,8 @@
 //
 //  The page opens on the everyday lock, already opened; the
 //  scenes above the transactions set it to other locks, from
-//  two numbers that must add up to a script behind its hash.
+//  two numbers that must add up to the outputs of a Lightning
+//  channel and the contracts of a swap between two chains.
 //  Every change can be taken back, and nothing is kept beyond
 //  the visit.
 //
@@ -88,7 +89,7 @@ export default function BitcoinScriptPage() {
 
   return (
     <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-4 p-4">
-      <SceneBar example={example} canUndo={canUndo} onLoad={load} onUndo={undo} onRestart={restart} />
+      <SceneBar example={example} visit={visit} canUndo={canUndo} onLoad={load} onUndo={undo} onRestart={restart} />
 
       <div className="grid items-stretch gap-2 md:grid-cols-[minmax(0,5fr)_auto_minmax(0,7fr)]">
         <TransactionA state={state} model={model} verdict={verdict} change={change} />
@@ -109,7 +110,7 @@ export default function BitcoinScriptPage() {
             </div>
           </div>
 
-          <More key={visit} state={state} model={model} rows={rows} change={change} freeze={freeze} thaw={thaw} startOpen={example.state.lockTime !== '0'} />
+          <More key={visit} state={state} model={model} rows={rows} change={change} freeze={freeze} thaw={thaw} startOpen={example.state.lockTime !== '0' || example.state.sequence !== ''} />
         </div>
       </div>
     </div>

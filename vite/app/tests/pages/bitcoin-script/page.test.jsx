@@ -21,7 +21,9 @@
 //      outputs added and removed, who is paid
 //    - the drawer of further settings: time, a coin already
 //      spent, signatures that go stale, the redeem script
-//    - the scenes
+//    - the scenes and their groups
+//    - Lightning and the swaps: a coin held back by its own
+//      age, a secret thirty-two bytes long, a second chain
 //    - the page inside the real app: its route, its tab's
 //      title, its place in the tools menu, and that it works
 //      with the backend down
@@ -38,7 +40,7 @@ import { given } from '../../support/backend/server';
 import { renderApp, renderPage } from '../../support/render';
 import { LIMITS, PLAY_MS } from '@/pages/BitcoinScript/constants';
 import { keyFrom, seedKey } from '@/pages/BitcoinScript/engine/keys';
-import { EXAMPLES } from '@/pages/BitcoinScript/examples';
+import { EXAMPLES, GROUPS } from '@/pages/BitcoinScript/examples';
 import BitcoinScriptPage from '@/pages/BitcoinScript/Page';
 
 
@@ -90,6 +92,10 @@ const press = (name) => screen.getByRole('button', { name });
 
 const sceneButton = (label) => within(screen.getByRole('group', { name: 'Scenos' })).getByRole('button', { name: label });
 
+const groupTab = (title) => within(screen.getByRole('group', { name: 'Scenų grupės' })).getByRole('button', { name: title });
+
+const scenesShown = () => within(screen.getByRole('group', { name: 'Scenos' })).getAllByRole('button').map((button) => button.textContent);
+
 const tray = () => screen.getByRole('complementary', { name: 'Detalės' });
 
 const cardOf = (letter) => screen.getByRole('region', { name: `Transakcija ${letter}` });
@@ -124,6 +130,13 @@ async function retype(user, field, text) {
   await user.type(field, text);
 }
 
+// A scene of any group: its group's name first, then its button
+async function loadScene(user, label) {
+  const { group } = EXAMPLES.find((example) => example.label === label);
+  await user.click(groupTab(GROUPS.find(({ key }) => key === group).title));
+  await user.click(sceneButton(label));
+}
+
 
 
 
@@ -136,10 +149,13 @@ async function retype(user, field, text) {
 
 describe('the page as it opens', () => {
 
-  it('shows its title, the scenes with the everyday lock chosen, and that scene in one sentence', () => {
+  it('shows its title, the locks with the everyday one chosen, and that scene in one sentence', () => {
     open();
 
     expect(screen.getByRole('heading', { level: 1, name: 'Bitcoin skriptų žaidimų aikštelė' })).toBeInTheDocument();
+    expect(within(screen.getByRole('group', { name: 'Scenų grupės' })).getAllByRole('button').map((button) => [button.textContent, button.getAttribute('aria-pressed')])).toEqual([
+      ['Užraktai', 'true'], ['Lightning', 'false'], ['Atominiai mainai', 'false'],
+    ]);
     expect(within(screen.getByRole('group', { name: 'Scenos' })).getAllByRole('button').map((button) => [button.textContent, button.getAttribute('aria-pressed')])).toEqual([
       ['Suma', 'false'], ['Slaptažodis', 'false'], ['P2PK', 'false'], ['P2PKH', 'true'], ['Multisig', 'false'],
       ['P2SH', 'false'], ['Laiko užraktas', 'false'], ['Du keliai', 'false'], ['Vagystė', 'false'], ['OP_RETURN', 'false'],
@@ -976,6 +992,11 @@ describe('further settings', () => {
     expect(press('Daugiau nustatymų')).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByLabelText('Transakcijos B nLockTime')).toHaveValue('0');
     expect(screen.getByLabelText('Grandinės aukštis')).toHaveValue('850000');
+    expect(screen.getByLabelText('Įvesties nSequence')).toHaveValue('');
+    expect(screen.getByLabelText('Įvesties nSequence')).toHaveAttribute('placeholder', '0xffffffff');
+    expect(screen.getByLabelText('Įvesties nSequence')).toHaveAccessibleDescription('santykinio užrakto nėra, nLockTime negalioja');
+    expect(screen.getByLabelText('Transakcijos A blokas')).toHaveValue('800000');
+    expect(screen.getByLabelText('Transakcijos A blokas')).toHaveAccessibleDescription('moneta turi 50001 patvirtinimą');
     expect(screen.getByLabelText('Monetą jau išleido kita transakcija')).not.toBeChecked();
     expect(screen.getByLabelText('Užšaldyti parašus')).not.toBeChecked();
   });
@@ -1099,11 +1120,43 @@ describe('the scenes', () => {
 
   it.each(EXAMPLES)('loads "$label" with its sentence and the node\'s verdict on it', async ({ id, label, about }) => {
     const { user } = open();
-    await user.click(sceneButton(label));
+    await loadScene(user, label);
 
     expect(sceneButton(label)).toHaveAttribute('aria-pressed', 'true');
     expect(screen.getByText(about)).toBeInTheDocument();
     expect(said()).toContain(['theft', 'burned'].includes(id) ? 'Transakcija B atmesta' : 'Transakcija B priimta');
+  });
+
+
+  it('shows another group\'s scenes on a press of its name, and loads nothing by that', async () => {
+    const { user } = open();
+    await user.click(crossOf(UNLOCK, 'viešasis raktas „Jonas“'));
+    await user.click(groupTab('Lightning'));
+
+    expect(scenesShown()).toEqual(['to_local', 'Bauda', 'HTLC siūlomas', 'HTLC gautas']);
+    expect(groupTab('Lightning')).toHaveAttribute('aria-pressed', 'true');
+    expect(within(screen.getByRole('group', { name: 'Scenos' })).queryByRole('button', { pressed: true })).not.toBeInTheDocument();
+    expect(wordsOf(UNLOCK)).toEqual(['parašas „Jonas“']);
+    expect(screen.getByText(/^Įprasčiausias užraktas/)).toBeInTheDocument();
+
+    await user.click(groupTab('Atominiai mainai'));
+    expect(scenesShown()).toEqual(['Mainas LTC', 'Mainas BTC', 'Grąžinimas', 'Submarine']);
+
+    await user.click(groupTab('Užraktai'));
+    expect(sceneButton('P2PKH')).toHaveAttribute('aria-pressed', 'true');
+  });
+
+
+  it('goes back to showing the group of the scene in use whenever a scene is loaded', async () => {
+    const { user } = open();
+    await loadScene(user, 'Bauda');
+    expect(groupTab('Lightning')).toHaveAttribute('aria-pressed', 'true');
+    expect(sceneButton('Bauda')).toHaveAttribute('aria-pressed', 'true');
+
+    await user.click(groupTab('Užraktai'));
+    await user.click(press('Iš naujo'));
+    expect(groupTab('Lightning')).toHaveAttribute('aria-pressed', 'true');
+    expect(scenesShown()).toEqual(['to_local', 'Bauda', 'HTLC siūlomas', 'HTLC gautas']);
   });
 
 
@@ -1149,6 +1202,159 @@ describe('the scenes', () => {
 
     const marks = within(rowOf(LOCK)).getAllByRole('button').filter((tile) => !tile.getAttribute('aria-label').startsWith('Išimti: ')).map((tile) => tile.querySelector('[data-step]').dataset.step);
     expect(marks).toEqual(['todo', 'todo', 'todo', 'todo', 'skipped', 'skipped', 'skipped', 'skipped', 'todo']);
+  });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// Lightning and the swaps
+// -----------------------------------------------------------
+
+describe('Lightning and the swaps', () => {
+
+  it('opens the holder\'s own share of a channel with the wait its script asks for, and shows the numbers behind it', async () => {
+    const { user } = open();
+    await loadScene(user, 'to_local');
+
+    expect(wordsOf(LOCK)).toEqual(['OP_IF', 'viešasis raktas „Atšaukimas“', 'OP_ELSE', '144', 'OP_CHECKSEQUENCEVERIFY', 'OP_DROP', 'viešasis raktas „Jonas“', 'OP_ENDIF', 'OP_CHECKSIG']);
+    expect(wordsOf(UNLOCK)).toEqual(['parašas „Jonas“', '0']);
+    expect(said()).toContain('Transakcija B priimta');
+    expect(screen.getByLabelText('Įvesties nSequence')).toHaveValue('144');
+    expect(screen.getByLabelText('Įvesties nSequence')).toHaveAccessibleDescription('moneta turi būti 144 blokų senumo');
+    expect(screen.getByLabelText('Transakcijos A blokas')).toHaveAccessibleDescription('moneta turi 201 patvirtinimą');
+    expect(within(cardOf('A')).getAllByRole('radio').map((coin) => [coin.getAttribute('aria-label'), coin.checked])).toEqual([
+      ['Išvestis #0: 0.02 BTC, adresas „Gabija“ (P2PKH)', false],
+      ['Išvestis #1: 0.03 BTC, savas skriptas', true],
+    ]);
+  });
+
+
+  it('says what the sequence opcode held the input to when its word is pressed', async () => {
+    const { user } = open();
+    await loadScene(user, 'to_local');
+    await user.click(tileOf(LOCK, 'OP_CHECKSEQUENCEVERIFY'));
+
+    expect(said()).toContain('Skriptas reikalauja, kad įvesties nSequence būtų bent 144; transakcijos B įvesties nSequence — 144. Tinka.');
+    expect(stack()).toEqual(['sig Jonas', '144']);
+  });
+
+
+  it('holds the holder back at the node\'s question about time while the coin is too young', async () => {
+    const { user } = open();
+    await loadScene(user, 'to_local');
+    await retype(user, screen.getByLabelText('Transakcijos A blokas'), '849990');
+
+    expect(screen.getByLabelText('Transakcijos A blokas')).toHaveAccessibleDescription('moneta turi 11 patvirtinimų');
+    expect(said()).toContain('Mazgas sustojo ties klausimu „Ar transakcijai jau laikas?“');
+    expect(said()).toContain('Monetai dar ne laikas: įvesties nSequence reikalauja, kad ji būtų bent 144 blokų senumo, o ji turi tik 11 patvirtinimų.');
+    expect(answers()).toEqual(['Moneta: taip', 'Sumos: taip', 'Laikas: ne', 'Skriptai: neklausta']);
+  });
+
+
+  it('lets the script refuse an input that promises too short a wait, or none', async () => {
+    const { user } = open();
+    await loadScene(user, 'to_local');
+    await retype(user, screen.getByLabelText('Įvesties nSequence'), '100');
+
+    expect(said()).toContain('Mazgas sustojo užrakto skripte, ties žodžiu OP_CHECKSEQUENCEVERIFY.');
+    expect(said()).toContain('Įvesties nSequence mažesnis, nei reikalauja skriptas — transakcija B nepažadėjo laukti tiek, kiek reikia.');
+
+    await user.clear(screen.getByLabelText('Įvesties nSequence'));
+    expect(said()).toContain('Įvestis santykinį užraktą išjungusi (nSequence aukščiausias bitas nustatytas), todėl reikalavimas netenkinamas.');
+  });
+
+
+  it('says under the field when a sequence number is none', async () => {
+    const { user } = open();
+    await loadScene(user, 'to_local');
+    await retype(user, screen.getByLabelText('Įvesties nSequence'), 'ilgai');
+
+    expect(screen.getByLabelText('Įvesties nSequence')).toHaveAccessibleDescription('nSequence turi būti sveikasis skaičius nuo 0 iki 4294967295 — dešimtainis arba šešioliktainis po 0x.');
+    expect(said()).toContain('Įvesties nSequence. nSequence turi būti sveikasis skaičius');
+  });
+
+
+  it('lets the other side take the same output at once with the revocation key', async () => {
+    const { user } = open();
+    await loadScene(user, 'Bauda');
+
+    expect(wordsOf(UNLOCK)).toEqual(['parašas „Atšaukimas“', '1']);
+    expect(said()).toContain('Transakcija B priimta');
+    expect(within(tray()).getAllByRole('button', { name: /^Raktų pora „/ }).map((button) => button.getAttribute('aria-label'))).toEqual(['Raktų pora „Jonas“', 'Raktų pora „Gabija“', 'Raktų pora „Atšaukimas“']);
+  });
+
+
+  it('names a payment\'s thirty-two byte secret by its two ends, and its hash by that secret', async () => {
+    const { user } = open();
+    await loadScene(user, 'HTLC siūlomas');
+
+    expect(wordsOf(UNLOCK)).toEqual(['parašas „Gabija“', '„lightning mo…žodis“ (32 B)']);
+    expect(wordsOf(LOCK)).toContain('HASH160 maiša („lightning mo…žodis“)');
+    expect(wordsOf(LOCK)).toHaveLength(26);
+    expect(said()).toContain('Transakcija B priimta');
+  });
+
+
+  it('opens a payment that has timed out for the side that sent it', async () => {
+    const { user } = open();
+    await loadScene(user, 'HTLC gautas');
+
+    expect(wordsOf(UNLOCK)).toEqual(['parašas „Gabija“', '0']);
+    expect(screen.getByLabelText('Transakcijos B nLockTime')).toHaveValue('850040');
+    expect(said()).toContain('Transakcija B priimta');
+  });
+
+
+  it('shows the Litecoin side of a swap in LTC, with Litecoin\'s coin', async () => {
+    const { user } = open();
+    await loadScene(user, 'Mainas LTC');
+
+    expect(within(cardOf('A')).getAllByRole('radio')[0]).toHaveAccessibleName('Išvestis #0: 1 LTC, skripto maiša (P2SH)');
+    expect(press('Transakcijos B išvesties #0 suma: 0.9999 LTC')).toBeInTheDocument();
+    expect(within(cardOf('B')).getByText('kasėjui 0.0001 LTC')).toBeInTheDocument();
+    expect([...cardOf('A').querySelectorAll('[data-chain]'), ...cardOf('B').querySelectorAll('[data-chain]')].map((coin) => coin.dataset.chain)).toEqual(['ltc', 'ltc', 'ltc']);
+    expect(said()).toContain('Transakcija B priimta');
+  });
+
+
+  it('opens the Bitcoin side of the swap with the very secret the Litecoin side showed', async () => {
+    const { user } = open();
+    await loadScene(user, 'Mainas LTC');
+    const shown = wordsOf(UNLOCK)[2];
+    const hashed = wordsOf(REDEEM)[5];
+
+    await user.click(sceneButton('Mainas BTC'));
+    expect(wordsOf(UNLOCK)).toEqual(['parašas „Gabija“', 'viešasis raktas „Gabija“', shown, '1', 'išpirkimo skriptas']);
+    expect(wordsOf(REDEEM)[5]).toBe(hashed);
+    expect(hashed).toBe('SHA-256 maiša („Jono ir Gabi…aptis“)');
+    expect(press('Transakcijos B išvesties #0 suma: 0.0009 BTC')).toBeInTheDocument();
+    expect([...cardOf('A').querySelectorAll('[data-chain]')].map((coin) => coin.dataset.chain)).toEqual(['btc']);
+    expect(said()).toContain('Transakcija B priimta');
+  });
+
+
+  it('keeps a swap\'s coin from going back before the time limit', async () => {
+    const { user } = open();
+    await loadScene(user, 'Grąžinimas');
+    expect(said()).toContain('Transakcija B priimta');
+
+    await retype(user, screen.getByLabelText('Grandinės aukštis'), '850200');
+    expect(said()).toContain('Transakcijai dar ne laikas: grandinė dar nepasiekė bloko, kurį nurodo nLockTime.');
+  });
+
+
+  it('opens a submarine swap with the secret of the Lightning payment', async () => {
+    const { user } = open();
+    await loadScene(user, 'Submarine');
+
+    expect(wordsOf(UNLOCK)).toEqual(['parašas „Simona“', '„lightning mo…žodis“ (32 B)', 'išpirkimo skriptas']);
+    expect(wordsOf(REDEEM)).toEqual(['OP_HASH160', 'HASH160 maiša („lightning mo…žodis“)', 'OP_EQUAL', 'OP_IF', 'viešasis raktas „Simona“', 'OP_ELSE', '850144', 'OP_CHECKLOCKTIMEVERIFY', 'OP_DROP', 'viešasis raktas „Jonas“', 'OP_ENDIF', 'OP_CHECKSIG']);
+    expect(said()).toContain('Transakcija B priimta');
   });
 });
 

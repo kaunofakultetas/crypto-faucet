@@ -16,11 +16,12 @@
 //  redeem script), runs that on the rest, and asks for a true
 //  top once more.
 //
-//  The machine knows nothing about transactions. The two
+//  The machine knows nothing about transactions. The three
 //  questions that need one — does this signature sign the
-//  spending transaction, and is its lock time late enough —
-//  it puts to a checker the caller hands in (node.js builds
-//  it from the transaction).
+//  spending transaction, is its lock time late enough, and
+//  does its input promise a long enough wait — it puts to a
+//  checker the caller hands in (node.js builds it from the
+//  transaction).
 //
 //  The rules are the network's own, as they stand for the
 //  original script system: Script's numbers and its idea of
@@ -29,7 +30,7 @@
 //  operations run and how deep the stacks grow; the empty
 //  item OP_CHECKMULTISIG takes one too many of. What the
 //  machine cannot do it refuses by name instead of guessing:
-//  OP_CHECKSEQUENCEVERIFY and OP_CODESEPARATOR.
+//  OP_CODESEPARATOR.
 //
 //  Every step holds the stack as it stood AFTER it — or, for
 //  the step that failed, as it stood before, untouched — so
@@ -365,6 +366,14 @@ function runScript({ phase, items, hex, stack, alt, checker, steps }) {
       const answer = checker.checkLockTime(required);
       step.effect = { type: 'locktime', required, lockTime: answer.lockTime, why: answer.why ?? null };
       if (answer.why) throw new Fault('locktime', { why: answer.why, required, lockTime: answer.lockTime });
+    }
+
+    else if (name === 'OP_CHECKSEQUENCEVERIFY') {
+      need(1);
+      const required = number(stack.at(-1), 5);
+      const answer = checker.checkSequence(required);
+      step.effect = { type: 'sequence', required, sequence: answer.sequence, idle: Boolean(answer.idle), why: answer.why ?? null };
+      if (answer.why) throw new Fault('sequence', { why: answer.why, required, sequence: answer.sequence });
     }
 
     else throw new Fault('reserved-opcode');

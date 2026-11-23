@@ -6,9 +6,15 @@
 //  besides the scripts, and the switches that break a
 //  transaction on purpose.
 //
-//    - time — transaction B's lock time, and how high the
-//      node's chain stands; a lock time above the chain keeps
-//      B out of the next block
+//    - time — transaction B's lock time and the sequence
+//      number of its input, the height of the node's chain
+//      and the block that holds transaction A. A lock time
+//      above the chain keeps B out of the next block; a
+//      sequence number that asks for a wait keeps it out
+//      until the coin is that many blocks old. Under the two
+//      fields that take some reading stands what they come
+//      to: what the sequence number promises, and how many
+//      confirmations the coin has
 //    - the coin — whether another transaction has spent it
 //      already, which makes B a double spend
 //    - the signatures — frozen as they are now, instead of
@@ -23,7 +29,7 @@
 //
 //  Split into (root component last):
 //
-//    WholeField   — a field for a whole number
+//    NumberField  — a field for a number, with what it means
 //    More         — the button and the drawer (default export)
 // -----------------------------------------------------------
 
@@ -33,7 +39,7 @@ import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ExpandLessIcon from '@mui/icons-material/ExpandLess';
 import AddIcon from '@mui/icons-material/Add';
 
-import { problemText } from '../narration';
+import { ageText, problemText, sequenceMeaning } from '../narration';
 
 
 
@@ -42,28 +48,31 @@ import { problemText } from '../narration';
 
 
 // -----------------------------------------------------------
-// WholeField
+// NumberField
 // -----------------------------------------------------------
 //
-// A small field for a whole number. What is typed is kept as
-// typed; when it is no whole number the field turns red and
-// says why under itself.
+// A small field for a number. What is typed is kept as typed;
+// when it is no number the field turns red and says why under
+// itself. Otherwise the line under it is free for a hint —
+// what the number comes to — and an empty field can show what
+// it stands for by itself.
 //
 // Used by:
-//   - More (below) — the lock time and the chain's height
+//   - More (below) — the four numbers of time
 // -----------------------------------------------------------
 
-function WholeField({ label, text, read, onChange }) {
+function NumberField({ label, text, read, hint = null, placeholder, onChange }) {
   return (
     <TextField
       label={label}
       size="small"
       value={text}
+      placeholder={placeholder}
       error={read.problem !== null}
-      helperText={read.problem ? problemText({ code: read.problem }) : null}
+      helperText={read.problem ? problemText({ code: read.problem }) : hint}
       onChange={(event) => onChange(event.target.value)}
-      slotProps={{ htmlInput: { inputMode: 'numeric', maxLength: 12 } }}
-      sx={{ width: 210 }}
+      slotProps={{ htmlInput: { maxLength: 12 }, inputLabel: { shrink: true } }}
+      sx={{ width: 232 }}
     />
   );
 }
@@ -78,13 +87,14 @@ function WholeField({ label, text, read, onChange }) {
 // More (default export)
 // -----------------------------------------------------------
 //
-// The button that opens the drawer, and the drawer: the two
+// The button that opens the drawer, and the drawer: the four
 // numbers of time, the two switches, and — while the redeem
 // script is not on the page yet — the button that brings it.
-// With the signatures frozen the drawer says what that means,
-// and once any of them is out of date, that too, with a
-// button that signs again. `startOpen` opens the drawer from
-// the start.
+// An empty sequence number is the one the transaction needs
+// by itself, shown faintly in its field. With the signatures
+// frozen the drawer says what that means, and once any of
+// them is out of date, that too, with a button that signs
+// again. `startOpen` opens the drawer from the start.
 //
 // Used by:
 //   - Page.jsx — under the stage
@@ -96,6 +106,7 @@ export default function More({ state, model, rows, change, freeze, thaw, startOp
   const [open, setOpen] = useState(startOpen);
 
   const { frozen, stale } = model.signing;
+  const { sequence, typedSequence, lockTime } = model.b;
 
   return (
     <section aria-label="Daugiau nustatymų" className="flex flex-col gap-2">
@@ -111,10 +122,27 @@ export default function More({ state, model, rows, change, freeze, thaw, startOp
 
       {open && (
         <div className="card-surface flex flex-col gap-3 p-4">
-          <div className="flex flex-wrap items-start gap-x-6 gap-y-3">
-            <WholeField label="Transakcijos B nLockTime" text={state.lockTime} read={model.b.lockTime} onChange={(text) => change({ type: 'lock-time', text })} />
-            <WholeField label="Grandinės aukštis" text={state.height} read={model.height} onChange={(text) => change({ type: 'height', text })} />
+          <div className="flex flex-wrap items-start gap-x-5 gap-y-4">
+            <NumberField label="Transakcijos B nLockTime" text={state.lockTime} read={lockTime} onChange={(text) => change({ type: 'lock-time', text })} />
+            <NumberField
+              label="Įvesties nSequence"
+              text={state.sequence}
+              read={typedSequence}
+              hint={sequenceMeaning(sequence)}
+              placeholder={`0x${sequence.toString(16)}`}
+              onChange={(text) => change({ type: 'sequence', text })}
+            />
+            <NumberField label="Grandinės aukštis" text={state.height} read={model.height} onChange={(text) => change({ type: 'height', text })} />
+            <NumberField
+              label="Transakcijos A blokas"
+              text={state.mined}
+              read={model.mined}
+              hint={model.confirmations === null ? null : ageText(model.confirmations)}
+              onChange={(text) => change({ type: 'mined', text })}
+            />
+          </div>
 
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
             <FormControlLabel
               control={<Switch checked={state.coinSpent} onChange={(event) => change({ type: 'coin-spent', value: event.target.checked })} />}
               label="Monetą jau išleido kita transakcija"

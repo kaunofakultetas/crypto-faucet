@@ -8,11 +8,15 @@
 //    - the scenes: each builds, the node's verdict on it is
 //      the one the scene is there to show, and each brings
 //      only the key pairs it uses
+//    - Lightning and the swaps: every way through each of
+//      their scripts, what time does to them, and the two
+//      chains of one swap
 //    - the bytes: transaction A, its id, the lock and the
 //      message B's signatures sign agree with what an
 //      independent Bitcoin library (embit) makes of the same
-//      transactions — reference.json — and that library's own
-//      signatures pass the playground's check
+//      transactions — reference.json — that library's own
+//      signatures pass the playground's check, and with them
+//      in place transaction B is the library's, byte for byte
 //    - the words: every step of every scene can be told, and
 //      a value is called what it is
 //    - the reducer: every change a student can make — key
@@ -26,11 +30,13 @@
 import { describe, it, expect } from 'vitest';
 import reference from '../../support/bitcoin-script/reference.json';
 import { KEY_COLOURS, LIMITS, SPARE_NAMES } from '@/pages/BitcoinScript/constants';
+import { byteLength, textToHex } from '@/pages/BitcoinScript/engine/bytes';
 import { freshKey } from '@/pages/BitcoinScript/engine/keys';
+import { FINAL_SEQUENCE } from '@/pages/BitcoinScript/engine/node';
 import { verifyDigest } from '@/pages/BitcoinScript/engine/secp256k1';
-import { EXAMPLES, FIRST_EXAMPLE } from '@/pages/BitcoinScript/examples';
-import { PREVIOUS_ID, buildModel, payTo, readAmount, readWhole, reduce, signEveryone } from '@/pages/BitcoinScript/model';
-import { itemLabel, labelOf, lockName, narrate } from '@/pages/BitcoinScript/narration';
+import { EXAMPLES, FIRST_EXAMPLE, GROUPS } from '@/pages/BitcoinScript/examples';
+import { PREVIOUS_ID, buildModel, payTo, readAmount, readSequence, readWhole, reduce, signEveryone } from '@/pages/BitcoinScript/model';
+import { ageText, formatAmount, itemLabel, labelOf, lockName, narrate, problemText, sequenceMeaning } from '@/pages/BitcoinScript/narration';
 
 
 // A scene's state, by its id
@@ -42,8 +48,11 @@ const after = (state, ...actions) => actions.reduce(reduce, state);
 // The numbers of the four starting key pairs, by name
 const [JONAS, GABIJA, ROKAS, SIMONA] = [1, 2, 3, 4];
 
+// The number of the revocation key of the Lightning scenes
+const REVOCATION = 5;
+
 // The starting key pairs as every scene must know them
-const STARTING = [[JONAS, 'Jonas', KEY_COLOURS[0]], [GABIJA, 'Gabija', KEY_COLOURS[1]], [ROKAS, 'Rokas', KEY_COLOURS[2]], [SIMONA, 'Simona', KEY_COLOURS[3]]];
+const STARTING = [[JONAS, 'Jonas', KEY_COLOURS[0]], [GABIJA, 'Gabija', KEY_COLOURS[1]], [ROKAS, 'Rokas', KEY_COLOURS[2]], [SIMONA, 'Simona', KEY_COLOURS[3]], [REVOCATION, 'Atšaukimas', KEY_COLOURS[4]]];
 
 
 
@@ -108,7 +117,7 @@ describe('the scenes', () => {
     for (const { label, about } of EXAMPLES) {
       expect(label.split(' ').length).toBeLessThanOrEqual(2);
       expect(about.length).toBeGreaterThan(40);
-      expect(about.length).toBeLessThan(170);
+      expect(about.length).toBeLessThan(200);
     }
     expect(new Set(EXAMPLES.map((example) => example.label)).size).toBe(EXAMPLES.length);
   });
@@ -143,6 +152,227 @@ describe('the scenes', () => {
 
     expect(itemLabel(model.b.spends.script.items[1], model.lexicon)).toMatchObject({ kind: 'hash', short: 'SHA-256', name: '„satoshi“' });
   });
+
+
+  it('sorts the scenes into three groups, the locks first', () => {
+    expect(GROUPS.map((group) => group.title)).toEqual(['Užraktai', 'Lightning', 'Atominiai mainai']);
+    expect(GROUPS.map((group) => EXAMPLES.filter((example) => example.group === group.key).map((example) => example.label))).toEqual([
+      ['Suma', 'Slaptažodis', 'P2PK', 'P2PKH', 'Multisig', 'P2SH', 'Laiko užraktas', 'Du keliai', 'Vagystė', 'OP_RETURN'],
+      ['to_local', 'Bauda', 'HTLC siūlomas', 'HTLC gautas'],
+      ['Mainas LTC', 'Mainas BTC', 'Grąžinimas', 'Submarine'],
+    ]);
+  });
+});
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// Lightning and the swaps
+// -----------------------------------------------------------
+//
+// A script with several ways through is only shown opened one
+// way; here every way is walked, and the ways that must stay
+// shut are tried. The unlocking scripts are the witnesses the
+// specifications give, item for item.
+// -----------------------------------------------------------
+
+describe('the outputs of a Lightning commitment transaction', () => {
+
+  const verdict = (id, ...actions) => buildModel(after(stateOf(id), ...actions)).verification;
+  const timeOf = (verification) => verification.timeline.find((entry) => entry.stage === 'finality');
+  const secret = '"lightning mokėjimo slaptažodis"';
+
+  it('lets the holder take his own share once the coin is 144 blocks old and his input says so', () => {
+    const verification = verdict('ln-to-local');
+
+    expect(verification.valid).toBe(true);
+    expect(timeOf(verification)).toMatchObject({ age: 'reached', sequence: 144, wait: 144, confirmations: 201 });
+  });
+
+
+  it('holds the holder back while the coin is younger than his input promises to wait', () => {
+    expect(verdict('ln-to-local', { type: 'mined', text: '849900' })).toMatchObject({ valid: false, failed: 'finality', error: { code: 'sequence-too-early', wait: 144, confirmations: 101 } });
+    expect(verdict('ln-to-local', { type: 'mined', text: '849857' }).valid).toBe(true);
+    expect(verdict('ln-to-local', { type: 'mined', text: '849858' }).valid).toBe(false);
+  });
+
+
+  it('does not let the holder promise a shorter wait than the script demands, or none', () => {
+    expect(verdict('ln-to-local', { type: 'sequence', text: '143' })).toMatchObject({ valid: false, failed: 'script', error: { code: 'sequence', why: 'too-early', required: 144, sequence: 143 } });
+    expect(verdict('ln-to-local', { type: 'sequence', text: '' })).toMatchObject({ valid: false, failed: 'script', error: { code: 'sequence', why: 'switched-off', sequence: FINAL_SEQUENCE } });
+  });
+
+
+  it('takes a longer promise as well, and then holds the transaction to it', () => {
+    expect(verdict('ln-to-local', { type: 'sequence', text: '0x90' }).valid).toBe(true);
+    expect(verdict('ln-to-local', { type: 'sequence', text: '201' }).valid).toBe(true);
+    expect(verdict('ln-to-local', { type: 'sequence', text: '202' })).toMatchObject({ valid: false, failed: 'finality' });
+  });
+
+
+  it('gives the other side the holder\'s share at once with the revocation key, and with no other', () => {
+    const verification = verdict('ln-penalty');
+
+    expect(verification.valid).toBe(true);
+    expect(timeOf(verification)).toMatchObject({ age: 'none' });
+    expect(verdict('ln-penalty', { type: 'unlock', text: `<sig:${GABIJA}> 1` })).toMatchObject({ valid: false, error: { code: 'false-on-top' } });
+    expect(verdict('ln-penalty', { type: 'unlock', text: `<sig:${JONAS}> 1` })).toMatchObject({ valid: false, error: { code: 'false-on-top' } });
+  });
+
+
+  it('keeps the holder waiting on a transaction that has only just been mined', () => {
+    const waiting = verdict('ln-penalty', { type: 'unlock', text: `<sig:${JONAS}> 0` }, { type: 'sequence', text: '144' });
+
+    expect(waiting).toMatchObject({ valid: false, failed: 'finality', error: { code: 'sequence-too-early', wait: 144, confirmations: 3 } });
+  });
+
+
+  it.each([
+    ['the other side with the payment\'s secret', `<sig:${GABIJA}> ${secret}`],
+    ['the revocation key', `<sig:${REVOCATION}> <pubkey:${REVOCATION}>`],
+    ['both signatures and nothing for a secret, as the timeout transaction carries them', `0 <sig:${GABIJA}> <sig:${JONAS}> 0`],
+  ])('opens a payment the holder offers by %s', (_way, unlock) => {
+    expect(verdict('ln-htlc-offered', { type: 'unlock', text: unlock }).valid).toBe(true);
+  });
+
+
+  it.each([
+    ['a secret of the right size that is not the secret', `<sig:${GABIJA}> 0x${'11'.repeat(32)}`, 'verify-failed'],
+    ['a secret that is too short', `<sig:${GABIJA}> "per trumpas"`, 'stack-underflow'],
+    ['the holder alone with the secret', `<sig:${JONAS}> ${secret}`, 'false-on-top'],
+    ['one signature where the timeout takes two', `0 <sig:${JONAS}> 0`, 'stack-underflow'],
+    ['somebody else\'s key in place of the revocation key', `<sig:${GABIJA}> <pubkey:${GABIJA}>`, 'stack-underflow'],
+  ])('keeps a payment the holder offers shut to %s', (_way, unlock, code) => {
+    expect(verdict('ln-htlc-offered', { type: 'unlock', text: unlock })).toMatchObject({ valid: false, failed: 'script', error: { code } });
+  });
+
+
+  it.each([
+    ['the other side alone, once the payment has timed out', `<sig:${GABIJA}> 0`],
+    ['the revocation key', `<sig:${REVOCATION}> <pubkey:${REVOCATION}>`],
+    ['both signatures with the secret, as the success transaction carries them', `0 <sig:${GABIJA}> <sig:${JONAS}> ${secret}`],
+  ])('opens a payment the holder is offered by %s', (_way, unlock) => {
+    expect(verdict('ln-htlc-received', { type: 'unlock', text: unlock }).valid).toBe(true);
+  });
+
+
+  it('does not let the other side take a payment back before it has timed out', () => {
+    expect(verdict('ln-htlc-received', { type: 'lock-time', text: '850039' })).toMatchObject({ valid: false, failed: 'script', error: { code: 'locktime', why: 'too-early' } });
+    expect(verdict('ln-htlc-received', { type: 'lock-time', text: '0' })).toMatchObject({ valid: false, failed: 'script', error: { code: 'locktime' } });
+    expect(verdict('ln-htlc-received', { type: 'height', text: '850039' }, { type: 'mined', text: '850010' })).toMatchObject({ valid: false, failed: 'finality', error: { code: 'locktime-too-early' } });
+  });
+
+
+  it('lays a commitment transaction\'s outputs out smallest first, as the specification orders them', () => {
+    for (const id of ['ln-to-local', 'ln-penalty', 'ln-htlc-offered', 'ln-htlc-received']) {
+      const amounts = buildModel(stateOf(id)).a.outputs.map((output) => output.amount.value);
+      expect(amounts).toEqual([...amounts].sort((one, other) => one - other));
+    }
+  });
+
+
+  it('uses a payment secret of exactly the 32 bytes its scripts ask for', () => {
+    expect(byteLength(textToHex(secret.slice(1, -1)))).toBe(32);
+    expect(labelOf(textToHex(secret.slice(1, -1)), null)).toMatchObject({ kind: 'text', text: '„lightning mo…žodis“ (32 B)' });
+  });
+});
+
+
+
+
+
+
+
+describe('swaps between chains', () => {
+
+  const verdict = (id, ...actions) => buildModel(after(stateOf(id), ...actions)).verification;
+  const secret = '"Jono ir Gabijos mainų paslaptis"';
+  const refund = (who) => `<sig:${who}> <pubkey:${who}> 0 <redeemScript>`;
+  const claim = (who, shown = secret) => `<sig:${who}> <pubkey:${who}> ${shown} 1 <redeemScript>`;
+
+  it('hangs both contracts of a swap on one secret, with the two sides changing places', () => {
+    const [litecoin, bitcoin] = ['swap-ltc', 'swap-btc'].map((id) => buildModel(stateOf(id)));
+    const words = (model) => model.b.redeem.words.map((word) => word.text);
+
+    expect(words(litecoin)[5]).toBe(words(bitcoin)[5]);
+    expect(words(litecoin)[5]).toMatch(/^0x[0-9a-f]{64}$/);
+    expect([words(litecoin)[9], words(litecoin)[16]]).toEqual([`<pubkeyhash:${JONAS}>`, `<pubkeyhash:${GABIJA}>`]);
+    expect([words(bitcoin)[9], words(bitcoin)[16]]).toEqual([`<pubkeyhash:${GABIJA}>`, `<pubkeyhash:${JONAS}>`]);
+    expect(stateOf('swap-ltc').unlock.includes(secret) && stateOf('swap-btc').unlock.includes(secret)).toBe(true);
+    expect(byteLength(textToHex(secret.slice(1, -1)))).toBe(32);
+  });
+
+
+  it('gives the side that is to end first half the time of the other, counted in each chain\'s own blocks', () => {
+    const [litecoin, bitcoin] = ['swap-ltc', 'swap-btc'].map((id) => buildModel(stateOf(id)));
+    const limit = (model) => Number(model.b.redeem.words[11].text);
+
+    expect(limit(bitcoin) - bitcoin.height.value).toBe(288);
+    expect(limit(litecoin) - litecoin.height.value).toBe(576);
+  });
+
+
+  it('counts the Litecoin side in LTC, on Litecoin\'s chain', () => {
+    const model = buildModel(stateOf('swap-ltc'));
+    const amounts = model.verification.timeline.find((entry) => entry.stage === 'amounts');
+
+    expect(model.chain).toMatchObject({ name: 'Litecoin', unit: 'LTC' });
+    expect(narrate(amounts, model).lines[0]).toBe('Moneta verta 1 LTC, o transakcijos B išvestys išdalija 0.9999 LTC.');
+    expect(buildModel(stateOf('swap-btc')).chain.unit).toBe('BTC');
+  });
+
+
+  it('lets a chain hold as many coins as it will ever have, and says so in its own words', () => {
+    const tooMany = (id, text) => buildModel(after(stateOf(id), { type: 'output/amount', index: 0, text })).problems.map(problemText);
+
+    expect(tooMany('swap-ltc', '30000000')).toEqual([]);
+    expect(tooMany('swap-ltc', '84000001')).toEqual(['Tiek laitkoinų nebus niekada — jų iš viso 84 milijonai.']);
+    expect(tooMany('swap-btc', '30000000')).toEqual(['Tiek bitkoinų nebus niekada — jų iš viso 21 milijonas.']);
+  });
+
+
+  it.each([
+    ['a secret of the right size that is not the secret', claim(GABIJA, `0x${'22'.repeat(32)}`), 6],
+    ['a secret of another size', claim(GABIJA, '"per trumpa"'), 3],
+    ['the right secret in the wrong hands', claim(JONAS), 18],
+  ])('keeps the Bitcoin contract shut to %s', (_way, unlock, index) => {
+    const verification = verdict('swap-btc', { type: 'unlock', text: unlock });
+    const broke = verification.timeline.find((entry) => entry.ok === false);
+
+    expect(verification).toMatchObject({ valid: false, failed: 'script', error: { code: 'verify-failed' } });
+    expect(broke).toMatchObject({ phase: 'redeem', index, item: { opcode: { name: 'OP_EQUALVERIFY' } } });
+  });
+
+
+  it('does not hand the coin back before the contract\'s time limit', () => {
+    expect(verdict('swap-btc', { type: 'unlock', text: refund(JONAS) })).toMatchObject({ valid: false, failed: 'script', error: { code: 'locktime', why: 'too-early' } });
+    expect(verdict('swap-btc', { type: 'unlock', text: refund(JONAS) }, { type: 'lock-time', text: '850288' })).toMatchObject({ valid: false, failed: 'finality', error: { code: 'locktime-too-early' } });
+  });
+
+
+  it('hands it back to its owner from the limit on — to him and to nobody else', () => {
+    expect(verdict('swap-refund').valid).toBe(true);
+    expect(verdict('swap-refund', { type: 'unlock', text: refund(GABIJA) })).toMatchObject({ valid: false, failed: 'script', error: { code: 'verify-failed' } });
+  });
+
+
+  it('leaves the way with the secret open even past the limit — whoever is first takes the coin', () => {
+    expect(verdict('swap-refund', { type: 'unlock', text: claim(GABIJA) }).valid).toBe(true);
+  });
+
+
+  it('opens a submarine swap for the one who paid the Lightning invoice, and for its owner after the limit', () => {
+    const back = `<sig:${JONAS}> 0 <redeemScript>`;
+
+    expect(verdict('submarine').valid).toBe(true);
+    expect(verdict('submarine', { type: 'unlock', text: back })).toMatchObject({ valid: false, error: { code: 'locktime' } });
+    expect(verdict('submarine', { type: 'unlock', text: back }, { type: 'lock-time', text: '850144' }, { type: 'height', text: '850200' }).valid).toBe(true);
+    expect(verdict('submarine', { type: 'unlock', text: `<sig:${JONAS}> "lightning mokėjimo slaptažodis" <redeemScript>` })).toMatchObject({ valid: false, error: { code: 'false-on-top' } });
+  });
 });
 
 
@@ -176,6 +406,25 @@ describe('the bytes', () => {
       expect(signature.endsWith('01')).toBe(true);
       expect(verifyDigest(signature.slice(0, -2), model.signing.digest, publicKey)).toBe(true);
     }
+  });
+
+
+  // The library's signatures are not always the playground's:
+  // a wallet may sign again until a signature comes out a byte
+  // shorter, and both are signatures of the same message. So
+  // the whole of transaction B is compared with the library's
+  // signatures carried in place of the playground's own
+  it.each(Object.entries(reference.cases))('builds transaction B of %s to the last byte once it carries the reference library\'s signatures, and accepts it', (id, expected) => {
+    const start = stateOf(id);
+    const { keys, signing } = buildModel(start);
+    const byName = expected.signatures ?? { [keys.find((key) => String(key.id) === signing.signers[0]).name]: expected.signature };
+    const signatures = Object.fromEntries(Object.entries(byName).map(([name, signature]) => [keys.find((key) => key.name === name).id, signature]));
+    const model = buildModel(after(start, { type: 'freeze', signatures }));
+
+    expect(model.b.unlock.hex).toBe(expected.script_sig);
+    expect(model.b.hex).toBe(expected.raw);
+    expect(model.b.id).toBe(expected.txid);
+    expect(model.verification.valid).toBe(true);
   });
 
 
@@ -583,5 +832,59 @@ describe('signatures kept, and what cannot be read', () => {
     expect(readWhole(' 840000 ', 499999999)).toEqual({ value: 840000, problem: null });
     expect(readWhole('1.5', 10).problem).toBe('whole-unreadable');
     expect(readWhole('11', 10).problem).toBe('whole-too-large');
+  });
+
+
+  it('reads a sequence number in decimal or hex, and an empty one as "whatever the transaction needs"', () => {
+    expect(readSequence('')).toEqual({ value: null, problem: null });
+    expect(readSequence(' 144 ')).toEqual({ value: 144, problem: null });
+    expect(readSequence('0xFFFFFFFE')).toEqual({ value: FINAL_SEQUENCE - 1, problem: null });
+    expect(readSequence('4294967295')).toEqual({ value: FINAL_SEQUENCE, problem: null });
+    for (const typed of ['4294967296', '-1', '1.5', '0x', '0x123456789', 'daug']) expect(readSequence(typed).problem).toBe('sequence-unreadable');
+  });
+
+
+  it('gives an input the sequence number its transaction needs unless one is typed', () => {
+    expect(buildModel(start).b.sequence).toBe(FINAL_SEQUENCE);
+    expect(buildModel(stateOf('timelock')).b.sequence).toBe(FINAL_SEQUENCE - 1);
+    expect(buildModel(after(start, { type: 'sequence', text: '7' })).b.sequence).toBe(7);
+    expect(buildModel(after(start, { type: 'sequence', text: 'septyni' }))).toMatchObject({ verification: null, problems: [{ where: 'sequence', code: 'sequence-unreadable' }] });
+  });
+
+
+  it('signs the sequence number too: change it and every signature changes', () => {
+    const before = buildModel(start);
+    const model = buildModel(after(start, { type: 'sequence', text: '0' }));
+
+    expect(model.signing.digest).not.toBe(before.signing.digest);
+    expect(model.verification.valid).toBe(true);
+  });
+
+
+  it('counts a coin\'s confirmations from the block that holds it, and does not know a coin the chain has not reached', () => {
+    expect(buildModel(start).confirmations).toBe(50001);
+    expect(buildModel(after(start, { type: 'mined', text: '850000' })).confirmations).toBe(1);
+    expect(buildModel(after(start, { type: 'mined', text: '850001' })).verification).toMatchObject({ valid: false, failed: 'coin', error: { code: 'no-such-coin' } });
+    expect(buildModel(after(start, { type: 'mined', text: 'vakar' })).problems).toEqual([{ where: 'mined', code: 'whole-unreadable' }]);
+  });
+
+
+  it('says in a few words what a sequence number promises and how old a coin is', () => {
+    expect(sequenceMeaning(FINAL_SEQUENCE)).toBe('santykinio užrakto nėra, nLockTime negalioja');
+    expect(sequenceMeaning(FINAL_SEQUENCE - 1)).toBe('santykinio užrakto nėra');
+    expect(sequenceMeaning(144)).toBe('moneta turi būti 144 blokų senumo');
+    expect(sequenceMeaning(1)).toBe('moneta turi būti 1 bloko senumo');
+    expect(sequenceMeaning(2 ** 22 + 3)).toBe('laukimas sekundėmis — čia neskaičiuojamas');
+    expect(ageText(201)).toBe('moneta turi 201 patvirtinimą');
+    expect(ageText(3)).toBe('moneta turi 3 patvirtinimus');
+    expect(ageText(12)).toBe('moneta turi 12 patvirtinimų');
+    expect(ageText(0)).toBe('grandinė šio bloko dar nepasiekė — mazgas monetos nežino');
+  });
+
+
+  it('writes an amount in the unit it is told, Bitcoin\'s unless told otherwise', () => {
+    expect(formatAmount(49990000)).toBe('0.4999 BTC');
+    expect(formatAmount(100000000, 'LTC')).toBe('1 LTC');
+    expect(formatAmount(-10000000, 'LTC')).toBe('−0.1 LTC');
   });
 });

@@ -5,18 +5,20 @@
 //  key pair's badge.
 //
 //  A coin is an unspent output, and it looks like money: a
-//  disc in Bitcoin's own orange with the bitcoin sign — the
-//  only orange on the page. A coin that has been spent is
-//  only the empty ring it left behind, and a coin that a
-//  transaction WOULD make — while no node has accepted that
-//  transaction — is a dashed outline waiting to be filled.
+//  disc in its chain's colour with the chain's sign — orange
+//  with the bitcoin sign on nearly every scene, silver with
+//  Litecoin's for the other half of a swap between chains. A
+//  coin that has been spent is only the empty ring it left
+//  behind, and a coin that a transaction WOULD make — while
+//  no node has accepted that transaction — is a dashed
+//  outline waiting to be filled.
 //
 //  A key pair's badge is a disc in the pair's colour with the
 //  first letter of its name.
 //
 //  Split into:
 //
-//    COIN_LOOKS   — a coin's three states
+//    coinLook     — a coin's three states, in a chain's colour
 //    Coin         — a coin (exported)
 //    KeyBadge     — a key pair (exported)
 // -----------------------------------------------------------
@@ -24,16 +26,33 @@
 import { Box } from '@mui/material';
 import BitcoinIcon from '@mui/icons-material/CurrencyBitcoin';
 
-import { COLORS } from '../constants';
+import { CHAINS } from '../constants';
 import { MOTION } from '../motion';
 
 
-// A coin by its state: the ring, the face and the sign
-const COIN_LOOKS = {
-  unspent: { border: `2px solid ${COLORS.COIN}`, background: COLORS.COIN, color: '#ffffff' },
-  spent: { border: '2px dashed #94a3b8', background: 'transparent', color: '#cbd5e1' },
-  future: { border: `2px dashed ${COLORS.COIN}`, background: 'transparent', color: COLORS.COIN },
-};
+
+
+
+
+
+// -----------------------------------------------------------
+// coinLook
+// -----------------------------------------------------------
+//
+// The ring, the face and the sign of a coin by its state:
+// filled in the chain's colour while unspent, an outline in
+// that colour while it is only promised, and a pale grey
+// outline once it is spent.
+//
+// Used by:
+//   - Coin (below)
+// -----------------------------------------------------------
+
+function coinLook(state, colour) {
+  if (state === 'unspent') return { border: `2px solid ${colour}`, background: colour, color: '#ffffff' };
+  if (state === 'future') return { border: `2px dashed ${colour}`, background: 'transparent', color: colour };
+  return { border: '2px dashed #94a3b8', background: 'transparent', color: '#cbd5e1' };
+}
 
 
 
@@ -45,24 +64,28 @@ const COIN_LOOKS = {
 // Coin
 // -----------------------------------------------------------
 //
-// One coin in one of its three states (see the file header).
-// `fresh` makes it pop into place — a coin a transaction has
-// just made.
+// One coin of a chain — Bitcoin's unless told otherwise — in
+// one of its three states (see the file header). `fresh`
+// makes it pop into place: a coin a transaction has just
+// made.
 //
 // Used by:
 //   - components/Transactions.jsx — the outputs of A and B
 // -----------------------------------------------------------
 
-export function Coin({ state = 'unspent', size = 32, fresh = false }) {
+export function Coin({ state = 'unspent', size = 32, fresh = false, chain = CHAINS.btc }) {
   return (
     <Box
       component="span"
       data-state={state}
+      data-chain={chain.key}
       aria-hidden="true"
       className="inline-flex shrink-0 items-center justify-center rounded-full"
-      sx={{ width: size, height: size, ...COIN_LOOKS[state], ...(fresh ? MOTION.pop() : {}) }}
+      sx={{ width: size, height: size, ...coinLook(state, chain.colour), ...(fresh ? MOTION.pop() : {}) }}
     >
-      <BitcoinIcon sx={{ fontSize: size * 0.66 }} />
+      {chain.key === 'btc'
+        ? <BitcoinIcon sx={{ fontSize: size * 0.66 }} />
+        : <span className="font-extrabold leading-none" style={{ fontSize: size * 0.58 }}>{chain.sign}</span>}
     </Box>
   );
 }

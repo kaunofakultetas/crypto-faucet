@@ -39,7 +39,7 @@ const HISTORY = 100;
 
 // The changes that arrive a letter at a time, each with the
 // part of the action that tells one field from another
-const TYPED = { 'key/rename': 'id', 'output/amount': 'index', 'payment/amount': 'index', 'lock-time': null, height: null };
+const TYPED = { 'key/rename': 'id', 'output/amount': 'index', 'payment/amount': 'index', 'lock-time': null, sequence: null, height: null, mined: null };
 
 
 

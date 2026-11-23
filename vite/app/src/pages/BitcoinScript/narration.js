@@ -35,8 +35,11 @@
 //  Split into:
 //
 //    STAGES, PHASES    — the node's questions, the scripts' names
-//    formatBitcoin     — satoshis as an amount
+//    formatAmount      — satoshis as an amount
 //    shortHex          — long bytes, shortened
+//    quote             — a text in quotes, shortened when long
+//    sequenceMeaning   — what a sequence number promises
+//    ageText           — a coin's age, in confirmations
 //    labelOf           — a value's name
 //    itemLabel         — a script item's name
 //    wordLabel         — the name of a word in a script's row
@@ -53,6 +56,7 @@ import { pluralForm } from '@/utils/plural';
 
 import { SATOSHIS } from './constants';
 import { byteLength, hexToText } from './engine/bytes';
+import { FINAL_SEQUENCE, SEQUENCE, hasBit } from './engine/node';
 import { isTrue, numberOf, parseScript } from './engine/script';
 
 
@@ -70,6 +74,15 @@ const SIGNATURES_NEEDED = { one: 'tinkamo parašo', few: 'tinkamų parašų', ot
 
 // How counted keys are declined after "iš"
 const KEYS_OUT_OF = { one: 'rakto', few: 'raktų', other: 'raktų' };
+
+// How counted blocks are declined in front of "senumo"
+const BLOCKS_OLD = { one: 'bloko', few: 'blokų', other: 'blokų' };
+
+// How counted confirmations are declined after "turi"
+const CONFIRMATIONS_HAD = { one: 'patvirtinimą', few: 'patvirtinimus', other: 'patvirtinimų' };
+
+// How long a text may be before a tile shows only its two ends
+const LONG_TEXT = 24;
 
 // What a named value is, by its kind: in a sentence, in the
 // short word Bitcoin texts use for it, and explained
@@ -94,6 +107,21 @@ const LOCKTIME_REASONS = {
   'different-kind': 'Skriptas skaičiuoja blokais, o transakcijos nLockTime — data (arba atvirkščiai): jų palyginti negalima.',
   'too-early': 'Transakcijos nLockTime mažesnis, nei reikalauja skriptas — monetai dar ne laikas.',
   'final-sequence': 'Įvestis išjungusi laiko užraktus (sequence = 0xffffffff), todėl nLockTime negalioja ir reikalavimas netenkinamas.',
+};
+
+// Why a demand for a wait was not met, by the checker's reason
+const SEQUENCE_REASONS = {
+  negative: 'Skriptas reikalauja neigiamo laukimo — tokio nėra.',
+  'old-version': 'Transakcijos versija mažesnė už 2, o santykiniai užraktai galioja tik nuo antrosios versijos.',
+  'switched-off': 'Įvestis santykinį užraktą išjungusi (nSequence aukščiausias bitas nustatytas), todėl reikalavimas netenkinamas.',
+  'different-kind': 'Skriptas skaičiuoja blokais, o įvesties nSequence — sekundėmis (arba atvirkščiai): jų palyginti negalima.',
+  'too-early': 'Įvesties nSequence mažesnis, nei reikalauja skriptas — transakcija B nepažadėjo laukti tiek, kiek reikia.',
+};
+
+// Why an amount is more than a chain will ever hold, by chain
+const TOO_MANY_COINS = {
+  btc: 'Tiek bitkoinų nebus niekada — jų iš viso 21 milijonas.',
+  ltc: 'Tiek laitkoinų nebus niekada — jų iš viso 84 milijonai.',
 };
 
 
@@ -156,22 +184,23 @@ export const PHASES = {
 
 
 // -----------------------------------------------------------
-// formatBitcoin
+// formatAmount
 // -----------------------------------------------------------
 //
-// An amount of satoshis as bitcoin, without the zeros a whole
-// eight-decimal number would trail, and with a true minus
-// sign for the amount a transaction is short of.
+// An amount of satoshis as whole coins in the chain's unit,
+// without the zeros a whole eight-decimal number would trail,
+// and with a true minus sign for the amount a transaction is
+// short of.
 //
 // Used by:
 //   - narrate (below)
 //   - components/Transactions.jsx — the amounts on the cards
 // -----------------------------------------------------------
 
-export function formatBitcoin(satoshis) {
+export function formatAmount(satoshis, unit = 'BTC') {
   const size = Math.abs(satoshis);
   const decimals = String(size % SATOSHIS).padStart(8, '0').replace(/0+$/, '');
-  return `${satoshis < 0 ? '−' : ''}${Math.floor(size / SATOSHIS)}${decimals ? `.${decimals}` : ''} BTC`;
+  return `${satoshis < 0 ? '−' : ''}${Math.floor(size / SATOSHIS)}${decimals ? `.${decimals}` : ''} ${unit}`;
 }
 
 
@@ -200,6 +229,80 @@ export const shortHex = (hex, head = 8, tail = 6) => (hex.length > head + tail +
 
 
 // -----------------------------------------------------------
+// quote
+// -----------------------------------------------------------
+//
+// A text between Lithuanian quotation marks. A long one — a
+// thirty-two letter secret, say — keeps only its beginning
+// and its end, so the tile it stands on stays a tile.
+//
+// Used by:
+//   - labelOf (below)
+//   - tiles.js — what a hash was made of
+//   - examples.js — the same, for a scene's own hashes
+// -----------------------------------------------------------
+
+export const quote = (text) => (text.length > LONG_TEXT ? `„${text.slice(0, 12)}…${text.slice(-5)}“` : `„${text}“`);
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// sequenceMeaning
+// -----------------------------------------------------------
+//
+// What an input's sequence number promises, in a few words:
+// no wait at all — and, for the one number that also switches
+// the transaction's own lock time off, that too — a wait in
+// seconds, which the playground does not count, or how old
+// the coin has to be, in blocks.
+//
+// Used by:
+//   - components/More.jsx — under the sequence number's field
+// -----------------------------------------------------------
+
+export function sequenceMeaning(sequence) {
+  if (sequence === FINAL_SEQUENCE) return 'santykinio užrakto nėra, nLockTime negalioja';
+  if (hasBit(sequence, SEQUENCE.DISABLED)) return 'santykinio užrakto nėra';
+  if (hasBit(sequence, SEQUENCE.SECONDS)) return 'laukimas sekundėmis — čia neskaičiuojamas';
+
+  const wait = sequence % SEQUENCE.COUNTS;
+  return `moneta turi būti ${wait} ${pluralForm(wait, BLOCKS_OLD)} senumo`;
+}
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// ageText
+// -----------------------------------------------------------
+//
+// A coin's age as its count of confirmations — or, for a coin
+// in a block the chain has not reached, that the node does
+// not know it yet.
+//
+// Used by:
+//   - components/More.jsx — under the field of the coin's
+//     block
+// -----------------------------------------------------------
+
+export const ageText = (confirmations) => (confirmations >= 1
+  ? `moneta turi ${confirmations} ${pluralForm(confirmations, CONFIRMATIONS_HAD)}`
+  : 'grandinė šio bloko dar nepasiekė — mazgas monetos nežino');
+
+
+
+
+
+
+
+// -----------------------------------------------------------
 // labelOf
 // -----------------------------------------------------------
 //
@@ -212,8 +315,8 @@ export const shortHex = (hex, head = 8, tail = 6) => (hex.length > head + tail +
 // opcodes themselves make — are read as Script itself would
 // read them: no bytes as zero and false, up to
 // four bytes as the number they hold, bytes that spell a word
-// as that word, and anything longer as shortened hex with its
-// length. The kind lets the page give each its own look; the
+// as that word — a long one by its two ends and its length —
+// and anything longer as shortened hex with its length. The kind lets the page give each its own look; the
 // bytes ride along for a tooltip — behind a sentence on what
 // the value is, when the page knows. `written` says how the
 // bytes were written by whoever asks — as a text, a number
@@ -230,8 +333,12 @@ export function labelOf(hex, lexicon, written = null) {
   const length = byteLength(hex);
   const full = length === 0 ? 'tuščia reikšmė (0 baitų)' : `0x${shortHex(hex, 20, 12)} (${length} ${pluralForm(length, BYTES)})`;
 
+  const worded = (text) => (text.length > LONG_TEXT
+    ? { kind: 'text', text: `${quote(text)} (${length} B)`, full: `„${text}“. ${full}` }
+    : { kind: 'text', text: quote(text), full });
+
   const known = lexicon?.values.get(hex) ?? (written ? { what: written } : undefined);
-  if (known?.what === 'text') return { kind: 'text', text: `„${hexToText(hex) ?? ''}“`, full };
+  if (known?.what === 'text') return worded(hexToText(hex) ?? '');
   if (known?.what === 'number') return { kind: 'number', text: String(numberOf(hex, 8)), full };
   if (known?.what === 'hex') return { kind: 'bytes', text: length <= 8 ? `0x${hex}` : `${shortHex(hex)} (${length} B)`, full };
   if (known?.what === 'hash') {
@@ -255,7 +362,7 @@ export function labelOf(hex, lexicon, written = null) {
   if (length <= 4) return { kind: 'number', text: `${numberOf(hex)}${isTrue(hex) ? '' : ' (FALSE)'}`, full };
 
   const word = length <= 80 ? hexToText(hex) : null;
-  if (word !== null && /\p{L}/u.test(word)) return { kind: 'text', text: `„${word}“`, full };
+  if (word !== null && /\p{L}/u.test(word)) return worded(word);
 
   return { kind: 'bytes', text: `${shortHex(hex)} (${length} B)`, full };
 }
@@ -438,7 +545,8 @@ export function problemText(problem) {
     case 'no-redeem-script': return 'Ši detalė rodo į išpirkimo skriptą, o jo dar nėra — sudėk jį išpirkimo skripto eilutėje.';
     case 'amount-empty': return 'Įrašyk sumą.';
     case 'amount-unreadable': return 'Suma turi būti skaičius, ne daugiau kaip 8 skaitmenys po kablelio.';
-    case 'amount-too-large': return 'Tiek bitkoinų nebus niekada — jų iš viso 21 milijonas.';
+    case 'amount-too-large': return TOO_MANY_COINS[problem.chain] ?? TOO_MANY_COINS.btc;
+    case 'sequence-unreadable': return 'nSequence turi būti sveikasis skaičius nuo 0 iki 4294967295 — dešimtainis arba šešioliktainis po 0x.';
     case 'maker-empty': return 'Įrašyk reikšmę.';
     case 'text-quotes': return 'Tekste negali būti ir viengubų, ir dvigubų kabučių kartu.';
     case 'script-full': return 'Skriptas per ilgas — daugiau detalių netelpa.';
@@ -475,6 +583,8 @@ export function whereText(problem) {
     case 'payment-amount': return `Transakcijos B išvesties #${problem.index} suma`;
     case 'payment-key': return `Transakcijos B išvestis #${problem.index}`;
     case 'lock-time': return 'nLockTime';
+    case 'sequence': return 'Įvesties nSequence';
+    case 'mined': return 'Transakcijos A blokas';
     default: return 'Grandinės aukštis';
   }
 }
@@ -504,6 +614,8 @@ export function errorText(error) {
     case 'too-much-money': return 'Suma viršija visus kada nors būsiančius bitkoinus.';
     case 'locktime-too-early': return 'Transakcijai dar ne laikas: grandinė dar nepasiekė bloko, kurį nurodo nLockTime.';
     case 'locktime-a-date': return 'nLockTime čia nurodo datą, o ši aikštelė laiką skaičiuoja tik blokais.';
+    case 'sequence-too-early': return `Monetai dar ne laikas: įvesties nSequence reikalauja, kad ji būtų bent ${error.wait} ${pluralForm(error.wait, BLOCKS_OLD)} senumo, o ji turi tik ${error.confirmations} ${pluralForm(error.confirmations, CONFIRMATIONS_HAD)}.`;
+    case 'sequence-seconds': return 'Įvesties nSequence čia skaičiuoja laukimą sekundėmis, o ši aikštelė monetos amžių skaičiuoja tik blokais.';
 
     case 'stack-underflow': return `Šiam žodžiui reikia ${error.needed} ${pluralForm(error.needed, ITEMS_NEEDED)}, o steke yra ${error.have}.`;
     case 'alt-stack-underflow': return 'Pagalbinis stekas tuščias — iš jo nėra ko grąžinti.';
@@ -525,6 +637,7 @@ export function errorText(error) {
     case 'signature-encoding': return 'Tai ne parašas: baitai neatitinka DER formato, kuriuo parašai užrašomi.';
     case 'signature-type': return 'Šio parašo tipas — ne SIGHASH_ALL. Ši aikštelė tikrina tik visą transakciją pasirašančius parašus.';
     case 'locktime': return LOCKTIME_REASONS[error.why];
+    case 'sequence': return SEQUENCE_REASONS[error.why];
     case 'empty-stack': return 'Skriptas baigtas, bet stekas tuščias — o viršuje turėjo likti TRUE.';
     case 'false-on-top': return 'Skriptas baigtas, bet steko viršuje — FALSE.';
     case 'unlock-not-push-only': return 'P2SH monetos atrakinimo skripte gali būti tik duomenys — jokių veiksmų.';
@@ -570,6 +683,11 @@ function effectLines(effect, name) {
       return [effect.running ? 'Toliau esantys žodžiai vykdomi.' : 'Toliau esantys žodžiai praleidžiami.'];
     case 'locktime':
       return effect.why ? [] : [`Skriptas reikalauja, kad nLockTime būtų bent ${effect.required}; transakcijos B nLockTime — ${effect.lockTime}. Tinka.`];
+    case 'sequence':
+      if (effect.why) return [];
+      return effect.idle
+        ? ['Skaičiaus aukščiausias bitas nustatytas, todėl šis žodis nieko netikrina.']
+        : [`Skriptas reikalauja, kad įvesties nSequence būtų bent ${effect.required}; transakcijos B įvesties nSequence — ${effect.sequence}. Tinka.`];
     case 'signature':
       return [
         ...(effect.digest ? [`Tikrinama: ${name(effect.signature)}, ${name(effect.publicKey)} ir transakcijos B santrauka ${shortHex(effect.digest)} — į ją įeina, kuri moneta išleidžiama, kam ir kiek.`] : []),
@@ -604,10 +722,10 @@ function effectLines(effect, name) {
 // entry failed, being why. A refusal names the very word the
 // scripts broke at — or, when they ran to their end and left
 // a false, the last word — and repeats what that word came
-// to, so the verdict can be read without stepping back. The model is
-// needed for the names of values, for the numbers the first
-// questions are about, and for the step a refusal points back
-// to.
+// to, so the verdict can be read without stepping back. The
+// model is needed for the names of values, for the unit of
+// the amounts the first questions are about, and for the step
+// a refusal points back to.
 //
 // Used by:
 //   - components/Player.jsx — the sentences beside the stack
@@ -615,6 +733,7 @@ function effectLines(effect, name) {
 
 export function narrate(entry, model) {
   const name = (hex) => labelOf(hex, model.lexicon).text;
+  const amount = (satoshis) => formatAmount(satoshis, model.chain.unit);
   const stage = STAGES.find(({ key }) => key === entry.stage);
 
   if (entry.stage === 'coin') {
@@ -629,12 +748,12 @@ export function narrate(entry, model) {
 
   if (entry.stage === 'amounts') {
     const fee = entry.fee > 0
-      ? `Likutis — ${formatBitcoin(entry.fee)} — atitenka kasėjui kaip mokestis.`
+      ? `Likutis — ${amount(entry.fee)} — atitenka kasėjui kaip mokestis.`
       : 'Kasėjui nelieka nieko — taisyklių tai nepažeidžia, bet tokią transakciją vargu ar kas įtrauks į bloką.';
     return {
       heading: stage.question,
       lines: [
-        `Moneta verta ${formatBitcoin(entry.input)}, o transakcijos B išvestys išdalija ${formatBitcoin(entry.output)}.`,
+        `Moneta verta ${amount(entry.input)}, o transakcijos B išvestys išdalija ${amount(entry.output)}.`,
         entry.ok ? fee : errorText(entry.error),
       ],
     };
@@ -648,7 +767,10 @@ export function narrate(entry, model) {
       'too-early': `Transakcijos B nLockTime — ${entry.lockTime}, o grandinė pasiekė tik ${entry.height} bloką.`,
       'a-date': `Transakcijos B nLockTime — ${entry.lockTime}.`,
     };
-    return { heading: stage.question, lines: [told[entry.why], ...(entry.ok ? [] : [errorText(entry.error)])] };
+    const aged = entry.age === 'none' ? []
+      : entry.age === 'reached' ? [`Įvesties nSequence — ${entry.sequence}: moneta turi būti bent ${entry.wait} ${pluralForm(entry.wait, BLOCKS_OLD)} senumo. Ji turi ${entry.confirmations} ${pluralForm(entry.confirmations, CONFIRMATIONS_HAD)} — laikas atėjo.`]
+        : [`Įvesties nSequence — ${entry.sequence}.`];
+    return { heading: stage.question, lines: [told[entry.why], ...aged, ...(entry.ok ? [] : [errorText(entry.error)])] };
   }
 
   if (entry.stage === 'verdict') {

@@ -33,7 +33,7 @@ the suite like the app.
 
 | Folder | What lives there |
 |---|---|
-| `support/` | The harness: `setup.js` (polyfills, the backend double's lifecycle, the per-test slate, the console and unhandled-request guards), `render.jsx` (`renderPage`, `renderApp`), `location.js`, `payout.js` (an element read line by line, and the lines every payout alert has), `backend/` (the msw server with `given.*`, the default `handlers.js`, `fixtures.js`, the `contract.js` matrix), the wallet doubles, and `bitcoin-script/` (what the script playground's engine is held against: Bitcoin Core's own script vectors with the helper that runs them, and transactions built by an independent library) |
+| `support/` | The harness: `setup.js` (polyfills, the backend double's lifecycle, the per-test slate, the console and unhandled-request guards), `render.jsx` (`renderPage`, `renderApp`), `location.js`, `payout.js` (an element read line by line, and the lines every payout alert has), `backend/` (the msw server with `given.*`, the default `handlers.js`, `fixtures.js`, the `contract.js` matrix), the wallet doubles, and `bitcoin-script/` (what the script playground's engine is held against: Bitcoin Core's own script vectors and its lock-time transactions, each with the helper that runs them, and transactions built by an independent library) |
 | `core/` | The app as a whole: the harness smoke test, structural rules (every backend call has a handler …), App routing and titles, the error boundary |
 | `components/` | Shared components: Navbar, FaucetPicker, AssetIcon, UniversalModal, WalletFlow, Footer, ErrorCard |
 | `hooks/` | The wallet hooks (MetaMask, Phantom, Sui) against wallet doubles |

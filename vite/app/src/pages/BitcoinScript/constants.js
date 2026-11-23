@@ -3,8 +3,9 @@
 //
 //  The fixed things of the script playground in one place:
 //  the names and colours key pairs are given, the palette —
-//  one colour per meaning — how fast the node's check plays
-//  by itself, and how much a student may build.
+//  one colour per meaning — the chains a scene can stand on,
+//  how fast the node's check plays by itself, and how much a
+//  student may build.
 //
 //  Used by:
 //    - model.js, examples.js
@@ -88,14 +89,13 @@ export const SPARE_NAMES = ['Eglė', 'Petras', 'Ona', 'Lukas', 'Ieva', 'Mantas',
 // -----------------------------------------------------------
 //
 // The palette, one colour per meaning: slate for what is
-// nobody's and for a claim nobody has judged yet, Bitcoin's
-// own orange for a coin and for nothing else, and green and
-// red for the node's verdict alone. The page's accent is the
-// site's burgundy, which the stylesheet already names.
+// nobody's and for a claim nobody has judged yet, and green
+// and red for the node's verdict alone. A coin has the colour
+// of its chain (CHAINS). The page's accent is the site's
+// burgundy, which the stylesheet already names.
 //
 // Used by:
 //   - components/Tile.jsx — a value that is nobody's
-//   - components/Pieces.jsx — a coin
 //   - components/Transactions.jsx — the padlock, the arrow
 //   - components/Player.jsx — the verdict and the answers
 // -----------------------------------------------------------
@@ -103,9 +103,37 @@ export const SPARE_NAMES = ['Eglė', 'Petras', 'Ona', 'Lukas', 'Ieva', 'Mantas',
 export const COLORS = {
   INK: '#334155',
   MUTED: '#64748b',
-  COIN: '#f7931a',
   VALID: '#047857',
   INVALID: '#b91c1c',
+};
+
+
+
+
+
+
+
+// -----------------------------------------------------------
+// CHAINS
+// -----------------------------------------------------------
+//
+// The chains a scene can stand on. Bitcoin is the one nearly
+// every scene uses; Litecoin is there for the other half of a
+// swap between two chains — it runs the same Script, which is
+// the whole point of such a swap. Each has its name, the unit
+// its amounts are written in, how many coins there will ever
+// be, and the colour and sign of its coin: Bitcoin's own
+// orange, and the silver Litecoin has called itself from the
+// start.
+//
+// Used by:
+//   - model.js — the chain of a state, the most money on it
+//   - components/Pieces.jsx — a coin's look
+// -----------------------------------------------------------
+
+export const CHAINS = {
+  btc: { key: 'btc', name: 'Bitcoin', unit: 'BTC', coins: 21_000_000, colour: '#f7931a', sign: '₿' },
+  ltc: { key: 'ltc', name: 'Litecoin', unit: 'LTC', coins: 84_000_000, colour: '#6b7280', sign: 'Ł' },
 };
 
 
@@ -175,8 +203,8 @@ export const LIMITS = {
 // transaction holds.
 //
 // Used by:
-//   - model.js — reading an amount
-//   - narration.js — writing one
+//   - model.js — reading an amount, the most money on a chain
+//   - narration.js — writing an amount
 // -----------------------------------------------------------
 
 export const SATOSHIS = 100_000_000;
