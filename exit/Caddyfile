@@ -20,9 +20,13 @@
                 proxy 158.129.172.247:50002
             }
 
-            @exit_utxo_btc3 tls sni ip-158-129-172-247--51002
+            # @exit_utxo_btc3 tls sni ip-158-129-172-247--51002
+            # route @exit_utxo_btc3 {
+            #     proxy 158.129.172.247:51002
+            # }
+            @exit_utxo_btc3 tls sni electrum.blockstream.info--60002
             route @exit_utxo_btc3 {
-                proxy 158.129.172.247:51002
+                proxy electrum.blockstream.info:60002
             }
 
             @exit_utxo_btc4 tls sni ip-158-129-172-247--52002
