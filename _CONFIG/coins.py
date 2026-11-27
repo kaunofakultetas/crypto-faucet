@@ -163,6 +163,7 @@ UTXO_NETWORK_CONFIGS = {
 ############################################################
 
 EVM_NETWORK_CONFIGS = {
+
     'sepolia': {
         'id': 1,
         'chain_id': 11155111,
@@ -186,6 +187,31 @@ EVM_NETWORK_CONFIGS = {
             'etherscan_api_url': 'https://api.etherscan.io/v2/api',
         },
     },
+
+    "hoodi": {
+        'id': 2,
+        'chain_id': 560048,
+        'faucet': {
+            'short_name': "ETH",
+            'full_name': 'Ethereum Hoodi',
+            'rpc_url': 'https://rpc.hoodi.ethpandaops.io',
+            'chunk_size': 0.05,
+        },
+        'metamask': {
+            'chain_name': 'Ethereum Hoodi',
+            'native_currency': {
+                'name': 'Ethereum',
+                'symbol': 'ETH',
+                'decimals': 18
+            },
+            'rpc_urls': ['https://rpc.hoodi.ethpandaops.io'],
+            'block_explorer_urls': ['https://light-hoodi.beaconcha.in'],
+        },
+        'explorer': {
+            'etherscan_api_url': 'https://api.etherscan.io/v2/api',
+        },
+    },
+
     'zkSyncSepolia': {
         'id': 3,
         'chain_id': 300,
@@ -209,8 +235,9 @@ EVM_NETWORK_CONFIGS = {
             'etherscan_api_url': 'https://block-explorer-api.sepolia.zksync.dev/api',
         },
     },
+
     'lineaSepolia': {
-        'id': 5,
+        'id': 4,
         'chain_id': 59141,
         'faucet': {
             'short_name': "ETH",
@@ -232,31 +259,9 @@ EVM_NETWORK_CONFIGS = {
             'etherscan_api_url': 'https://api-explorer.sepolia.linea.build/api',
         },
     },
-    "hoodi": {
-        'id': 6,
-        'chain_id': 560048,
-        'faucet': {
-            'short_name': "ETH",
-            'full_name': 'Ethereum Hoodi',
-            'rpc_url': 'https://rpc.hoodi.ethpandaops.io',
-            'chunk_size': 0.05,
-        },
-        'metamask': {
-            'chain_name': 'Ethereum Hoodi',
-            'native_currency': {
-                'name': 'Ethereum',
-                'symbol': 'ETH',
-                'decimals': 18
-            },
-            'rpc_urls': ['https://rpc.hoodi.ethpandaops.io'],
-            'block_explorer_urls': ['https://light-hoodi.beaconcha.in'],
-        },
-        'explorer': {
-            'etherscan_api_url': 'https://api.etherscan.io/v2/api',
-        },
-    },
+
     "arbitrumSepolia": {
-        'id': 7,
+        'id': 5,
         'chain_id': 421614,
         'faucet': {
             'short_name': "ETH",
@@ -281,8 +286,9 @@ EVM_NETWORK_CONFIGS = {
         # a plain 400, "Nepalaikomas tinklas" — pinned in the
         # tests.)
     },
+    
     "polygonAmoy": {
-        'id': 8,
+        'id': 6,
         'chain_id': 80002,
         'faucet': {
             'short_name': "POL",
@@ -304,7 +310,8 @@ EVM_NETWORK_CONFIGS = {
 
             'etherscan_api_url': 'https://api.etherscan.io/v2/api',
         },
-    }
+    },
+    
 }
 
 
