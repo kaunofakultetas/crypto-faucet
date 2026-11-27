@@ -13,6 +13,27 @@
   --radius-md: 8px;
 }
 
+
+
+
+
+/* Burgundy shows when the page is overscrolled. Safari takes
+   that colour from <body>, so the body has no background
+   colour — it is painted white by a gradient instead. */
+html {
+  background-color: var(--color-primary);
+}
+
+body {
+  min-height: 100dvh;
+  background-color: transparent;
+  background-image: linear-gradient(var(--color-surface), var(--color-surface));
+}
+
+
+
+
+
 /* Utility to reuse rounded card surface */
 .card-surface {
   border-radius: var(--radius-md);

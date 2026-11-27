@@ -65,6 +65,9 @@ export const tokens = {
 // text, and every Button contained and primary unless it
 // says otherwise — the contained ones turning pink on hover.
 //
+// CssBaseline leaves <body> without a background colour, so
+// the overscroll stays burgundy (see index.css).
+//
 // Used by:
 //   - App.jsx — ThemeProvider
 // -----------------------------------------------------------
@@ -93,6 +96,13 @@ const theme = createTheme({
     borderRadius: tokens.shape.borderRadius,
   },
   components: {
+    MuiCssBaseline: {
+      styleOverrides: {
+        body: {
+          backgroundColor: 'transparent',
+        },
+      },
+    },
     MuiButton: {
       defaultProps: {
         variant: 'contained',
